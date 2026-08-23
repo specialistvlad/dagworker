@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-08-23
 - **Deciders:** Vladyslav Kazantsev (project owner)
-- **Amends:** ADR-0014, ADR-0016, ADR-0033, ADR-0040; `docs/spec/01-contract.md`
+- **Amends:** ADR-0014, ADR-0016, ADR-0023, ADR-0025, ADR-0033, ADR-0040; `docs/spec/01-contract.md`
 - **Backing research:** none new — this ADR records the gap between the earlier ADRs and the code
 
 ## Context
@@ -153,10 +153,48 @@ rather than two rows in one transaction (ADR-0007). Those columns are as
 durable as the node, which is a cost the design accepted in exchange for
 atomicity.
 
+### 8. `GenerateID()` (ADR-0025)
+
+**Claimed:** "A convenience helper, `GenerateID() NodeID` (a ULID, chosen for
+lexical sortability, unrelated to idempotency), is offered for callers with
+genuinely no natural key."
+
+**Reality:** no such symbol exists. `NodeID` is a `string` with a validator and
+nothing else.
+
+**Why it stays unbuilt**, which is worth stating because it is not obvious: a
+generated identifier is a footgun sitting immediately beside the safe path.
+`AddNode(ctx, scope, GenerateID(), payload)` inside a retry loop inserts a new
+node on every attempt, and the whole reason ADR-0025 makes identity
+caller-supplied is that a caller-chosen key makes insertion idempotent. A helper
+whose correct use is "not in a retry loop" is a helper that will be used in one.
+
+The hardest case for "no natural key" is dynamic fan-out, and it turns out to
+have one anyway: `test/e2e/scenario_transcode_test.go` derives `"rendition:" + r`
+from the probe's own output, which is both stable and meaningful. A caller who
+genuinely has nothing can call `uuid.NewString()` themselves in one line, having
+thought about it — which is the outcome to prefer.
+
+### 9. `ErrCrossScopeEdge` (ADR-0023 §2)
+
+**Claimed:** cross-scope edges are rejected at runtime with a typed error.
+
+**Reality:** nothing returns it, and nothing can. `AddEdges(ctx, scope, []Edge)`
+takes one scope and two `NodeID`s within it, so a cross-scope edge is
+**unrepresentable** rather than rejected.
+
+This is the same shape as `ErrLeaseExpired` in §6, with the difference worth
+noting: the guarantee is *stronger* than the ADR describes, not weaker. A
+compile-time impossibility beats a runtime check. The sentinel is kept because
+both adapters map it and a future API that could express the mistake -- a
+cross-scope edge batch, say -- would have somewhere to report it.
+
 ## Consequences
 
 - **Every remaining specific claim in the contract and the ADRs has been checked
-  against the code.** This list is what did not survive.
+  against the code.** This list is what did not survive. Entries 8 and 9 were
+  added later, from a second end-to-end read (issue #17), which is the argument
+  for this document existing rather than for it being finished.
 - **Three of these are now covered by tests** rather than only by prose:
   the late-ack behaviour, the facet set (via `CapabilityReporter`), and the
   lease holder's observability.

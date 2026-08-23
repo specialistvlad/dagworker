@@ -24,6 +24,13 @@ var (
 	ErrCycle = errors.New("dagworker: dependency cycle")
 
 	// ErrCrossScopeEdge means an edge's endpoints are in different scopes.
+	//
+	// Nothing in this library returns it, and nothing can: [Manager.AddEdges]
+	// takes one scope and two [NodeID]s within it, so a cross-scope edge is
+	// unrepresentable rather than rejected. That is a stronger guarantee than
+	// ADR-0023 describes, not a weaker one. The sentinel is kept because both
+	// adapters map it and an API that could express the mistake would need
+	// somewhere to report it; see ADR-0044 §9.
 	// Scope-local edges are what keep every operation's cost independent of
 	// total graph size.
 	ErrCrossScopeEdge = errors.New("dagworker: edge crosses scopes")

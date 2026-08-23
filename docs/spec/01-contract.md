@@ -245,15 +245,28 @@ no rule may require a scan of all predecessors on every event.
 
 | Rule | Becomes ready when | Unsatisfiable when |
 |---|---|---|
-| `AllSuccess` (default) | every predecessor is `Success` | any predecessor is `Error` |
-| `AllDone` | every predecessor is terminal | never |
-| `NoneFailed` | every predecessor is terminal and none is `Error` | any predecessor is `Error` |
-| `NoneFailedMinOneSuccess` | every predecessor terminal, none `Error`, ≥1 `Success` | any predecessor `Error` |
-| `Always` | every predecessor is terminal | never |
+| `AllSuccess` (default) | every predecessor succeeded | any predecessor failed, **or any was skipped** |
+| `AllDone` | every predecessor is terminal, however it finished | never |
+| `NoneFailed` | every predecessor is terminal and none **failed** | any predecessor **failed** |
+| `NoneFailedMinOneSuccess` | every predecessor terminal, none failed, ≥1 `Success` | any predecessor failed, or every predecessor resolved without a single success |
+| `Always` | **immediately — predecessors are never consulted** | never |
 
-Incremental evaluation state per node: `unsatisfied` (count of predecessors not yet terminal),
-`failed` (count of `Error` predecessors), `succeeded` (count of `Success` predecessors). All three
-are maintained by the same atomic fan-out in §4.3. A node with zero predecessors is ready under
+Two of those rows are easy to get wrong, and both were wrong here until they were checked against
+`DepCounts.Ready` and `DepCounts.Unsatisfiable` in `node.go`:
+
+- **`Always` is not `AllDone`.** It returns ready before the unsatisfied-predecessor check runs at
+  all. ADR-0030 is explicit that conflating the two is the mistake to avoid: a host wanting "run
+  after the predecessors finish, whatever happened" wants `AllDone`, and `Always` means what it
+  says.
+- **A skip is not a failure**, even though §2.2 makes a skipped node `StatusError` with
+  `ReasonSkipped`. `NoneFailed` and `NoneFailedMinOneSuccess` key on the failure count alone, so a
+  skipped predecessor does **not** make them unsatisfiable — which is precisely the cascading-skip
+  footgun ADR-0030 exists to close. Only `AllSuccess` treats a skip as disqualifying.
+
+Incremental evaluation state per node is **four** counters, not three: `unsatisfied` (predecessors
+not yet terminal), `succeeded`, `skipped`, and `failed`. `skipped` is the one that separates the two
+bullets above, and omitting it is what made this table wrong. All four are maintained by the same
+atomic fan-out in §4.3. A node with zero predecessors is ready under
 every rule.
 
 The `one_success` / `one_failed` early-fire family is **deferred**: it requires a node to become

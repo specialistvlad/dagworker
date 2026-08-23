@@ -1,9 +1,10 @@
 # ADR-0023: Scopes are implicit, prefix-isolated, and edges never cross them
 
-- **Status:** Accepted
+- **Status:** Accepted, amended by ADR-0044
 - **Date:** 2026-08-22
 - **Deciders:** Vladyslav Kazantsev (project owner)
 - **Amends:** —
+- **Amended by:** ADR-0044 §9 -- `ErrCrossScopeEdge` is never returned, because `AddEdges` takes a single scope and a cross-scope edge is unrepresentable rather than rejected. The guarantee is stronger than described below, not weaker.
 - **Backing research:** docs/research/12-dag-semantics-and-state-machine.md §4.1, §4.2, §4.3
 
 ## Context

@@ -38,13 +38,17 @@ gap per call at a latency cost you opt into deliberately, rather than one
 the library imposes on every write whether you need it or not.
 
 **PostgreSQL** gets you full WAL durability for nodes, edges, and the event
-log — nothing is lost on crash. One deliberate exception: the `leases` table
-is `UNLOGGED`. Losing an in-flight lease's row on crash is *correct*
-behavior, not a gap — a lease is a revocable, deadline-bound grant, and the
-whole point of the fencing design (see [Concepts](/dagworker/guide/concepts/))
-is that a node whose lease vanishes is simply picked up again by whoever
-claims it next, exactly as if the worker holding it had died. Making that
-table durable would buy nothing and cost every claim an extra WAL write.
+log — nothing is lost on crash, leases included.
+
+There is no separate leases table to treat differently. A lease is three
+columns on the node row — `epoch`, `deadline`, `worker` — which is what makes
+a claim one write rather than two rows in one transaction
+([ADR-0007](/dagworker/adr/0007-claim-atomicity-one-write-grants-ownership-and-records-the-deadline/)),
+and those columns are exactly as durable as the node itself. A crash therefore
+loses no lease, and the fencing design (see
+[Concepts](/dagworker/guide/concepts/)) handles the case that matters anyway:
+a worker that dies holding one has its node reclaimed at the deadline, and its
+late write refused by the epoch.
 
 ## Durability, stated plainly
 
@@ -55,7 +59,7 @@ no backend allowed to imply more than it delivers:
 |---|---|
 | in-memory | none — process lifetime only. Suitable when all workers share one process. |
 | Redis | async replication by default: a primary failover can lose ~1s of writes. `WAIT`/`WAITAOF` is available as an opt-in per-call cost. |
-| PostgreSQL | full WAL durability for nodes, edges, and events. The `leases` table is intentionally `UNLOGGED` — losing a revocable, deadline-bound grant on crash is correct behavior. |
+| PostgreSQL | full WAL durability for nodes, edges, and events — and for leases, which are columns on the node row rather than a table of their own. |
 
 None of this is a defect list. It's the same trade every mature storage
 system asks you to make explicitly rather than papering over — the same
@@ -75,10 +79,11 @@ project's numbers come from:
 
 The networked figures are round-trip bound — one hop to a container here is
 roughly 185 µs, so nothing single-shot beats that regardless of how the
-query itself is written. PostgreSQL's insert cost works out to roughly six
-un-pipelined round trips per node; that's a constant factor, not growth with
-graph size, and batching those round trips with `pgx.Batch` is the known,
-not-yet-taken optimization. See [Performance](/dagworker/guide/performance/)
+query itself is written. PostgreSQL's insert cost was once roughly six
+un-pipelined round trips per node; `pgx.Batch` took it to **2.06**, which is
+asserted in CI by `storage/postgres/roundtrip_test.go` rather than left to a
+wall clock. That is a constant factor either way, not growth with graph size.
+See [Performance](/dagworker/guide/performance/)
 for the same measurement repeated at a million nodes, and — more
 importantly — for why the number that actually matters is a ratio, not
 either of these absolute figures.
