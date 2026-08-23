@@ -172,17 +172,27 @@ func (s *Store) WaitForWork(ctx context.Context, scope dw.Scope, kinds []string)
 	}
 }
 
+var (
+	anyReadySQL = fmt.Sprintf(
+		`SELECT EXISTS (SELECT 1 FROM dagw.nodes WHERE scope = $1 AND phase = %d)`,
+		int16(dw.PhaseReady))
+
+	anyReadyOfKindSQL = fmt.Sprintf(
+		`SELECT EXISTS (SELECT 1 FROM dagw.nodes WHERE scope = $1 AND phase = %d AND kind = ANY($2))`,
+		int16(dw.PhaseReady))
+)
+
 func (s *Store) anyReady(ctx context.Context, scope string, kinds []string) (bool, error) {
 	var exists bool
 	var err error
+	// The phase literal is baked in, not bound: see the note above claimSQL in
+	// lease.go. This runs on the doorbell path, so a generic plan that misses
+	// the partial ready-set index would turn every blocked worker's wakeup
+	// check into a scan of the whole scope.
 	if len(kinds) == 0 {
-		err = s.pool.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM dagw.nodes WHERE scope = $1 AND phase = $2)`,
-			scope, int16(dw.PhaseReady)).Scan(&exists)
+		err = s.pool.QueryRow(ctx, anyReadySQL, scope).Scan(&exists)
 	} else {
-		err = s.pool.QueryRow(ctx,
-			`SELECT EXISTS (SELECT 1 FROM dagw.nodes WHERE scope = $1 AND phase = $2 AND kind = ANY($3))`,
-			scope, int16(dw.PhaseReady), kinds).Scan(&exists)
+		err = s.pool.QueryRow(ctx, anyReadyOfKindSQL, scope, kinds).Scan(&exists)
 	}
 	if err != nil {
 		return false, fmt.Errorf("postgres: anyReady: %w", err)

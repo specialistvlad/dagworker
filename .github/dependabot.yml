@@ -12,6 +12,15 @@ updates:
     directory: /storage/redis
     schedule: { interval: weekly }
   - package-ecosystem: gomod
+    directory: /adapters/grpc
+    schedule: { interval: weekly }
+  - package-ecosystem: gomod
+    directory: /adapters/http
+    schedule: { interval: weekly }
+  - package-ecosystem: gomod
+    directory: /cmd/dagworkerd
+    schedule: { interval: weekly }
+  - package-ecosystem: gomod
     directory: /test/perf
     schedule: { interval: weekly }
   - package-ecosystem: gomod

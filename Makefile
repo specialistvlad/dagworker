@@ -4,7 +4,9 @@
 # silently skips nested modules, so every target loops over MODULES explicitly.
 # Adding a module means adding it here and to go.work.
 
-MODULES := . ./storage/postgres ./storage/redis ./test/perf ./test/e2e
+MODULES := . ./storage/postgres ./storage/redis \
+           ./adapters/grpc ./adapters/http ./cmd/dagworkerd \
+           ./test/perf ./test/e2e
 
 COMPOSE := docker compose -f test/e2e/docker-compose.test.yml
 COVERPKG := github.com/specialistvlad/dagworker,github.com/specialistvlad/dagworker/internal/pq,github.com/specialistvlad/dagworker/storage/memory

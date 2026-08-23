@@ -68,9 +68,10 @@ func (s *Store) ListNodes(ctx context.Context, scope dw.Scope, opts dw.ListOptio
 // terminalCandidateWhere is shared between the candidate SELECT and the
 // "does another page exist" EXISTS check below, so the two can never drift
 // into disagreeing about what counts as collectible.
-const terminalCandidateWhere = `
-	n.scope = $1 AND n.phase = $2 AND n.updated_at <= $3
-	AND NOT EXISTS (SELECT 1 FROM dagw.edges e WHERE e.scope = n.scope AND e.from_id = n.id)`
+var terminalCandidateWhere = fmt.Sprintf(`
+	n.scope = $1 AND n.phase = %d AND n.updated_at <= $2
+	AND NOT EXISTS (SELECT 1 FROM dagw.edges e WHERE e.scope = n.scope AND e.from_id = n.id)`,
+	int16(dw.PhaseDone))
 
 // terminalCandidate is one row CollectTerminal is about to delete.
 type terminalCandidate struct {
@@ -90,7 +91,7 @@ FROM dagw.nodes n
 WHERE `+terminalCandidateWhere+`
 ORDER BY n.id
 FOR UPDATE OF n SKIP LOCKED
-LIMIT $4`, scope, int16(dw.PhaseDone), cutoff, limit)
+LIMIT $3`, scope, cutoff, limit)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: CollectTerminal: select: %w", err)
 	}
@@ -153,7 +154,7 @@ func (s *Store) CollectTerminal(ctx context.Context, scope dw.Scope, cutoff time
 	var more bool
 	if len(cands) == limit {
 		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM dagw.nodes n WHERE `+terminalCandidateWhere+`)`,
-			scopeName, int16(dw.PhaseDone), cutoff).Scan(&more); err != nil {
+			scopeName, cutoff).Scan(&more); err != nil {
 			return 0, false, fmt.Errorf("postgres: CollectTerminal: more check: %w", err)
 		}
 	}

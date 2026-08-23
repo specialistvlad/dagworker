@@ -19,6 +19,37 @@ import (
 // query's WHERE clause verbatim for the planner to use it (dossier 04 §6),
 // and a literal integer is textually identical on every call regardless,
 // so plan caching is unaffected either way.
+// Phase literals are baked into these query strings rather than bound as
+// parameters, for the same reason claimSQL bakes in its own: a partial index's
+// predicate must be provable from the query text. PostgreSQL builds a custom
+// plan for a statement's first few executions, where a bound parameter is
+// inlined and the index does apply -- and then switches to a generic plan,
+// where it cannot prove "phase = $2" implies "phase = 3" and falls back to a
+// sequential scan plus a sort over every node in the scope.
+//
+// That is not theoretical. It cost 11ms per Claim at 20,000 nodes, because
+// every claim swept for expired leases first and every sweep scanned the whole
+// table. EXPLAIN (GENERIC_PLAN) shows the difference plainly: Seq Scan with the
+// parameter, Index Scan with the literal.
+var (
+	reclaimCandidatesSQL = fmt.Sprintf(`
+SELECT id FROM dagw.nodes
+WHERE scope = $1 AND phase = %d AND deadline < clock_timestamp()
+ORDER BY deadline
+FOR UPDATE SKIP LOCKED
+LIMIT $2`, int16(dw.PhaseClaimed))
+
+	moreExpiredSQL = fmt.Sprintf(
+		`SELECT EXISTS (SELECT 1 FROM dagw.nodes WHERE scope = $1 AND phase = %d AND deadline < clock_timestamp())`,
+		int16(dw.PhaseClaimed))
+
+	promoteCandidatesSQL = fmt.Sprintf(`
+SELECT id FROM dagw.nodes
+WHERE scope = $1 AND phase = %d AND ready_at <= clock_timestamp()
+ORDER BY ready_at
+FOR UPDATE SKIP LOCKED`, int16(dw.PhaseScheduled))
+)
+
 var claimSQL = fmt.Sprintf(`
 WITH claimed AS (
 	SELECT id
@@ -204,12 +235,7 @@ func (e *engine) reclaimExpired(ctx context.Context, limit int) ([]dw.Effect, in
 	if limit <= 0 {
 		limit = 1
 	}
-	rows, err := e.tx.Query(ctx, `
-SELECT id FROM dagw.nodes
-WHERE scope = $1 AND phase = $2 AND deadline < clock_timestamp()
-ORDER BY deadline
-FOR UPDATE SKIP LOCKED
-LIMIT $3`, e.scope, int16(dw.PhaseClaimed), limit)
+	rows, err := e.tx.Query(ctx, reclaimCandidatesSQL, e.scope, limit)
 	if err != nil {
 		return nil, 0, false, fmt.Errorf("postgres: reclaimExpired: select: %w", err)
 	}
@@ -241,8 +267,8 @@ LIMIT $3`, e.scope, int16(dw.PhaseClaimed), limit)
 
 	var hasMore bool
 	err = e.tx.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM dagw.nodes WHERE scope = $1 AND phase = $2 AND deadline < clock_timestamp())`,
-		e.scope, int16(dw.PhaseClaimed)).Scan(&hasMore)
+		moreExpiredSQL,
+		e.scope).Scan(&hasMore)
 	if err != nil {
 		return nil, 0, false, fmt.Errorf("postgres: reclaimExpired: more check: %w", err)
 	}
@@ -254,11 +280,7 @@ LIMIT $3`, e.scope, int16(dw.PhaseClaimed), limit)
 // both the claim and sweep paths, exactly like memory's function of the same
 // name.
 func (e *engine) promoteScheduled(ctx context.Context) ([]dw.Effect, error) {
-	rows, err := e.tx.Query(ctx, `
-SELECT id FROM dagw.nodes
-WHERE scope = $1 AND phase = $2 AND ready_at <= clock_timestamp()
-ORDER BY ready_at
-FOR UPDATE SKIP LOCKED`, e.scope, int16(dw.PhaseScheduled))
+	rows, err := e.tx.Query(ctx, promoteCandidatesSQL, e.scope)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: promoteScheduled: select: %w", err)
 	}
