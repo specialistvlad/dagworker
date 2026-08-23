@@ -30,7 +30,9 @@ type Manager struct {
 	subs    map[int64]*Subscription
 	nextSub int64
 
-	bgCtx     context.Context
+	// Only the cancel function is retained, never the context itself: a
+	// context belongs on the call stack of the work it governs, and a struct
+	// field is how one ends up outliving the operation it was meant to bound.
 	bgCancel  context.CancelFunc
 	wg        sync.WaitGroup
 	closed    chan struct{}
@@ -67,11 +69,16 @@ func New(store Store, opts ...Option) (*Manager, error) {
 	if r, ok := store.(CapabilityReporter); ok {
 		m.caps = r.Capabilities()
 	}
-	m.bgCtx, m.bgCancel = context.WithCancel(context.WithoutCancel(context.Background()))
+	// Detached from any caller's context: maintenance outlives the call that
+	// started the Manager and is bounded by Close, not by whoever built it.
+	// The cancel is retained on the Manager and invoked by Close; gosec cannot
+	// follow it across the struct field.
+	bgCtx, cancel := context.WithCancel(context.Background()) //nolint:gosec // cancelled by Close
+	m.bgCancel = cancel
 
 	if !cfg.sweepDisabled {
 		m.wg.Add(1)
-		go m.maintain()
+		go m.maintain(bgCtx)
 	}
 	return m, nil
 }
@@ -393,7 +400,7 @@ func validateEdges(edges []Edge) error {
 // by whoever next asks for work, and retention is off by default. This loop
 // exists so that a dead worker in an otherwise idle scope is noticed promptly
 // rather than at the next claim, which might be hours away.
-func (m *Manager) maintain() {
+func (m *Manager) maintain(ctx context.Context) {
 	defer m.wg.Done()
 
 	interval := m.cfg.defaults.Resolved().SweepInterval
@@ -404,10 +411,10 @@ func (m *Manager) maintain() {
 		case <-m.cfg.clock.After(interval):
 		}
 
-		scopes, err := m.store.Scopes(m.bgCtx)
+		scopes, err := m.store.Scopes(ctx)
 		if err != nil {
 			if !errors.Is(err, ErrClosed) {
-				m.cfg.logger.WarnContext(m.bgCtx, "dagworker: listing scopes for maintenance", "error", err)
+				m.cfg.logger.WarnContext(ctx, "dagworker: listing scopes for maintenance", "error", err)
 			}
 			continue
 		}
@@ -415,33 +422,33 @@ func (m *Manager) maintain() {
 			if m.isClosed() {
 				return
 			}
-			m.sweepScope(scope)
-			m.collectScope(scope)
+			m.sweepScope(ctx, scope)
+			m.collectScope(ctx, scope)
 		}
 	}
 }
 
-func (m *Manager) sweepScope(scope Scope) {
-	res, err := m.store.Sweep(m.bgCtx, scope, 0)
+func (m *Manager) sweepScope(ctx context.Context, scope Scope) {
+	res, err := m.store.Sweep(ctx, scope, 0)
 	if err != nil {
 		if !errors.Is(err, ErrClosed) && !errors.Is(err, ErrNotFound) {
-			m.cfg.logger.WarnContext(m.bgCtx, "dagworker: sweeping expired leases", "scope", scope, "error", err)
+			m.cfg.logger.WarnContext(ctx, "dagworker: sweeping expired leases", "scope", scope, "error", err)
 		}
 		return
 	}
 	m.publish(scope, res.Effects)
 	if res.Reclaimed > 0 {
-		m.cfg.logger.InfoContext(m.bgCtx, "dagworker: reclaimed expired leases",
+		m.cfg.logger.InfoContext(ctx, "dagworker: reclaimed expired leases",
 			"scope", scope, "count", res.Reclaimed, "more", res.More)
 	}
 }
 
-func (m *Manager) collectScope(scope Scope) {
+func (m *Manager) collectScope(ctx context.Context, scope Scope) {
 	c, ok := m.store.(Collector)
 	if !ok || !m.caps.Has(CapCollect) {
 		return
 	}
-	cfg, err := m.store.ScopeConfig(m.bgCtx, scope)
+	cfg, err := m.store.ScopeConfig(ctx, scope)
 	if err != nil {
 		return
 	}
@@ -451,13 +458,13 @@ func (m *Manager) collectScope(scope Scope) {
 		return
 	}
 	cutoff := m.cfg.clock.Now().Add(-cfg.TerminalRetention)
-	deleted, _, err := c.CollectTerminal(m.bgCtx, scope, cutoff, cfg.Resolved().SweepBatchSize)
+	deleted, _, err := c.CollectTerminal(ctx, scope, cutoff, cfg.Resolved().SweepBatchSize)
 	if err != nil && !errors.Is(err, ErrClosed) {
-		m.cfg.logger.WarnContext(m.bgCtx, "dagworker: collecting terminal nodes", "scope", scope, "error", err)
+		m.cfg.logger.WarnContext(ctx, "dagworker: collecting terminal nodes", "scope", scope, "error", err)
 		return
 	}
 	if deleted > 0 {
-		m.cfg.logger.InfoContext(m.bgCtx, "dagworker: collected terminal nodes", "scope", scope, "count", deleted)
+		m.cfg.logger.InfoContext(ctx, "dagworker: collected terminal nodes", "scope", scope, "count", deleted)
 	}
 }
 
@@ -469,5 +476,7 @@ func (m *Manager) collectScope(scope Scope) {
 // always positive and no degenerate case needs handling here.
 func jitter(d time.Duration) time.Duration {
 	half := int64(d / 2)
-	return time.Duration(half + rand.Int64N(half))
+	// Not a security decision: this only decorrelates poll timing across a
+	// fleet, so a cryptographic source would cost entropy for no benefit.
+	return time.Duration(half + rand.Int64N(half)) //nolint:gosec // scheduling jitter, not a secret
 }

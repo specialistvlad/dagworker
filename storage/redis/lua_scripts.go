@@ -450,18 +450,18 @@ return 1
 // asks for: it tries EVALSHA against the client-computed SHA1 first and
 // transparently retries with EVAL only on a NOSCRIPT reply.
 type scriptSet struct {
-	addNodes         *goredis.Script
-	addEdges         *goredis.Script
-	removeEdges      *goredis.Script
-	removeNode       *goredis.Script
-	cancelNodes      *goredis.Script
-	cancelScope      *goredis.Script
-	claim            *goredis.Script
-	complete         *goredis.Script
-	extend           *goredis.Script
-	sweep            *goredis.Script
-	getNode          *goredis.Script
-	inspect          *goredis.Script
+	addNodes          *goredis.Script
+	addEdges          *goredis.Script
+	removeEdges       *goredis.Script
+	removeNode        *goredis.Script
+	cancelNodes       *goredis.Script
+	cancelScope       *goredis.Script
+	claim             *goredis.Script
+	complete          *goredis.Script
+	extend            *goredis.Script
+	sweep             *goredis.Script
+	getNode           *goredis.Script
+	inspect           *goredis.Script
 	collectIfEligible *goredis.Script
 }
 

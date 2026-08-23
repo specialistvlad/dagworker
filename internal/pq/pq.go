@@ -65,7 +65,9 @@ func (h *Heap) Push(handle int32) {
 		return
 	}
 	h.items = append(h.items, handle)
-	h.pos[handle] = int32(len(h.items))
+	// Safe by construction: items holds distinct int32 handles, so its length
+	// can never exceed the int32 range.
+	h.pos[handle] = int32(len(h.items)) //nolint:gosec // bounded by the handle space
 	h.up(len(h.items) - 1)
 }
 
@@ -128,8 +130,10 @@ func (h *Heap) Fix(handle int32) bool {
 
 func (h *Heap) swap(i, j int) {
 	h.items[i], h.items[j] = h.items[j], h.items[i]
-	h.pos[h.items[i]] = int32(i + 1)
-	h.pos[h.items[j]] = int32(j + 1)
+	// Both indices are below len(items), which is bounded by the int32 handle
+	// space, so neither conversion can overflow.
+	h.pos[h.items[i]] = int32(i + 1) //nolint:gosec // bounded by the handle space
+	h.pos[h.items[j]] = int32(j + 1) //nolint:gosec // bounded by the handle space
 }
 
 func (h *Heap) up(j int) {

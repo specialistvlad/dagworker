@@ -443,11 +443,13 @@ func TestRemoveEdgeUndoesEveryOutcomeTally(t *testing.T) {
 		complete func(t *testing.T, st *memory.Store, ctx context.Context, l dw.Lease)
 	}{
 		{"succeeded", func(t *testing.T, st *memory.Store, ctx context.Context, l dw.Lease) {
+			t.Helper()
 			if _, err := st.Complete(ctx, dw.CompleteRequest{Lease: l, Success: true}); err != nil {
 				t.Fatalf("Complete: %v", err)
 			}
 		}},
 		{"skipped", func(t *testing.T, st *memory.Store, ctx context.Context, l dw.Lease) {
+			t.Helper()
 			if _, err := st.Complete(ctx, dw.CompleteRequest{
 				Lease: l, Success: false, Reason: dw.ReasonSkipped,
 			}); err != nil {
@@ -455,6 +457,7 @@ func TestRemoveEdgeUndoesEveryOutcomeTally(t *testing.T) {
 			}
 		}},
 		{"failed", func(t *testing.T, st *memory.Store, ctx context.Context, l dw.Lease) {
+			t.Helper()
 			if _, err := st.Complete(ctx, dw.CompleteRequest{
 				Lease: l, Success: false, Reason: dw.ReasonWorkerError,
 			}); err != nil {

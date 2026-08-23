@@ -17,35 +17,54 @@ const scopesRegistryKey = "dagworker:scopes"
 // every multi-key script legal under Redis Cluster (docs/research/05 §9): the
 // hash tag guarantees co-location, so CRC16("{scope}") alone decides the slot
 // regardless of what follows the closing brace.
-func prefix(scope dw.Scope) string { return "{" + string(scope) + "}:" }
+//
+// s.keyspace, when non-empty, is folded inside the hash tag ahead of the
+// scope name. It exists solely for this package's own conformance test,
+// which needs many parallel subtests to share one Redis instance without
+// colliding: dagstoretest's suite hard-codes the scope name "s" for every
+// subtest (it is testing scope-relative behaviour, not scope naming), so
+// isolation across subtests has to come from somewhere other than the scope
+// string the suite passes in. It has no effect on any value a caller
+// observes — dw.Node.Scope, dw.Lease.Scope, and every Effect this package
+// returns always carry the scope exactly as the caller wrote it — because it
+// is folded in only here, at the point a Redis key's bytes are built, never
+// into a Go dagworker value.
+func (s *Store) prefix(scope dw.Scope) string { return "{" + s.keyspace + string(scope) + "}:" }
 
 // The suffixes below exist only as documentation of the key scheme; every
 // script builds these itself from ARGV[1] (the prefix) by concatenation, per
 // Redis's own scripting guidance to never construct a key's *name* outside of
 // KEYS/ARGV-derived strings. Go-side helpers that need to address a key
-// directly (GetNode, ScopeConfig, ...) use the functions below.
+// directly (GetNode, ScopeConfig, ...) use the methods below.
 const (
-	sufCfg     = "cfg"     // HASH: scope policy + sealed flag
-	sufStats   = "stats"   // HASH: O(1) counters
-	sufCursor  = "cursor"  // STRING: scope-wide event cursor counter
-	sufNextOrd = "nextord" // STRING: topological-rank counter
-	sufNextFF  = "nextfifo"
-	sufIdx     = "idx"    // ZSET, score=0 for every member: lexicographic node-id index
-	sufKinds   = "kinds"  // SET: every kind name ever seen ready in this scope
-	sufLeases  = "leases" // ZSET: member=NodeID, score=deadline (unix ms)
-	sufSched   = "sched"  // ZSET: member=NodeID, score=readyAt (unix ms)
-	sufEvents  = "events" // STREAM: durable event log, ID = "<cursor>-0"
-	sufBell    = "bell"   // Pub/Sub channel: rung whenever a node becomes ready
+	sufCfg    = "cfg"    // HASH: scope policy + sealed flag
+	sufStats  = "stats"  // HASH: O(1) counters
+	sufCursor = "cursor" // STRING: scope-wide event cursor counter
+	sufIdx    = "idx"    // ZSET, score=0 for every member: lexicographic node-id index
+	sufLeases = "leases" // ZSET: member=NodeID, score=deadline (unix ms)
+	sufEvents = "events" // STREAM: durable event log, ID = "<cursor>-0"
+	sufBell   = "bell"   // Pub/Sub channel: rung whenever a node becomes ready
 )
 
-func keyCfg(scope dw.Scope) string     { return prefix(scope) + sufCfg }
-func keyStats(scope dw.Scope) string   { return prefix(scope) + sufStats }
-func keyCursor(scope dw.Scope) string  { return prefix(scope) + sufCursor }
-func keyIdx(scope dw.Scope) string     { return prefix(scope) + sufIdx }
-func keyLeases(scope dw.Scope) string  { return prefix(scope) + sufLeases }
-func keyEvents(scope dw.Scope) string  { return prefix(scope) + sufEvents }
-func keyBell(scope dw.Scope) string    { return prefix(scope) + sufBell }
-func keyNode(scope dw.Scope, id dw.NodeID) string { return prefix(scope) + "n:" + string(id) }
-func keyBlob(scope dw.Scope, id dw.NodeID) string { return prefix(scope) + "b:" + string(id) }
-func keySucc(scope dw.Scope, id dw.NodeID) string { return prefix(scope) + "s:" + string(id) }
-func keyPred(scope dw.Scope, id dw.NodeID) string { return prefix(scope) + "p:" + string(id) }
+func (s *Store) keyCfg(scope dw.Scope) string    { return s.prefix(scope) + sufCfg }
+func (s *Store) keyStats(scope dw.Scope) string  { return s.prefix(scope) + sufStats }
+func (s *Store) keyCursor(scope dw.Scope) string { return s.prefix(scope) + sufCursor }
+func (s *Store) keyIdx(scope dw.Scope) string    { return s.prefix(scope) + sufIdx }
+func (s *Store) keyLeases(scope dw.Scope) string { return s.prefix(scope) + sufLeases }
+func (s *Store) keyEvents(scope dw.Scope) string { return s.prefix(scope) + sufEvents }
+func (s *Store) keyBell(scope dw.Scope) string   { return s.prefix(scope) + sufBell }
+func (s *Store) keyReady(scope dw.Scope, kind string) string {
+	return s.prefix(scope) + "r:" + kind
+}
+func (s *Store) keyNode(scope dw.Scope, id dw.NodeID) string {
+	return s.prefix(scope) + "n:" + string(id)
+}
+func (s *Store) keyBlob(scope dw.Scope, id dw.NodeID) string {
+	return s.prefix(scope) + "b:" + string(id)
+}
+func (s *Store) keySucc(scope dw.Scope, id dw.NodeID) string {
+	return s.prefix(scope) + "s:" + string(id)
+}
+func (s *Store) keyPred(scope dw.Scope, id dw.NodeID) string {
+	return s.prefix(scope) + "p:" + string(id)
+}

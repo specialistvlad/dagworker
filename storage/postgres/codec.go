@@ -106,14 +106,14 @@ type scanRow interface {
 // compile-time-checked truncation rather than a silent one.
 func scanNode(row scanRow) (nodeRow, error) {
 	var (
-		n                                        nodeRow
-		status, reason, phase, trig              int16
-		attempt                                  int32
-		epoch                                    int64
-		retryMaxAttempts                         int32
-		retryBaseNS, retryMaxNS                  int64
-		depsUnsat, depsSucc, depsSkip, depsFail   int32
-		labelsRaw                                []byte
+		n                                       nodeRow
+		status, reason, phase, trig             int16
+		attempt                                 int32
+		epoch                                   int64
+		retryMaxAttempts                        int32
+		retryBaseNS, retryMaxNS                 int64
+		depsUnsat, depsSucc, depsSkip, depsFail int32
+		labelsRaw                               []byte
 	)
 	err := row.Scan(
 		&n.ID, &n.Rank, &n.Scope, &n.NodeID, &n.Kind, &status, &reason, &n.Message, &phase,
@@ -154,15 +154,15 @@ func scanNode(row scanRow) (nodeRow, error) {
 // no further defensive copy is needed the way memory's snapshot needs one.
 func (n nodeRow) snapshot() dw.Node {
 	return dw.Node{
-		Scope:     dw.Scope(n.Scope),
-		ID:        dw.NodeID(n.NodeID),
-		Kind:      n.Kind,
-		Status:    n.Status,
-		Reason:    n.Reason,
-		Message:   n.Message,
-		Attempt:   n.Attempt,
-		Priority:  n.Priority,
-		Trigger:   n.Trigger,
+		Scope:    dw.Scope(n.Scope),
+		ID:       dw.NodeID(n.NodeID),
+		Kind:     n.Kind,
+		Status:   n.Status,
+		Reason:   n.Reason,
+		Message:  n.Message,
+		Attempt:  n.Attempt,
+		Priority: n.Priority,
+		Trigger:  n.Trigger,
 		Retry: dw.RetryPolicy{
 			MaxAttempts: n.RetryMaxAttempts,
 			BaseDelay:   n.RetryBaseDelay,
@@ -224,9 +224,9 @@ const scopeColumns = `scope, sealed,
 
 func scanScope(row scanRow) (scopeRow, error) {
 	var (
-		s                                                     scopeRow
-		defLeaseNS, minLeaseNS, maxLeaseNS                    int64
-		maxAttempts                                           int32
+		s                                                      scopeRow
+		defLeaseNS, minLeaseNS, maxLeaseNS                     int64
+		maxAttempts                                            int32
 		retryBaseNS, retryMaxNS                                int64
 		retentionNS, subLagNS                                  int64
 		maxInFlight, payloadCap, maxBatch, sweepBatch, partCnt int32

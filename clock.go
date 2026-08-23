@@ -31,10 +31,16 @@ type Clock interface {
 // default and the zero value is usable.
 type SystemClock struct{}
 
-func (SystemClock) Now() time.Time                         { return time.Now() }
-func (SystemClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
-func (SystemClock) Since(t time.Time) time.Duration        { return time.Since(t) }
+// Now implements [Clock].
+func (SystemClock) Now() time.Time { return time.Now() }
 
+// After implements [Clock].
+func (SystemClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
+
+// Since implements [Clock].
+func (SystemClock) Since(t time.Time) time.Duration { return time.Since(t) }
+
+// AfterFunc implements [Clock].
 func (SystemClock) AfterFunc(d time.Duration, f func()) func() bool {
 	t := time.AfterFunc(d, f)
 	return t.Stop

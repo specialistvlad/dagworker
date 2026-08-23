@@ -86,6 +86,12 @@ type Store struct {
 	defaults   dw.ScopeConfig
 	scripts    *scriptSet
 
+	// keyspace is folded into every {scope} hash tag this Store builds. See
+	// the (*Store).prefix doc comment in keys.go: it exists for this
+	// package's own conformance test, not for any public use, which is why
+	// it is set only through the unexported withKeyspace below.
+	keyspace string
+
 	closed    chan struct{}
 	closeOnce sync.Once
 }
@@ -103,6 +109,13 @@ func (f optionFunc) apply(s *Store) { f(s) }
 // name, so a host can swap backends without re-deriving its defaults.
 func WithScopeDefaults(cfg dw.ScopeConfig) Option {
 	return optionFunc(func(s *Store) { s.defaults = cfg })
+}
+
+// withKeyspace folds ns into every {scope} hash tag this Store builds.
+// Unexported: it exists for this package's own conformance test harness, per
+// (*Store).prefix's doc comment in keys.go, not as public API surface.
+func withKeyspace(ns string) Option {
+	return optionFunc(func(s *Store) { s.keyspace = ns })
 }
 
 // New wraps an existing client. It never dials the network itself, so a host
@@ -182,7 +195,7 @@ func (s *Store) ScopeConfig(ctx context.Context, scope dw.Scope) (dw.ScopeConfig
 	if s.isClosed() {
 		return dw.ScopeConfig{}, dw.ErrClosed
 	}
-	flat, err := s.rdb.HGetAll(ctx, keyCfg(scope)).Result()
+	flat, err := s.rdb.HGetAll(ctx, s.keyCfg(scope)).Result()
 	if err != nil {
 		return dw.ScopeConfig{}, fmt.Errorf("redis: ScopeConfig: %w", err)
 	}
@@ -197,7 +210,7 @@ func (s *Store) SetScopeConfig(ctx context.Context, scope dw.Scope, cfg dw.Scope
 	if s.isClosed() {
 		return dw.ErrClosed
 	}
-	if err := s.rdb.HSet(ctx, keyCfg(scope), cfgToHash(cfg)).Err(); err != nil {
+	if err := s.rdb.HSet(ctx, s.keyCfg(scope), cfgToHash(cfg)).Err(); err != nil {
 		return fmt.Errorf("redis: SetScopeConfig: %w", err)
 	}
 	s.registerScope(ctx, scope)
@@ -211,7 +224,7 @@ func (s *Store) Seal(ctx context.Context, scope dw.Scope) error {
 	if s.isClosed() {
 		return dw.ErrClosed
 	}
-	if err := s.rdb.HSet(ctx, keyCfg(scope), fSealed, "1").Err(); err != nil {
+	if err := s.rdb.HSet(ctx, s.keyCfg(scope), fSealed, "1").Err(); err != nil {
 		return fmt.Errorf("redis: Seal: %w", err)
 	}
 	s.registerScope(ctx, scope)
@@ -226,9 +239,9 @@ func (s *Store) ScopeStats(ctx context.Context, scope dw.Scope) (dw.ScopeStats, 
 		return dw.ScopeStats{}, dw.ErrClosed
 	}
 	pipe := s.rdb.Pipeline()
-	statsCmd := pipe.HGetAll(ctx, keyStats(scope))
-	sealedCmd := pipe.HGet(ctx, keyCfg(scope), fSealed)
-	cursorCmd := pipe.Get(ctx, keyCursor(scope))
+	statsCmd := pipe.HGetAll(ctx, s.keyStats(scope))
+	sealedCmd := pipe.HGet(ctx, s.keyCfg(scope), fSealed)
+	cursorCmd := pipe.Get(ctx, s.keyCursor(scope))
 	_, err := pipe.Exec(ctx)
 	if err != nil && err != goredis.Nil {
 		return dw.ScopeStats{}, fmt.Errorf("redis: ScopeStats: %w", err)
@@ -284,8 +297,8 @@ func (s *Store) resolvedConfig(ctx context.Context, scope dw.Scope) (dw.ScopeCon
 // {header, effects} reply every mutating script returns. A DWERR-shaped
 // error reply is translated via mapScriptErr before being returned.
 func (s *Store) runScript(ctx context.Context, sc *goredis.Script, scope dw.Scope, argv ...any) ([]any, []dw.Effect, error) {
-	full := append([]any{prefix(scope)}, argv...)
-	res, err := sc.Run(ctx, s.rdb, []string{keyCfg(scope)}, full...).Result()
+	full := append([]any{s.prefix(scope)}, argv...)
+	res, err := sc.Run(ctx, s.rdb, []string{s.keyCfg(scope)}, full...).Result()
 	if err != nil {
 		return nil, nil, mapScriptErr(err, scope)
 	}

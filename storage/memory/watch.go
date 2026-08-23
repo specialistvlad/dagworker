@@ -65,7 +65,7 @@ func (s *scope) appendLog(ef dw.Effect) {
 		drop := len(s.log) - s.logCap
 		copy(s.log, s.log[drop:])
 		s.log = s.log[:s.logCap]
-		s.logStart += dw.Cursor(drop)
+		s.logStart += dw.Cursor(drop) //nolint:gosec // drop is a positive slice length
 	}
 
 	close(s.logBell)
@@ -176,7 +176,9 @@ func (s *scope) pump(ctx context.Context, next dw.Cursor, out chan<- dw.Event) {
 			return // cursor fell out of retention; the closed channel signals it
 		}
 		var batch []dw.Event
-		if idx := int(next - s.logStart); idx < len(s.log) {
+		// next >= logStart was checked above, so the difference is a
+		// non-negative offset within the retained window.
+		if idx := int(next - s.logStart); idx < len(s.log) { //nolint:gosec // checked above
 			batch = append(batch, s.log[idx:]...)
 			next = s.cursor + 1
 		}

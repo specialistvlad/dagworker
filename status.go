@@ -197,6 +197,8 @@ func (p Phase) Status() Status {
 		return StatusNew
 	case PhaseClaimed:
 		return StatusInProgress
+	case PhaseDone:
+		fallthrough
 	default:
 		// PhaseDone alone is ambiguous between Success and Error; callers read
 		// Node.Status directly. Reported as StatusError so a bug cannot make a

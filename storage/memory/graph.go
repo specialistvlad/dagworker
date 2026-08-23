@@ -100,55 +100,34 @@ func (s *scope) cycleError(from, to int32, path []int32) error {
 	return &dw.CycleError{Scope: s.name, From: s.recs[from].id, To: s.recs[to].id, Path: ids}
 }
 
-// AddNodes implements [dagworker.Store].
-func (st *Store) AddNodes(_ context.Context, name dw.Scope, specs []dw.NodeSpec) ([]dw.Effect, error) {
-	if len(specs) == 0 {
-		return nil, nil
-	}
-	s, err := st.scopeFor(name, true)
-	if err != nil {
-		return nil, err
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.sealed {
-		return nil, dw.ErrScopeSealed
-	}
-	cfg := s.cfg.Resolved()
+// validateBatch rejects a malformed batch before anything is written, so the
+// common failure mode never has to be rolled back.
+func (s *scope) validateBatch(cfg dw.ScopeConfig, specs []dw.NodeSpec) error {
 	if len(specs) > cfg.MaxBatchSize {
-		return nil, fmt.Errorf("%w: batch of %d exceeds the scope's limit of %d",
+		return fmt.Errorf("%w: batch of %d exceeds the scope's limit of %d",
 			dw.ErrInvalidArgument, len(specs), cfg.MaxBatchSize)
 	}
-
 	seen := make(map[dw.NodeID]struct{}, len(specs))
 	for _, spec := range specs {
 		if err := spec.Validate(); err != nil {
-			return nil, err
+			return err
 		}
 		if len(spec.Payload) > cfg.PayloadCap {
-			return nil, &dw.PayloadTooLargeError{Size: len(spec.Payload), Cap: cfg.PayloadCap}
+			return &dw.PayloadTooLargeError{Size: len(spec.Payload), Cap: cfg.PayloadCap}
 		}
 		if _, dup := seen[spec.ID]; dup {
-			return nil, fmt.Errorf("%w: node %q appears twice in the batch", dw.ErrInvalidArgument, spec.ID)
+			return fmt.Errorf("%w: node %q appears twice in the batch", dw.ErrInvalidArgument, spec.ID)
 		}
 		seen[spec.ID] = struct{}{}
 	}
+	return nil
+}
 
-	var j journal
-	committed := false
-	defer func() {
-		if !committed {
-			s.rollback(&j)
-		}
-	}()
-
-	now := s.now()
+// materialise creates the nodes that do not exist yet, recording them in the
+// journal. Re-adding an identical node is a no-op; re-adding a different one
+// under the same identifier is a conflict.
+func (s *scope) materialise(specs []dw.NodeSpec, now int64, j *journal) ([]int32, error) {
 	fresh := make([]int32, 0, len(specs))
-
-	// Pass one: materialise nodes. Nothing here can fail after the validation
-	// above except an identity conflict, which is checked before any write.
 	for _, spec := range specs {
 		if h, exists := s.lookup(spec.ID); exists {
 			if !s.specMatches(h, spec) {
@@ -160,15 +139,12 @@ func (st *Store) AddNodes(_ context.Context, name dw.Scope, specs []dw.NodeSpec)
 		j.created = append(j.created, h)
 		fresh = append(fresh, h)
 	}
+	return fresh, nil
+}
 
-	// Pass two: link declared dependencies. This is where a cycle can be
-	// discovered, which is why the journal exists.
-	//
-	// The touched set is an ordered slice, not a map. Settling in map order
-	// would assign ready-set insertion numbers in a random order, so two nodes
-	// added in one batch would be served in an arbitrary order rather than the
-	// order the caller wrote them — which is exactly the fairness property
-	// equal-priority FIFO is supposed to provide.
+// linkBatch records each spec's declared dependencies. This is the only step
+// that can fail after writes have begun, which is why the journal exists.
+func (s *scope) linkBatch(specs []dw.NodeSpec, j *journal) (*orderedSet, error) {
 	touched := newOrderedSet(len(specs))
 	for _, spec := range specs {
 		to := s.index[spec.ID]
@@ -192,12 +168,50 @@ func (st *Store) AddNodes(_ context.Context, name dw.Scope, specs []dw.NodeSpec)
 			j.edges = append(j.edges, [2]int32{from, to})
 		}
 	}
+	return touched, nil
+}
 
+// AddNodes implements [dagworker.Store].
+func (st *Store) AddNodes(_ context.Context, name dw.Scope, specs []dw.NodeSpec) ([]dw.Effect, error) {
+	if len(specs) == 0 {
+		return nil, nil
+	}
+	s, err := st.scopeFor(name, true)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.sealed {
+		return nil, dw.ErrScopeSealed
+	}
+	cfg := s.cfg.Resolved()
+	if err := s.validateBatch(cfg, specs); err != nil {
+		return nil, err
+	}
+
+	var j journal
+	committed := false
+	defer func() {
+		if !committed {
+			s.rollback(&j)
+		}
+	}()
+
+	fresh, err := s.materialise(specs, s.now(), &j)
+	if err != nil {
+		return nil, err
+	}
+	touched, err := s.linkBatch(specs, &j)
+	if err != nil {
+		return nil, err
+	}
 	committed = true
 
-	// Pass three: announce. Creation is reported before readiness so a
-	// subscriber never sees a node become claimable before it has heard the
-	// node exists.
+	// Announce last. Creation is reported before readiness so a subscriber
+	// never sees a node become claimable before it has heard the node exists.
 	var effects []dw.Effect
 	for _, h := range fresh {
 		effects = append(effects, s.record(h, dw.EventCreated, dw.StatusNew))

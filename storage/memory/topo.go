@@ -42,6 +42,57 @@ type topoResult struct {
 	cyclePath []int32
 }
 
+// forwardSearch collects every node reachable from y whose rank is below ub.
+// Reaching a node whose rank is exactly ub means y already reaches x, so the
+// proposed edge would close a cycle; the path back is returned instead.
+func (s *scope) forwardSearch(y int32, ub int64) (region []int32, visited int, cycle []int32) {
+	parent := make(map[int32]int32, 8)
+	seen := make(map[int32]bool, 8)
+
+	var walk func(n int32) bool
+	walk = func(n int32) bool {
+		seen[n] = true
+		region = append(region, n)
+		for _, w := range s.succ[n] {
+			if s.ord[w] == ub {
+				parent[w] = n
+				cycle = tracePath(parent, y, w)
+				return true
+			}
+			if !seen[w] && s.ord[w] < ub {
+				parent[w] = n
+				if walk(w) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	if walk(y) {
+		return nil, len(seen), cycle
+	}
+	return region, len(seen), nil
+}
+
+// backwardSearch collects every node that reaches x whose rank is above lb.
+func (s *scope) backwardSearch(x int32, lb int64) (region []int32, visited int) {
+	seen := make(map[int32]bool, 8)
+
+	var walk func(n int32)
+	walk = func(n int32) {
+		seen[n] = true
+		region = append(region, n)
+		for _, e := range s.pred[n] {
+			if w := e.from; !seen[w] && s.ord[w] > lb {
+				walk(w)
+			}
+		}
+	}
+	walk(x)
+	return region, len(seen)
+}
+
 // addEdgeOrder restores the topological invariant for a proposed edge x -> y,
 // or reports the cycle it would create. It mutates ord only.
 func (s *scope) addEdgeOrder(x, y int32) topoResult {
@@ -51,57 +102,14 @@ func (s *scope) addEdgeOrder(x, y int32) topoResult {
 
 	lb, ub := s.ord[y], s.ord[x]
 
-	// Forward search from y, bounded above by ub. Parents are tracked so a
-	// cycle can be reported as a concrete path rather than a bare error.
-	var deltaF []int32
-	parent := make(map[int32]int32, 8)
-	visitedF := make(map[int32]bool, 8)
-
-	var cycle []int32
-	var dfsF func(n int32) bool
-	dfsF = func(n int32) bool {
-		visitedF[n] = true
-		deltaF = append(deltaF, n)
-		for _, w := range s.succ[n] {
-			if s.ord[w] == ub {
-				// w is x: y already reaches x.
-				parent[w] = n
-				cycle = tracePath(parent, y, w)
-				return true
-			}
-			if !visitedF[w] && s.ord[w] < ub {
-				parent[w] = n
-				if dfsF(w) {
-					return true
-				}
-			}
-		}
-		return false
+	deltaF, seenF, cycle := s.forwardSearch(y, ub)
+	if cycle != nil {
+		return topoResult{visited: seenF, cyclePath: cycle}
 	}
-
-	if dfsF(y) {
-		return topoResult{visited: len(visitedF), cyclePath: cycle}
-	}
-
-	// Backward search from x, bounded below by lb.
-	var deltaB []int32
-	visitedB := make(map[int32]bool, 8)
-
-	var dfsB func(n int32)
-	dfsB = func(n int32) {
-		visitedB[n] = true
-		deltaB = append(deltaB, n)
-		for _, e := range s.pred[n] {
-			w := e.from
-			if !visitedB[w] && s.ord[w] > lb {
-				dfsB(w)
-			}
-		}
-	}
-	dfsB(x)
+	deltaB, seenB := s.backwardSearch(x, lb)
 
 	s.reorder(deltaB, deltaF)
-	return topoResult{visited: len(visitedF) + len(visitedB)}
+	return topoResult{visited: seenF + seenB}
 }
 
 // reorder reassigns the rank values already occupied by deltaB and deltaF so

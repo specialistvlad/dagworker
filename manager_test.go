@@ -27,7 +27,7 @@ type fixture struct {
 func newFixture(t *testing.T, opts ...dw.Option) *fixture {
 	t.Helper()
 	clk := dagstoretest.NewFakeClock()
-	st := memory.New(memory.WithClock(clk), memory.WithJitter(func(n int64) int64 { return 0 }))
+	st := memory.New(memory.WithClock(clk), memory.WithJitter(func(int64) int64 { return 0 }))
 	base := []dw.Option{
 		dw.WithPollInterval(20 * time.Millisecond),
 		dw.WithoutBackgroundSweeper(),
@@ -490,6 +490,11 @@ func TestClosedManagerRefusesEverything(t *testing.T) {
 
 // Close must return only once every goroutine the Manager started has exited,
 // so a caller can discard it knowing nothing will fire afterwards.
+//
+// Deliberately not parallel: it counts goroutines process-wide, and a sibling
+// test starting one concurrently would make the count meaningless.
+//
+//nolint:paralleltest // measures a process-wide goroutine count
 func TestCloseLeavesNoGoroutines(t *testing.T) {
 	clk := dagstoretest.NewFakeClock()
 	st := memory.New(memory.WithClock(clk))

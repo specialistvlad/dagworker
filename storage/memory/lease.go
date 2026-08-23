@@ -4,11 +4,23 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	dw "github.com/specialistvlad/dagworker"
 	"github.com/specialistvlad/dagworker/internal/pq"
 )
+
+// clampAttempt narrows the lease epoch to the attempt counter's width. The two
+// are the same number by design, and a node reaching four billion attempts is
+// not a scenario worth representing -- but silently wrapping to zero would
+// reset the retry budget, so it saturates instead.
+func clampAttempt(epoch uint64) uint32 {
+	if epoch > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(epoch)
+}
 
 // effectiveRetry folds a node's own retry policy over the scope's, field by
 // field, so a node can override one setting without restating the others.
@@ -162,7 +174,7 @@ func (st *Store) Claim(_ context.Context, req dw.ClaimRequest) (dw.ClaimResult, 
 		from := r.status
 		s.leaveBucket(h)
 		r.epoch++
-		r.attempt = uint32(r.epoch)
+		r.attempt = clampAttempt(r.epoch)
 		r.phase = dw.PhaseClaimed
 		r.status = dw.StatusInProgress
 		r.worker = req.WorkerID

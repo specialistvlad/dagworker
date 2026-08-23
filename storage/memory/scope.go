@@ -158,7 +158,9 @@ func (s *scope) alloc() int32 {
 		s.ord[h], s.deadline[h], s.readyAt[h], s.fifo[h] = 0, 0, 0, 0
 		return h
 	}
-	h := int32(len(s.recs))
+	// Handles are int32 by design; a scope with two billion nodes would exhaust
+	// memory long before it exhausted the handle space.
+	h := int32(len(s.recs)) //nolint:gosec // bounded by available memory
 	s.recs = append(s.recs, nodeRec{})
 	s.succ = append(s.succ, nil)
 	s.pred = append(s.pred, nil)
@@ -196,6 +198,8 @@ func (s *scope) bucket(r *nodeRec) *uint64 {
 		return &s.stats.Ready
 	case dw.PhaseClaimed:
 		return &s.stats.InProgress
+	case dw.PhaseDone:
+		fallthrough
 	default:
 		if r.status == dw.StatusSuccess {
 			return &s.stats.Succeeded
@@ -307,6 +311,10 @@ func terminalMessage(r dw.Reason) string {
 		return "a predecessor was removed"
 	case dw.ReasonCancelled:
 		return "cancelled"
+	case dw.ReasonNone, dw.ReasonWorkerError, dw.ReasonTimeout:
+		// These arrive with a message the worker or the lease protocol already
+		// wrote; the engine has nothing to add.
+		return ""
 	default:
 		return ""
 	}

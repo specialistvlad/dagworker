@@ -1,0 +1,148 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none   # start from nothing; enable explicitly — an audited allowlist, not a denylist
+  enable:
+    # --- correctness / bug-finding, non-negotiable ---
+    - errcheck        # every returned error must be handled or explicitly discarded
+    - govet           # full vet suite, including shadow, loopclosure, etc.
+    - staticcheck     # SA*/ST*/QF* checks — the single highest-value linter in this list
+    - ineffassign     # assignments whose value is never used
+    - unused          # dead code / unused identifiers
+
+    # --- concurrency-specific, directly relevant to a lease/claim protocol ---
+    - bodyclose       # http.Response.Body must be closed on every path (adapters/http, ADR-0037)
+    - sqlclosecheck   # sql.Rows / sql.Stmt must be closed (storage/postgres)
+    - rowserrcheck    # sql.Rows.Err() must be checked after the iteration loop
+    - contextcheck    # context must be propagated correctly, not silently dropped/replaced
+    - containedctx    # a context.Context stored in a struct field is a smell, not a pattern
+    - noctx           # HTTP requests / DB calls made without a context
+
+    # --- exhaustiveness on the public status enum — the whole point of this project ---
+    - exhaustive      # every switch on Status/NodeStatus/Reason must handle every case explicitly
+
+    # --- style / API-shape enforcement ---
+    - revive          # configurable golint replacement, see settings below
+    - gocritic        # broad diagnostic + style + opinionated checks
+    - ireturn         # "accept interfaces, return structs" — enforced, not just convention
+    - nilnil          # a function must not return (nil, nil) as a valid-looking success value
+
+    # --- test-suite discipline (ADR-0040: t.Parallel everywhere) ---
+    - paralleltest    # flags missing t.Parallel() and loop-variable reuse in subtests
+    - tparallel       # flags t.Parallel() on a parent whose subtests aren't all parallel too
+    - thelper         # test helper functions must call t.Helper()
+    - testifylint     # correct usage of testify's assert/require (e.g. Equal arg order)
+
+    # --- security ---
+    - gosec           # G-series security checks (weak crypto, command injection, etc.)
+
+    # --- performance, matches the project's 1M-node headline goal ---
+    - prealloc        # slices appended-to in a loop with a known bound should be preallocated
+    - makezero        # make([]T, n) then append(...) instead of make([]T, 0, n) is a length bug magnet
+    - perfsprint      # fmt.Sprintf misuse where string concatenation/strconv would do
+
+    # --- complexity ceilings ---
+    - funlen
+    - cyclop
+    - gocognit
+
+    # --- dependency and API hygiene ---
+    - depguard        # ban unapproved dependencies (see settings)
+    - forbidigo       # ban fmt.Print*/println in library code (must use structured logging)
+
+  settings:
+    revive:
+      rules:
+        - name: exported                 # exported identifiers must have doc comments
+        - name: error-return              # error must be the last return value
+        - name: error-strings             # error strings must not be capitalized / end in punctuation
+        - name: context-as-argument       # context.Context must be the first parameter
+        - name: unused-parameter
+        - name: indent-error-flow
+        - name: range-val-in-closure      # pre-1.22 loop-capture guard; harmless no-op at ADR-0029's 1.25 floor
+
+    exhaustive:
+      default-signifies-exhaustive: false  # a `default:` case must NOT count as covering every
+                                            # value — this is exactly what makes exhaustive catch
+                                            # a forgotten Status/Reason case when one is added later
+      check: [switch, map]
+
+    ireturn:
+      allow:
+        - error
+        - empty
+        - anon
+        - generic
+        - stdlib
+        # The functional-options pattern (ADR-0027) returns an opaque option
+        # interface by design: that opacity is what lets an option gain
+        # behaviour later without the set of legal values becoming part of the
+        # API's shape. ireturn's rule is right in general and wrong here.
+        - "dagworker\\.(Option|NodeOption|ClaimOption)$"
+        - "memory\\.Option$"
+        - "postgres\\.Option$"
+        - "redis\\.Option$"
+      # dagstore.Store, dagworker.Clock etc. remain interfaces at the package boundary (accepted
+      # as parameters) but constructors return the concrete *Manager, *RedisStore, etc. — ireturn
+      # enforces exactly this split, matching ADR-0027's Go API shape.
+
+    gocognit:
+      min-complexity: 20
+
+    cyclop:
+      max-complexity: 15
+
+    funlen:
+      lines: 80
+      statements: 50
+
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: "github.com/pkg/errors"
+              desc: "use stdlib errors + fmt.Errorf(\"...: %w\", err) instead"
+            - pkg: "io/ioutil"
+              desc: "deprecated since Go 1.16; use io or os directly"
+        core-no-network:
+          # ADR-0037's hard rule, restated as a lint-level tripwire in ADDITION to the
+          # go.mod-level enforcement (`go mod tidy -diff`) — belt and suspenders, not the
+          # primary mechanism.
+          files: ["!$test"]
+          deny:
+            - pkg: "google.golang.org/grpc"
+              desc: "core module must have zero import edge to the gRPC adapter (ADR-0037)"
+            - pkg: "net/http"
+              desc: "core module must have zero import edge to the HTTP adapter (ADR-0037)"
+
+    forbidigo:
+      forbid:
+        - pattern: '^fmt\.Print.*$'
+          msg: "use the configured slog.Logger, not fmt.Print*, in library code"
+
+    gosec:
+      excludes: [G104]   # errcheck already covers unchecked errors; avoid double-reporting
+
+  exclusions:
+    rules:
+      - path: "_test\\.go"
+        linters: [errcheck, gosec, funlen, cyclop, gocognit, containedctx]
+        # table-driven test bodies and test helpers legitimately run long and sometimes
+        # intentionally ignore errors from test-only setup calls (ADR-0040); a test
+        # fixture holding the subtest's context is the ordinary shape for a harness
+
+      - path: "^dagstoretest/"
+        linters: [funlen, cyclop, gocognit, containedctx]
+        # The conformance suite is a table of test cases: its "complexity" is the
+        # number of behaviours being pinned down, not the intricacy of any code
+        # path. Splitting the table to satisfy a metric would make the suite
+        # harder to read and would not make anything simpler.
+
+formatters:
+  enable:
+    - gofumpt   # stricter superset of gofmt
+    - goimports

@@ -18,7 +18,7 @@ func (s *Store) GetNode(ctx context.Context, scope dw.Scope, id dw.NodeID) (dw.N
 	if s.isClosed() {
 		return dw.Node{}, dw.ErrClosed
 	}
-	res, err := s.scripts.getNode.Run(ctx, s.rdb, []string{keyCfg(scope)}, prefix(scope), string(id)).Result()
+	res, err := s.scripts.getNode.Run(ctx, s.rdb, []string{s.keyCfg(scope)}, s.prefix(scope), string(id)).Result()
 	if err != nil {
 		return dw.Node{}, mapScriptErr(err, scope)
 	}
@@ -40,7 +40,7 @@ func (s *Store) Inspect(ctx context.Context, scope dw.Scope, id dw.NodeID) (dw.I
 	if err != nil {
 		return dw.Inspection{}, err
 	}
-	res, err := s.scripts.inspect.Run(ctx, s.rdb, []string{keyCfg(scope)}, prefix(scope), string(id)).Result()
+	res, err := s.scripts.inspect.Run(ctx, s.rdb, []string{s.keyCfg(scope)}, s.prefix(scope), string(id)).Result()
 	if err != nil {
 		return dw.Inspection{}, mapScriptErr(err, scope)
 	}
@@ -101,7 +101,7 @@ func (s *Store) ListNodes(ctx context.Context, scope dw.Scope, opts dw.ListOptio
 
 	var out dw.ListResult
 	for {
-		ids, err := s.rdb.ZRangeByLex(ctx, keyIdx(scope), &goredis.ZRangeBy{Min: min, Max: "+", Count: batch}).Result()
+		ids, err := s.rdb.ZRangeByLex(ctx, s.keyIdx(scope), &goredis.ZRangeBy{Min: min, Max: "+", Count: batch}).Result()
 		if err != nil {
 			return dw.ListResult{}, fmt.Errorf("redis: ListNodes: %w", err)
 		}
@@ -170,7 +170,7 @@ func (s *Store) CollectTerminal(ctx context.Context, scope dw.Scope, cutoff time
 	min := "-"
 	deleted := 0
 	for {
-		ids, err := s.rdb.ZRangeByLex(ctx, keyIdx(scope), &goredis.ZRangeBy{Min: min, Max: "+", Count: batch}).Result()
+		ids, err := s.rdb.ZRangeByLex(ctx, s.keyIdx(scope), &goredis.ZRangeBy{Min: min, Max: "+", Count: batch}).Result()
 		if err != nil {
 			return deleted, false, fmt.Errorf("redis: CollectTerminal: %w", err)
 		}
@@ -181,7 +181,7 @@ func (s *Store) CollectTerminal(ctx context.Context, scope dw.Scope, cutoff time
 			if deleted == limit {
 				return deleted, true, nil
 			}
-			n, err := s.scripts.collectIfEligible.Run(ctx, s.rdb, []string{keyCfg(scope)}, prefix(scope), id, cutoffMs).Int()
+			n, err := s.scripts.collectIfEligible.Run(ctx, s.rdb, []string{s.keyCfg(scope)}, s.prefix(scope), id, cutoffMs).Int()
 			if err != nil {
 				return deleted, false, fmt.Errorf("redis: CollectTerminal: %w", err)
 			}

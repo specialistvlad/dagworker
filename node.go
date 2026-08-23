@@ -95,6 +95,10 @@ func (d DepCounts) Ready(t TriggerRule) bool {
 		return false
 	}
 	switch t {
+	case TriggerAlways:
+		// Already handled above; named so that adding a rule to the enum is a
+		// compile-time-adjacent failure here rather than a silent false.
+		return true
 	case TriggerAllSuccess:
 		return d.Failed == 0 && d.Skipped == 0
 	case TriggerAllDone:

@@ -88,6 +88,9 @@ func TestPhaseMapsToStatus(t *testing.T) {
 		dw.PhaseScheduled: dw.StatusNew,
 		dw.PhaseReady:     dw.StatusNew,
 		dw.PhaseClaimed:   dw.StatusInProgress,
+		// PhaseDone alone cannot distinguish success from failure, so it maps
+		// to the pessimistic answer; asserted again below for the reason.
+		dw.PhaseDone: dw.StatusError,
 	}
 	for p, want := range cases {
 		if got := p.Status(); got != want {

@@ -15,7 +15,7 @@ import (
 // backend must not reimplement dagworker's own duration math (Resolved,
 // ClampLease, Backoff's window) always calls the real function first, in full
 // nanosecond precision, and only converts the *result* to milliseconds here.
-func durToMs(d time.Duration) int64 { return int64(d / time.Millisecond) }
+func durToMs(d time.Duration) int64  { return int64(d / time.Millisecond) }
 func msToDur(ms int64) time.Duration { return time.Duration(ms) * time.Millisecond }
 func msToTime(ms int64) time.Time {
 	if ms == 0 {

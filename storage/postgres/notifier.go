@@ -24,9 +24,9 @@ type notifier struct {
 	mu   sync.Mutex
 	bell map[string]chan struct{} // scope -> broadcast channel, closed-and-replaced on wake
 
-	stopCh chan struct{}
+	stopCh   chan struct{}
 	stopOnce sync.Once
-	wg     sync.WaitGroup
+	wg       sync.WaitGroup
 }
 
 func newNotifier(pool *pgxpool.Pool, channel string) *notifier {

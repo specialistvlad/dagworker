@@ -15,6 +15,7 @@ func TestConformance(t *testing.T) {
 	dagstoretest.RunConformance(t, dagstoretest.Harness{
 		Name: "memory",
 		New: func(t *testing.T) (dw.Store, func(time.Duration)) {
+			t.Helper()
 			clk := dagstoretest.NewFakeClock()
 			st := memory.New(
 				memory.WithClock(clk),

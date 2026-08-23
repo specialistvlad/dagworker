@@ -248,16 +248,6 @@ func caps(st dw.Store) dw.Capabilities {
 	return 0
 }
 
-func effectsFor(effs []dw.Effect, id dw.NodeID) []dw.Effect {
-	var out []dw.Effect
-	for _, e := range effs {
-		if e.NodeID == id {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
 func hasEffect(effs []dw.Effect, id dw.NodeID, kind dw.EventKind) bool {
 	for _, e := range effs {
 		if e.NodeID == id && e.Kind == kind {
@@ -276,6 +266,7 @@ type conformanceTest struct {
 
 // RunConformance runs the whole suite against the backend the harness builds.
 func RunConformance(t *testing.T, h Harness) {
+	t.Helper()
 	if h.New == nil {
 		t.Fatal("dagstoretest: Harness.New must not be nil")
 	}

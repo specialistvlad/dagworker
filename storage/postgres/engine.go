@@ -523,7 +523,7 @@ func (e *engine) linkDependency(from, to *nodeRow) error {
 		for i, id := range res.cyclePath {
 			path[i] = dw.NodeID(names[id])
 		}
-		return &dw.CycleError{Scope: dw.Scope(e.scope), From: from.NodeID, To: to.NodeID, Path: path}
+		return &dw.CycleError{Scope: dw.Scope(e.scope), From: dw.NodeID(from.NodeID), To: dw.NodeID(to.NodeID), Path: path}
 	}
 
 	satisfied := from.Phase == dw.PhaseDone
