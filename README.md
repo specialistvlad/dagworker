@@ -126,6 +126,18 @@ from `AllSuccess`.
 | wake without polling | yes | yes (pub/sub) | yes (`LISTEN`) |
 | module | *(core)* | `storage/redis` | `storage/postgres` |
 
+Measured per-operation cost, n=30,000, containerised databases on one laptop:
+
+| | in-memory | Redis | PostgreSQL |
+|---|---|---|---|
+| insert a node | 1.2 µs | 12 µs | 340 µs |
+| claim + complete | 1.8 µs | 673 µs | 3.5 ms |
+
+The networked figures are round-trip bound — one hop to a container here is
+~185 µs, so nothing single-shot beats that. PostgreSQL's insert cost is roughly
+six un-pipelined round trips per node; that is a constant factor rather than
+growth, and `pgx.Batch` pipelining is the known fix.
+
 ¹ Redis replicates asynchronously by default, so a primary failover can lose
 about a second of writes unless you opt into `WAIT`/`WAITAOF` per call. The
 library documents this rather than implying ACID durability it cannot provide.
@@ -151,6 +163,37 @@ func TestConformance(t *testing.T) {
 That is roughly 65 named tests — `T-CLAIM-ATOMIC`, `T-FENCE-STALE-ACK`,
 `T-EDGE-CYCLE-LEAVES-GRAPH-INTACT` — which is what makes the table above a
 tested contract rather than documentation that quietly goes stale.
+
+## Workers that are not Go, or not in this process
+
+The core library hands work to goroutines in your program. If your workers are
+somewhere else, two optional adapters and a daemon put the same protocol on a
+socket — and the core module still has no dependency on either.
+
+```
+dagworkerd --store=postgres --postgres-dsn=... --grpc-addr=:9090 --http-addr=:8080
+```
+
+| | gRPC | HTTP/JSON |
+|---|---|---|
+| taking work | unary long poll, one outstanding call per worker slot | blocking query with a `wait` parameter |
+| events | server stream with a resume cursor | Server-Sent Events, `Last-Event-ID` is the cursor |
+| errors | `google.rpc.Status` with `ErrorInfo` | RFC 9457 `application/problem+json` |
+| schema | committed `.proto`, `buf` lint and breaking-change checks | hand-written OpenAPI 3.1 |
+| module | `adapters/grpc` | `adapters/http` |
+
+Dispatch is a **long poll**, not a push. Pushing work at a pool whose capacity
+you cannot see is how a queue overwhelms its own workers; one outstanding claim
+per execution slot makes HTTP/2's own stream limit the flow-control mechanism,
+which is the shape Temporal's `PollActivityTaskQueue` settled on.
+
+The one thing to know if you write your own client: **the lease deadline is not
+the request deadline**. It lives in storage and outlives the call that granted
+it, the connection it arrived on, and the daemon process. Reusing the claim
+call's context for the acknowledgement expires it mid-job.
+
+Both adapters and the daemon are separate modules. `go get` on the core pulls
+in neither.
 
 ## Performance
 
