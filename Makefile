@@ -51,6 +51,13 @@ race: ## The same tests under the race detector, shuffled
 up: ## Start PostgreSQL and Redis on their non-default test ports
 	$(COMPOSE) up -d --wait
 
+.PHONY: reset-db
+reset-db: ## Empty the test databases without restarting them
+	@docker exec -i dagworker-test-postgres-1 psql -U dagworker -d dagworker -X \
+		-c "TRUNCATE dagw.events, dagw.edges, dagw.nodes, dagw.scopes CASCADE" >/dev/null
+	@docker exec -i dagworker-test-redis-1 redis-cli FLUSHALL >/dev/null
+	@echo "test databases emptied"
+
 .PHONY: down
 down: ## Stop them and discard their data
 	$(COMPOSE) down -v
@@ -89,6 +96,10 @@ complexity: ## Prove no operation's cost grows with the size of the graph
 .PHONY: bench
 bench: ## Throughput benchmarks (absolute numbers; compare with benchstat)
 	cd test/perf && go test -count=1 -run '^$$' -bench . -benchmem -timeout 30m ./...
+	@echo
+	@echo "note: the benchmarks leave their graphs behind. A million nodes in a"
+	@echo "shared database slows every later test enough to make the"
+	@echo "timing-sensitive ones flaky. Run 'make reset-db' before 'make integration'."
 
 .PHONY: tidy
 tidy: ## Tidy every module's dependencies

@@ -105,6 +105,26 @@ func (s *suite) lease() time.Duration {
 	return realLease
 }
 
+// longLease is for tests that are not about expiry at all. They must not have a
+// lease lapse underneath them just because the machine was busy: a claim that
+// is silently reclaimed mid-test looks exactly like a double-grant or a broken
+// in-flight cap, and blames the backend for the runner's load.
+const longLease = time.Hour
+
+func (s *suite) claimLong(kinds ...string) (dw.Lease, bool) {
+	s.t.Helper()
+	res, err := s.st.Claim(s.ctx, dw.ClaimRequest{
+		Scope: s.scope, Kinds: kinds, Max: 1, Timeout: longLease, WorkerID: "w",
+	})
+	if err != nil {
+		s.t.Fatalf("Claim: %v", err)
+	}
+	if len(res.Leases) == 0 {
+		return dw.Lease{}, false
+	}
+	return res.Leases[0], true
+}
+
 // passLease moves past the current lease deadline, by driving the clock when
 // possible and by sleeping when not.
 func (s *suite) passLease() {

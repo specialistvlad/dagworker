@@ -181,7 +181,7 @@ func leaseTests() []conformanceTest {
 					defer wg.Done()
 					for {
 						res, err := s.st.Claim(s.ctx, dw.ClaimRequest{
-							Scope: s.scope, Max: 3, Timeout: s.lease(), WorkerID: "racer",
+							Scope: s.scope, Max: 3, Timeout: longLease, WorkerID: "racer",
 						})
 						if err != nil || len(res.Leases) == 0 {
 							return
@@ -250,14 +250,23 @@ func leaseTests() []conformanceTest {
 		{"T-CLAIM-MAX-INFLIGHT", func(s *suite) {
 			s.configure(dw.ScopeConfig{MaxInFlight: 2})
 			s.add(spec("a"), spec("b"), spec("c"))
-			s.claim()
-			s.claim()
-			s.claimNone()
+			// A long lease: this test is about the in-flight cap, and a lease
+			// lapsing mid-test would let the third claim through for a reason
+			// that has nothing to do with the cap.
+			if _, ok := s.claimLong(); !ok {
+				s.t.Fatal("first claim found nothing")
+			}
+			if _, ok := s.claimLong(); !ok {
+				s.t.Fatal("second claim found nothing")
+			}
+			if l, ok := s.claimLong(); ok {
+				s.t.Fatalf("Claim returned %q with two already in flight and a cap of 2", l.NodeID)
+			}
 		}},
 
 		{"T-CLAIM-BATCH", func(s *suite) {
 			s.add(spec("a"), spec("b"), spec("c"))
-			res, err := s.st.Claim(s.ctx, dw.ClaimRequest{Scope: s.scope, Max: 3, Timeout: s.lease()})
+			res, err := s.st.Claim(s.ctx, dw.ClaimRequest{Scope: s.scope, Max: 3, Timeout: longLease})
 			if err != nil {
 				s.t.Fatalf("Claim: %v", err)
 			}
