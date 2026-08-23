@@ -180,7 +180,7 @@ func WithProblemBaseURI(uri string) Option { //nolint:ireturn // ADR-0027 functi
 // withJitter replaces the randomness behind claim-wait jitter. Unexported:
 // it exists for this package's own tests to make jitter deterministic, not
 // as something a real deployment should ever need to override.
-func withJitter(fn func(time.Duration) time.Duration) Option {
+func withJitter(fn func(time.Duration) time.Duration) Option { //nolint:ireturn // ADR-0027 functional-option pattern (see .golangci.yml's own dagworker.Option/memory.Option allowance); this Option is the identical opaque-interface shape for this module
 	return optionFunc(func(o *options) {
 		if fn != nil {
 			o.jitter = fn

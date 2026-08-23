@@ -21,7 +21,8 @@ import (
 func startServer(t *testing.T, srv *Server) (baseURL string, shutdown func()) {
 	t.Helper()
 
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	lis, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)
 	}
@@ -80,8 +81,19 @@ func testServer(t *testing.T, opts ...Option) (baseURL string, mgr *dagworker.Ma
 }
 
 // httpClient is the shared shape for tests that just need sane defaults.
+//
+// Keep-alives are off deliberately: net/http.Server.Shutdown reclaims idle
+// keep-alive connections via its own background polling, and that polling's
+// promptness is stdlib's concern, not this package's — the one place this
+// package must itself guarantee prompt draining is a genuinely long-lived
+// stream, which shutdown_test.go covers directly. Leaving keep-alives on here
+// would make ordinary request/response tests flaky under parallel load for a
+// reason unrelated to what any of them individually verify.
 func httpClient() *http.Client {
-	return &http.Client{Timeout: 10 * time.Second}
+	return &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
 }
 
 // doRequest performs one request, marshaling body as JSON when non-nil.
@@ -95,7 +107,7 @@ func doRequest(t *testing.T, method, url string, body any) *http.Response {
 		}
 		reqBody = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, url, reqBody)
+	req, err := http.NewRequestWithContext(t.Context(), method, url, reqBody)
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}

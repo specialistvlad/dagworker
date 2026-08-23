@@ -60,6 +60,7 @@ func TestClaim_HappyPathThenAck(t *testing.T) {
 
 	claimResp := doRequest(t, http.MethodPost, base+"/v1/scopes/proj/nodes:claim",
 		map[string]any{"worker_id": "worker-1"})
+	defer func() { _ = claimResp.Body.Close() }()
 	if claimResp.StatusCode != http.StatusOK {
 		t.Fatalf("claim status = %d, want 200", claimResp.StatusCode)
 	}
@@ -84,6 +85,7 @@ func TestClaim_HappyPathThenAck(t *testing.T) {
 		"result_encoding": "base64",
 		"result":          "b2s=", // "ok"
 	})
+	defer func() { _ = completeResp.Body.Close() }()
 	if completeResp.StatusCode != http.StatusOK {
 		t.Fatalf(":complete status = %d, want 200", completeResp.StatusCode)
 	}
@@ -94,6 +96,7 @@ func TestClaim_HappyPathThenAck(t *testing.T) {
 	}
 
 	getResp := doRequest(t, http.MethodGet, base+"/v1/scopes/proj/nodes/task-1", nil)
+	defer func() { _ = getResp.Body.Close() }()
 	if getResp.StatusCode != http.StatusOK {
 		t.Fatalf("GET node status = %d, want 200", getResp.StatusCode)
 	}
@@ -137,6 +140,7 @@ func TestClaim_StaleAckIsFencedWith409(t *testing.T) {
 	_ = putResp.Body.Close()
 
 	firstClaim := doRequest(t, http.MethodPost, base+"/v1/scopes/proj/nodes:claim", nil)
+	defer func() { _ = firstClaim.Body.Close() }()
 	var first claimResponse
 	decodeBody(t, firstClaim, &first)
 	if len(first.Leases) != 1 {
@@ -156,6 +160,7 @@ func TestClaim_StaleAckIsFencedWith409(t *testing.T) {
 	clk.Advance(6 * time.Minute)
 
 	secondClaim := doRequest(t, http.MethodPost, base+"/v1/scopes/proj/nodes:claim", nil)
+	defer func() { _ = secondClaim.Body.Close() }()
 	var second claimResponse
 	decodeBody(t, secondClaim, &second)
 	if len(second.Leases) != 1 {
