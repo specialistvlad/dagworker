@@ -20,11 +20,22 @@ e.g. `feat/metrics-facet`, `fix/redis-doorbell-leak`, `ci/pin-lint-action`.
 Push the branch. **Never open the pull request unasked** — say one is owed and
 let the user open it.
 
-## Before anything merges
+## Two gates, split by cost
 
-`make check` must pass: tidy, lint, race, coverage. `make all` adds the
-integration and complexity suites against real databases. Nothing merges red,
-and a coverage number below 95% fails the build rather than warning.
+```
+make check        tidy, lint, race, coverage.  No databases.       ~8s warm
+make performance  real databases, e2e, the measurements.
+```
+
+**`make check` has a ten-second budget and it is a constraint, not a hope.** A
+gate a developer will not wait for is a gate they route around. Anything added
+to it that pushes past ten seconds belongs in `make performance` instead.
+
+What that buys is a rule with teeth: the fast gate never starts a container,
+never opens a socket to a database, and never measures anything. Run it with
+`docker compose down` and it must still pass in the same time.
+
+Nothing merges red, and coverage below 95% fails the build rather than warning.
 
 ## The change order
 
@@ -73,5 +84,10 @@ promise about hardware.
 `make up` starts PostgreSQL and Redis on fixed ports (15432, 16379). Every
 worktree and every terminal talks to those same two containers, and
 `make integration` and `make complexity` both begin by truncating them. Run
-database-backed targets one at a time; `make check` and `make complexity-quick`
-need no databases and are safe to run concurrently.
+`make performance` one at a time; `make check` needs no databases at all and is
+safe to run concurrently, from as many worktrees as you like.
+
+Tests must not depend on database state. Every scope name carries a
+per-process token (`perf.Scope`, `e2e.UniqueScope`) so a suite run twice in a
+row cannot find its own leftovers -- which it did, and which failed as "ran out
+of claimable nodes" rather than as anything that named the real cause.
