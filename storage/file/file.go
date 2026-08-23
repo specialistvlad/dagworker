@@ -95,14 +95,18 @@ func Open(ctx context.Context, dir string, opts ...Option) (*Store, *Recovery, e
 		return nil, nil, err
 	}
 
-	mem, g, err := replay(ctx, records, cfg)
+	base, fromSnapshot := readSnapshot(dir)
+	mem, g, err := replay(ctx, base, fromSnapshot, records, cfg)
 	if err != nil {
 		_ = lg.close()
 		return nil, nil, err
 	}
 
-	return &Store{dir: dir, mem: mem, log: lg, gate: g},
-		&Recovery{Records: len(records), DiscardedBytes: discarded}, nil
+	return &Store{dir: dir, mem: mem, log: lg, gate: g}, &Recovery{
+		Records:        len(records),
+		DiscardedBytes: discarded,
+		FromSnapshot:   fromSnapshot,
+	}, nil
 }
 
 // Recovery reports what Open found on disk. A non-zero DiscardedBytes is the
@@ -110,8 +114,15 @@ func Open(ctx context.Context, dir string, opts ...Option) (*Store, *Recovery, e
 // rather than swallowed, because a host that sees it repeatedly is being told
 // something about its shutdown path.
 type Recovery struct {
-	Records        int
+	// Records is how many log records were replayed on top of the snapshot.
+	Records int
+	// DiscardedBytes is the size of a torn trailing frame, if there was one.
 	DiscardedBytes int64
+	// FromSnapshot reports whether a snapshot was loaded. False means either
+	// there was none, or the one present was unreadable and the log was
+	// replayed from the beginning instead -- both reach the same state, and
+	// the second is slower rather than wrong.
+	FromSnapshot bool
 }
 
 // replay rebuilds the in-memory state by re-running each recorded command
@@ -121,13 +132,24 @@ type Recovery struct {
 // One store, not two: the backend takes its clock at construction, so the state
 // replay produces has to stay in the store that produced it. The gate changes
 // mode instead.
-func replay(ctx context.Context, records []record, cfg config) (*memory.Store, *gate, error) {
+func replay(ctx context.Context, base memory.Snapshot, fromSnapshot bool,
+	records []record, cfg config,
+) (*memory.Store, *gate, error) {
 	g := newGate(cfg.clock, cfg.jitter)
-	mem := memory.New(
+	opts := []memory.Option{
 		memory.WithClock(g),
 		memory.WithJitter(g.Jitter),
 		memory.WithScopeDefaults(cfg.defaults),
-	)
+	}
+	var mem *memory.Store
+	if fromSnapshot {
+		var err error
+		if mem, err = memory.Restore(base, opts...); err != nil {
+			return nil, nil, fmt.Errorf("file: restoring the snapshot: %w", err)
+		}
+	} else {
+		mem = memory.New(opts...)
+	}
 	for i, r := range records {
 		g.feed(r.Readings)
 		if err := apply(ctx, mem, r); err != nil {
