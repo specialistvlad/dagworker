@@ -1,0 +1,14 @@
+// Development workspace. It resolves every module in this repository against
+// the working tree, so a change to the core module is visible to the backends
+// and adapters without a replace directive in any released go.mod.
+//
+// Committed deliberately: replace directives are the older way to do this and
+// they leak into published modules, where they break consumers. go.work does
+// not, because the go command ignores it for anything fetched as a dependency.
+go 1.25.0
+
+use (
+	.
+	./storage/postgres
+	./storage/redis
+)

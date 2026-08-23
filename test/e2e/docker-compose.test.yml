@@ -1,0 +1,86 @@
+# Databases for dagworker's integration and end-to-end tests.
+#
+# Every service binds a deliberately non-default host port so that running this
+# file never collides with a Postgres or Redis the developer already has up.
+# Tests read the ports from the environment and fall back to these values.
+#
+#   make test-integration     brings this up, waits for health, runs the suites
+#   docker compose -f test/e2e/docker-compose.test.yml up -d --wait
+#
+# --wait blocks until every healthcheck passes, which is what makes the suite
+# deterministic: without it the first connection races container startup.
+
+name: dagworker-test
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    command:
+      # A queue table is a high-churn table. The stock autovacuum settings are
+      # tuned for tables that change slowly, and leaving them alone is the
+      # single most common way a Postgres-backed queue degrades: dead tuples
+      # accumulate faster than they are reclaimed and the ready-set index scan
+      # gets progressively slower. These are aggressive on purpose so the
+      # benchmark measures the design rather than autovacuum lag.
+      - postgres
+      - -c
+      - autovacuum_naptime=5s
+      - -c
+      - autovacuum_vacuum_scale_factor=0.02
+      - -c
+      - autovacuum_analyze_scale_factor=0.01
+      - -c
+      - autovacuum_vacuum_cost_delay=2ms
+      - -c
+      - max_connections=200
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+    environment:
+      POSTGRES_USER: dagworker
+      POSTGRES_PASSWORD: dagworker
+      POSTGRES_DB: dagworker
+      # The test database is disposable, so trust auth keeps the connection
+      # string simple. Never copy this into anything that outlives a test run.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dagworker -d dagworker"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+    tmpfs:
+      # The whole dataset is disposable and fits in RAM. This keeps the 1M-node
+      # benchmark measuring the schema and the query plan rather than the
+      # developer's disk.
+      - /var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "no"
+      - --save
+      - ""
+      - --maxmemory
+      - 2gb
+      # noeviction matters: dagworker's Redis backend stores authoritative
+      # state, and an eviction policy that discards keys under pressure would
+      # silently delete the graph. A backend that can lose data must fail loudly
+      # instead.
+      - --maxmemory-policy
+      - noeviction
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+      start_period: 1s

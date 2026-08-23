@@ -14,8 +14,9 @@ covdata/
 *.pprof
 *.trace
 
-# Go workspace (local dev only; never committed)
-go.work
+# go.work IS committed (see ADR-0031): it resolves this repo's modules against
+# the working tree without replace directives leaking into published go.mod
+# files. Its checksum file is generated and is not.
 go.work.sum
 
 # Editors / OS
