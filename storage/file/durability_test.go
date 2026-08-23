@@ -2,6 +2,7 @@ package file_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -227,4 +228,207 @@ func TestTornTrailingRecordIsRecovered(t *testing.T) {
 	if _, err := second.AddNodes(t.Context(), "release", []dw.NodeSpec{{ID: "after-recovery"}}); err != nil {
 		t.Fatalf("writing after recovery: %v", err)
 	}
+}
+
+// TestCompactionPreservesStateExactly is the property compaction must have and
+// the one it is easy to get wrong: the snapshot has to carry everything the
+// replayed log carried, including the parts a caller cannot set directly.
+func TestCompactionPreservesStateExactly(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	first, _, err := file.Open(t.Context(), dir, file.WithClock(dagstoretest.NewFakeClock()))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	exercise(t, first)
+	before := snapshot(t, first)
+
+	if err := first.Compact(); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	// The live store must be unchanged by compacting it.
+	if got := snapshot(t, first); len(got) != len(before) {
+		t.Fatalf("compaction changed the live store: %d nodes -> %d", len(before), len(got))
+	}
+	if err := first.Close(t.Context()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	second, rec, err := file.Open(t.Context(), dir, file.WithClock(dagstoretest.NewFakeClock()))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = second.Close(context.Background()) }()
+
+	if !rec.FromSnapshot {
+		t.Error("the reopened store did not load the snapshot")
+	}
+	if rec.Records != 0 {
+		t.Errorf("replayed %d records after compaction; the log should have been empty", rec.Records)
+	}
+	assertSameState(t, before, snapshot(t, second))
+}
+
+// TestCompactionBoundsTheLog: the reason compaction exists.
+func TestCompactionBoundsTheLog(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	st, _, err := file.Open(t.Context(), dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = st.Close(context.Background()) }()
+
+	for i := range 200 {
+		if _, err := st.AddNodes(t.Context(), "bulk", []dw.NodeSpec{
+			{ID: dw.NodeID(fmt.Sprintf("n%03d", i))},
+		}); err != nil {
+			t.Fatalf("AddNodes: %v", err)
+		}
+	}
+	grown := logSize(t, dir)
+	if grown == 0 {
+		t.Fatal("the log did not grow")
+	}
+	if err := st.Compact(); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if after := logSize(t, dir); after != 0 {
+		t.Fatalf("the log is %d bytes after compaction, want 0", after)
+	}
+
+	// And writing continues normally afterwards.
+	if _, err := st.AddNodes(t.Context(), "bulk", []dw.NodeSpec{{ID: "after"}}); err != nil {
+		t.Fatalf("AddNodes after compaction: %v", err)
+	}
+	if logSize(t, dir) == 0 {
+		t.Fatal("a write after compaction did not reach the log")
+	}
+}
+
+// TestSnapshotPlusLogReplaysTogether: the ordinary steady state is a snapshot
+// with newer records on top of it, and the two have to compose.
+func TestSnapshotPlusLogReplaysTogether(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	first, _, err := file.Open(t.Context(), dir, file.WithClock(dagstoretest.NewFakeClock()))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	exercise(t, first)
+	if err := first.Compact(); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	// Work done AFTER the snapshot, which only the log knows about.
+	if _, err := first.AddNodes(t.Context(), "release", []dw.NodeSpec{{ID: "post-snapshot"}}); err != nil {
+		t.Fatalf("AddNodes: %v", err)
+	}
+	l, err := first.Claim(t.Context(), dw.ClaimRequest{Scope: "release", Max: 1, Timeout: time.Hour, WorkerID: "late"})
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if len(l.Leases) == 0 {
+		t.Fatal("nothing claimable after the snapshot")
+	}
+	before := snapshot(t, first)
+	if err := first.Close(t.Context()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	second, rec, err := file.Open(t.Context(), dir, file.WithClock(dagstoretest.NewFakeClock()))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = second.Close(context.Background()) }()
+	if !rec.FromSnapshot || rec.Records == 0 {
+		t.Fatalf("expected a snapshot plus records, got FromSnapshot=%v Records=%d",
+			rec.FromSnapshot, rec.Records)
+	}
+	assertSameState(t, before, snapshot(t, second))
+}
+
+// TestCorruptSnapshotFallsBackToTheLog: the log is authoritative, so a damaged
+// snapshot must cost startup time and nothing else.
+func TestCorruptSnapshotFallsBackToTheLog(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	first, _, err := file.Open(t.Context(), dir, file.WithClock(dagstoretest.NewFakeClock()))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	exercise(t, first)
+	before := snapshot(t, first)
+	// A snapshot exists, but the log has NOT been truncated, so it still
+	// covers everything.
+	if err := first.WriteSnapshotForTest(); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if err := first.Close(t.Context()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dagworker.snapshot"), []byte("not a snapshot"), 0o600); err != nil {
+		t.Fatalf("corrupt: %v", err)
+	}
+
+	second, rec, err := file.Open(t.Context(), dir, file.WithClock(dagstoretest.NewFakeClock()))
+	if err != nil {
+		t.Fatalf("a corrupt snapshot must not stop the store from opening: %v", err)
+	}
+	defer func() { _ = second.Close(context.Background()) }()
+	if rec.FromSnapshot {
+		t.Error("a corrupt snapshot was reported as loaded")
+	}
+	assertSameState(t, before, snapshot(t, second))
+}
+
+func assertSameState(t *testing.T, before, after map[string]dw.Inspection) {
+	t.Helper()
+	if len(before) != len(after) {
+		t.Fatalf("node count %d -> %d", len(before), len(after))
+	}
+	for k, b := range before {
+		a, ok := after[k]
+		if !ok {
+			t.Errorf("%s vanished", k)
+			continue
+		}
+		switch {
+		case a.Node.Status != b.Node.Status:
+			t.Errorf("%s: status %v -> %v", k, b.Node.Status, a.Node.Status)
+		case a.Node.Attempt != b.Node.Attempt:
+			t.Errorf("%s: attempt %d -> %d", k, b.Node.Attempt, a.Node.Attempt)
+		case a.Node.Reason != b.Node.Reason:
+			t.Errorf("%s: reason %v -> %v", k, b.Node.Reason, a.Node.Reason)
+		case a.Phase != b.Phase:
+			t.Errorf("%s: phase %v -> %v", k, b.Phase, a.Phase)
+		case a.LeaseEpoch != b.LeaseEpoch:
+			t.Errorf("%s: lease epoch %d -> %d", k, b.LeaseEpoch, a.LeaseEpoch)
+		case a.LeaseHolder != b.LeaseHolder:
+			t.Errorf("%s: lease holder %q -> %q", k, b.LeaseHolder, a.LeaseHolder)
+		case !a.LeaseDeadline.Equal(b.LeaseDeadline):
+			t.Errorf("%s: lease deadline %v -> %v", k, b.LeaseDeadline, a.LeaseDeadline)
+		case !a.ReadyAt.Equal(b.ReadyAt):
+			t.Errorf("%s: retry time %v -> %v", k, b.ReadyAt, a.ReadyAt)
+		case a.Deps != b.Deps:
+			t.Errorf("%s: deps %+v -> %+v", k, b.Deps, a.Deps)
+		case len(a.Successors) != len(b.Successors):
+			t.Errorf("%s: %d successors -> %d", k, len(b.Successors), len(a.Successors))
+		case len(a.Waiting) != len(b.Waiting):
+			t.Errorf("%s: %d unsatisfied predecessors -> %d", k, len(b.Waiting), len(a.Waiting))
+		case a.Rank != b.Rank:
+			t.Errorf("%s: topological rank %d -> %d", k, b.Rank, a.Rank)
+		}
+	}
+}
+
+func logSize(t *testing.T, dir string) int64 {
+	t.Helper()
+	fi, err := os.Stat(filepath.Join(dir, "dagworker.log"))
+	if err != nil {
+		t.Fatalf("stat log: %v", err)
+	}
+	return fi.Size()
 }

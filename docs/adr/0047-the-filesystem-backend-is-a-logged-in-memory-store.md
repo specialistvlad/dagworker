@@ -96,21 +96,42 @@ the log's sake, no fork of the reference implementation, and — the real prize 
 the in-memory backend about what a claim does, because it *is* the in-memory
 backend with a log around it.
 
-### What it does not solve
+### What it does not solve, and what does
 
-Compaction. The log must be truncated or replay grows without bound, and a
-snapshot needs the state serialised, which the trick above does not provide.
+Compaction. The log must be truncated or replay grows without bound, and that
+needs the state serialised, which the trick above does not provide.
 
 Filtering the log ("keep records that mention a live node") is tempting and
 wrong: completing a node releases its successors, so dropping a removed node's
 records can leave a surviving successor un-readied on replay. The dependency
 structure is exactly what makes records non-self-contained.
 
-So a snapshot is needed, and `storage/memory` gains `Snapshot`/`Restore` after
-all — issue #31's option 1, which it called "cleanest" and "useful on its own".
-The re-estimation does not avoid it; it confines it to the snapshot path and
-keeps it off the log path, where it would otherwise have had to encode the
-outcome of every mutation.
+So `storage/memory` gains `Snapshot`/`Restore` after all — issue #31's option 1,
+which it called "cleanest" and "useful on its own". The re-estimation does not
+avoid it; it confines it to the snapshot path and keeps it off the log path,
+where it would otherwise have had to encode the outcome of every mutation.
+
+**Only the primary state is captured.** The ready, lease and retry heaps and the
+id index are derived from each node's phase and are rebuilt on restore, so they
+cannot drift from the data they index — which is the failure a hand-written
+serialiser of a struct-of-arrays layout would otherwise be most likely to have.
+
+**The event ring is deliberately not restored.** A subscriber resuming across a
+restart is resuming from history this process never had, and `ErrCursorExpired`
+is the same answer the bounded ring already gives one that fell too far behind.
+The cursor itself is restored, so new events continue past the old ones rather
+than colliding with them.
+
+**Ordering is snapshot, fsync, rename, fsync the directory, then truncate.** A
+crash at any point leaves either the old snapshot with the whole log or the new
+snapshot with the whole log, and both replay to the same state. Truncating first
+is the one ordering that can lose data. A snapshot that will not decode is not
+an error either: the log is authoritative, so a damaged snapshot costs startup
+time and nothing else.
+
+**Compaction is a caller's decision, not a timer.** Only the caller knows what a
+good moment is; it costs one full serialisation and blocks mutations for its
+duration, and not calling it costs a longer startup.
 
 ## Consequences
 

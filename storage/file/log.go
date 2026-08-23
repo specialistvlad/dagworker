@@ -172,3 +172,15 @@ func syncDir(dir string) error {
 }
 
 func logPath(dir string) string { return filepath.Join(dir, "dagworker.log") }
+
+// reset empties the log. It is called only after a snapshot has been fsynced
+// and renamed into place, so the history it discards is already represented.
+func (l *log) reset() error {
+	if err := l.f.Truncate(0); err != nil {
+		return fmt.Errorf("file: truncating the log after a snapshot: %w", err)
+	}
+	if _, err := l.f.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("file: rewinding the truncated log: %w", err)
+	}
+	return l.f.Sync()
+}
