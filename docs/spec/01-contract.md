@@ -517,3 +517,4 @@ Each backend **MUST** publish what it actually guarantees. No backend may imply 
 | in-memory | none — process lifetime only. Suitable when all workers share one process. |
 | Redis | async replication by default: a primary failover can lose ~1s of writes. `WAIT`/`WAITAOF` is available as an opt-in per-call cost. |
 | PostgreSQL | full WAL durability for nodes, edges, and events. |
+| file | no loss on an unclean exit: every mutation is `fsync`ed before its call returns, at a cost of one `fsync` per mutation. Single process — the log is a durability mechanism, not a coordination protocol, so `CapCrossProcess` is not set. |
