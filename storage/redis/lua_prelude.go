@@ -135,7 +135,7 @@ local function recordEvent(p, id, kind, fromStatus, toStatus, reason, message, a
   redis.call('XADD', kEvents(p), 'MAXLEN', '~', '20000', cursor .. '-0',
     'kind', kind, 'id', id, 'from', fromStatus, 'to', toStatus,
     'reason', reason, 'message', message or '', 'attempt', attempt,
-    'nodeKind', nodeKind or '', 'at', atMs)
+    'nodeKind', nodeKind or '', 'seq', seq, 'at', atMs)
   pushEffect(id, kind, fromStatus, toStatus, reason, message, attempt, nodeKind, seq, cursor, atMs)
   return seq, cursor
 end

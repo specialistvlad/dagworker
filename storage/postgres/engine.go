@@ -1,8 +1,10 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -412,6 +414,177 @@ RETURNING seq`, n.ID, int16(dw.PhaseDone), int16(it.status), int16(it.reason), i
 		}
 	}
 	return effects, nil
+}
+
+// loadForUpdateByExternal locks and returns one node by its caller-facing
+// (scope, node_id) identity.
+func (e *engine) loadForUpdateByExternal(nodeID string) (nodeRow, error) {
+	row := e.tx.QueryRow(e.ctx,
+		`SELECT `+nodeColumns+` FROM dagw.nodes WHERE scope = $1 AND node_id = $2 FOR UPDATE`,
+		e.scope, nodeID)
+	return scanNode(row)
+}
+
+// bumpSeq advances one node's per-node sequence with no other change — used
+// for [dagworker.EventCreated], which has no accompanying status write to
+// piggyback the bump onto.
+func (e *engine) bumpSeq(id int64) (dw.Seq, error) {
+	var seq int64
+	err := e.tx.QueryRow(e.ctx, `UPDATE dagw.nodes SET seq = seq + 1 WHERE id = $1 RETURNING seq`, id).Scan(&seq)
+	if err != nil {
+		return 0, fmt.Errorf("postgres: bump seq: %w", err)
+	}
+	return dw.Seq(seq), nil
+}
+
+// createNode inserts a brand-new node in PhaseBlocked/StatusNew — every node
+// is born there, dependency-free or not, and pass three's settle call is
+// what promotes it to Ready (or straight to a terminal status) once its
+// declared dependencies are linked. Mirrors memory's create().
+func (e *engine) createNode(spec dw.NodeSpec) (nodeRow, error) {
+	labels, err := labelsJSON(spec.Labels)
+	if err != nil {
+		return nodeRow{}, fmt.Errorf("postgres: create node: labels: %w", err)
+	}
+	var payload []byte
+	if len(spec.Payload) > 0 {
+		payload = spec.Payload
+	}
+	row := e.tx.QueryRow(e.ctx, `
+INSERT INTO dagw.nodes (
+	scope, node_id, kind, status, reason, phase, priority, trigger_rule,
+	retry_max_attempts, retry_base_delay_ns, retry_max_delay_ns, payload, labels,
+	created_at, updated_at
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, clock_timestamp(), clock_timestamp())
+RETURNING `+nodeColumns,
+		e.scope, string(spec.ID), spec.Kind, int16(dw.StatusNew), int16(dw.ReasonNone), int16(dw.PhaseBlocked),
+		spec.Priority, int16(spec.Trigger),
+		int32(spec.Retry.MaxAttempts), int64(spec.Retry.BaseDelay), int64(spec.Retry.MaxDelay),
+		payload, labels,
+	)
+	n, err := scanNode(row)
+	if err != nil {
+		return nodeRow{}, fmt.Errorf("postgres: create node: %w", err)
+	}
+	if err := e.enterBucket(n.Phase, n.Status); err != nil {
+		return nodeRow{}, err
+	}
+	if _, err := e.tx.Exec(e.ctx, `UPDATE dagw.scopes SET stat_total = stat_total + 1 WHERE scope = $1`, e.scope); err != nil {
+		return nodeRow{}, fmt.Errorf("postgres: create node: stat_total: %w", err)
+	}
+	return n, nil
+}
+
+// specMatches reports whether an existing node was created from a
+// byte-identical definition, which is what makes AddNodes idempotent.
+// Runtime state (status, attempt, sequence) is deliberately not compared:
+// re-adding a node that has since run is still the same node.
+func specMatches(n nodeRow, spec dw.NodeSpec) bool {
+	return n.Kind == spec.Kind &&
+		n.Priority == spec.Priority &&
+		n.Trigger == spec.Trigger &&
+		n.RetryMaxAttempts == spec.Retry.MaxAttempts &&
+		n.RetryBaseDelay == spec.Retry.BaseDelay &&
+		n.RetryMaxDelay == spec.Retry.MaxDelay &&
+		bytes.Equal(n.Payload, spec.Payload) &&
+		maps.Equal(n.Labels, spec.Labels)
+}
+
+// linkDependency records that to depends on from: the edge-insertion half
+// every AddNodes dependency and every AddEdges entry shares. It reports a
+// *dagworker.CycleError or dagworker.ErrAlreadyTerminal in place, and leaves
+// both nodeRow arguments' cached Deps up to date on success so a caller
+// chaining several links against the same touched node sees a consistent view.
+func (e *engine) linkDependency(from, to *nodeRow) error {
+	var exists bool
+	err := e.tx.QueryRow(e.ctx,
+		`SELECT EXISTS (SELECT 1 FROM dagw.edges WHERE scope = $1 AND from_id = $2 AND to_id = $3)`,
+		e.scope, from.ID, to.ID).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("postgres: linkDependency: check existing: %w", err)
+	}
+	if exists {
+		return nil
+	}
+	if to.Phase == dw.PhaseDone {
+		return fmt.Errorf("%w: %q", dw.ErrAlreadyTerminal, to.NodeID)
+	}
+
+	res, err := e.addEdgeOrder(from.ID, to.ID)
+	if err != nil {
+		return fmt.Errorf("postgres: linkDependency: topo: %w", err)
+	}
+	if res.cyclePath != nil {
+		names, err := externalIDs(e.ctx, e.tx, res.cyclePath)
+		if err != nil {
+			return fmt.Errorf("postgres: linkDependency: resolve cycle path: %w", err)
+		}
+		path := make([]dw.NodeID, len(res.cyclePath))
+		for i, id := range res.cyclePath {
+			path[i] = dw.NodeID(names[id])
+		}
+		return &dw.CycleError{Scope: dw.Scope(e.scope), From: from.NodeID, To: to.NodeID, Path: path}
+	}
+
+	satisfied := from.Phase == dw.PhaseDone
+	if _, err := e.tx.Exec(e.ctx,
+		`INSERT INTO dagw.edges (scope, from_id, to_id, satisfied) VALUES ($1, $2, $3, $4)`,
+		e.scope, from.ID, to.ID, satisfied,
+	); err != nil {
+		return fmt.Errorf("postgres: linkDependency: insert edge: %w", err)
+	}
+
+	switch {
+	case !satisfied:
+		to.Deps.Unsatisfied++
+	case from.Status == dw.StatusSuccess:
+		to.Deps.Succeeded++
+	case from.Reason == dw.ReasonSkipped:
+		to.Deps.Skipped++
+	default:
+		to.Deps.Failed++
+	}
+	if _, err := e.tx.Exec(e.ctx,
+		`UPDATE dagw.nodes SET deps_unsatisfied = $2, deps_succeeded = $3, deps_skipped = $4, deps_failed = $5 WHERE id = $1`,
+		to.ID, to.Deps.Unsatisfied, to.Deps.Succeeded, to.Deps.Skipped, to.Deps.Failed,
+	); err != nil {
+		return fmt.Errorf("postgres: linkDependency: persist deps: %w", err)
+	}
+	return nil
+}
+
+// unlinkDependency drops the edge from -> to if it exists, reverting to's
+// dependency tally, and reports whether anything changed.
+func (e *engine) unlinkDependency(fromID, toID int64) (bool, error) {
+	var satisfied bool
+	err := e.tx.QueryRow(e.ctx,
+		`DELETE FROM dagw.edges WHERE scope = $1 AND from_id = $2 AND to_id = $3 RETURNING satisfied`,
+		e.scope, fromID, toID).Scan(&satisfied)
+	if err != nil {
+		if isNoRows(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("postgres: unlinkDependency: %w", err)
+	}
+
+	from, err := e.loadForUpdate(fromID)
+	if err != nil {
+		return false, fmt.Errorf("postgres: unlinkDependency: load predecessor: %w", err)
+	}
+	col := "deps_failed"
+	switch {
+	case !satisfied:
+		col = "deps_unsatisfied"
+	case from.Status == dw.StatusSuccess:
+		col = "deps_succeeded"
+	case from.Reason == dw.ReasonSkipped:
+		col = "deps_skipped"
+	}
+	sql := fmt.Sprintf(`UPDATE dagw.nodes SET %s = GREATEST(%s - 1, 0) WHERE id = $1`, col, col)
+	if _, err := e.tx.Exec(e.ctx, sql, toID); err != nil {
+		return false, fmt.Errorf("postgres: unlinkDependency: decrement: %w", err)
+	}
+	return true, nil
 }
 
 // notifyIfDirty issues one pg_notify carrying only the scope name, the

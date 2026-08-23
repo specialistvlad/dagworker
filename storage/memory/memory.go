@@ -47,8 +47,17 @@ func (f optionFunc) apply(s *Store) { f(s) }
 // WithClock sets the time source. The in-memory backend is the one place where
 // "the storage's own clock" and "the caller's clock" are the same clock, which
 // is what lets tests drive lease expiry deterministically.
+//
+// A nil clock is ignored rather than stored. These options cannot return an
+// error, so the alternatives are to ignore the bad value or to panic on the
+// first lease — and a scheduler that dies the first time it looks at the time
+// is the worse of the two.
 func WithClock(c dw.Clock) Option {
-	return optionFunc(func(s *Store) { s.clock = c })
+	return optionFunc(func(s *Store) {
+		if c != nil {
+			s.clock = c
+		}
+	})
 }
 
 // WithScopeDefaults sets the configuration applied to scopes that have none of
@@ -92,7 +101,26 @@ func New(opts ...Option) *Store {
 		closed: make(chan struct{}),
 	}
 	for _, o := range opts {
-		o.apply(s)
+		if o != nil {
+			o.apply(s)
+		}
+	}
+	// Belt and braces: every option guards its own input, but a future one
+	// might not, and a nil clock is a panic on the first claim rather than an
+	// error anyone can act on.
+	if s.clock == nil {
+		s.clock = dw.SystemClock{}
+	}
+	if s.jitter == nil {
+		s.jitter = func(n int64) int64 {
+			if n <= 0 {
+				return 0
+			}
+			return rand.Int64N(n)
+		}
+	}
+	if s.logCap <= 0 {
+		s.logCap = DefaultEventLogSize
 	}
 	return s
 }

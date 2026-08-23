@@ -212,8 +212,10 @@ type config struct {
 
 func defaultConfig() config {
 	return config{
-		clock:            SystemClock{},
-		logger:           slog.New(discardHandler{}),
+		clock: SystemClock{},
+		// A library that writes to its host's stderr uninvited is a defect,
+		// so the default swallows everything.
+		logger:           slog.New(slog.DiscardHandler),
 		subscriberBuffer: DefaultSubscriberBuffer,
 		overflow:         OverflowDropOldest,
 	}

@@ -330,6 +330,23 @@ func (m *Manager) IsComplete(ctx context.Context, scope Scope) (bool, error) {
 	return st.Complete, nil
 }
 
+// Sweep reclaims expired leases in a scope now, rather than waiting for the
+// background loop. It returns how many it revoked.
+//
+// Correctness never depends on calling it: every expired lease is also
+// reclaimed by whoever next asks for work, and every write it makes is fenced
+// on the epoch it observed, so two instances sweeping the same scope is wasted
+// effort rather than a wrong answer. It exists for tests, for admin tooling,
+// and for hosts that would rather drive maintenance on their own schedule.
+func (m *Manager) Sweep(ctx context.Context, scope Scope) (int, error) {
+	if err := m.check(scope); err != nil {
+		return 0, err
+	}
+	res, err := m.store.Sweep(ctx, scope, 0)
+	m.publish(scope, res.Effects)
+	return res.Reclaimed, err
+}
+
 // Scopes lists the scopes the backend knows about.
 func (m *Manager) Scopes(ctx context.Context) ([]Scope, error) {
 	if m.isClosed() {
@@ -444,16 +461,13 @@ func (m *Manager) collectScope(scope Scope) {
 	}
 }
 
-// jitter returns a duration drawn uniformly from [d/2, d). Poll intervals are
-// jittered so that a fleet of workers that started together does not stay
-// synchronised, hammering the backend in lockstep bursts forever.
+// jitter returns a duration drawn uniformly from [d/2, d).
+//
+// Poll intervals are jittered so that a fleet of workers which started together
+// does not stay synchronised, arriving at the backend in lockstep bursts
+// forever. The caller guarantees d is at least minPollInterval, so half is
+// always positive and no degenerate case needs handling here.
 func jitter(d time.Duration) time.Duration {
-	if d <= 0 {
-		return 0
-	}
 	half := int64(d / 2)
-	if half <= 0 {
-		return d
-	}
 	return time.Duration(half + rand.Int64N(half))
 }
