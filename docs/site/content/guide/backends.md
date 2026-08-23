@@ -50,6 +50,36 @@ loses no lease, and the fencing design (see
 a worker that dies holding one has its node reclaimed at the deadline, and its
 late write refused by the epoch.
 
+### Keep scope names short on PostgreSQL
+
+`scope` is stored as `text` and repeated on every row of `nodes`, `edges` and
+`events`, and in every entry of the six indexes that lead with it. The cost is
+roughly a byte per character, per row and per index entry — which is nothing for
+`deploy` and quite a lot for a UUID.
+
+Measured at 50,000 nodes with three edges each, comparing a 6-character scope
+name against a 36-character one:
+
+| | 6 chars | 36 chars |
+|---|---|---|
+| total on disk | 46.1 MB | **70.0 MB** (+51.7%) |
+| of which `edges` and its two indexes | | 66% of the growth |
+
+`edges` dominates because its row is about 24 bytes of data, so a long scope
+name is more than half of it, and it carries two indexes. `nodes_ready_idx` —
+the index you would expect to care most — does not participate at all: it is
+partial (`WHERE phase = 2`), so it only ever holds the ready set.
+
+Nothing breaks with long names; this is disk and cache residency, not
+correctness. But a short name is free, and it is the entire saving that
+normalising `scope` to a surrogate integer would buy. `make benchmark` does not
+run this measurement — it drops and rebuilds the schema — so to check your own
+names:
+
+```
+DAGWORKER_SCOPE_SIZING=1 go test -tags=integration -run TestScopeStorageCost -v ./test/perf
+```
+
 ## Durability, stated plainly
 
 The spec requires every backend to publish exactly what it guarantees, with
