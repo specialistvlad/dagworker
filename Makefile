@@ -88,7 +88,13 @@ reset-db: ## Empty the test databases without restarting them
 	@# the backend's own migrations on first use, so on a fresh container --
 	@# every CI run -- there is nothing to truncate and TRUNCATE would fail
 	@# the target before any test had a chance to run.
+	@# lock_timeout, because TRUNCATE needs an AccessExclusiveLock and any
+	@# connection left holding a row lock -- an interrupted test run, a killed
+	@# benchmark -- deadlocks against it. Failing in five seconds with the
+	@# server's own message beats hanging or reporting a deadlock nobody can
+	@# place.
 	@docker exec -i dagworker-test-postgres-1 psql -U dagworker -d dagworker -X -c "\
+		SET lock_timeout = '5s'; \
 		DO \$$\$$ BEGIN \
 		  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'dagw') THEN \
 		    TRUNCATE dagw.events, dagw.edges, dagw.nodes, dagw.scopes CASCADE; \
@@ -149,8 +155,8 @@ million: up reset-db ## Measure every backend at 1,000,000 nodes (slow: ~25 min)
 	  if [ $$status -ne 0 ]; then echo "FAILED - full output: $$log"; exit $$status; fi; \
 	  rm -f $$log
 
-.PHONY: benchmark
-benchmark: up ## Throughput benchmarks, bounded to under a minute
+.PHONY: throughput
+throughput: up ## Absolute throughput numbers alone (part of `make benchmark`)
 	@# -benchtime=1000x, a fixed iteration count rather than a wall-clock
 	@# budget. Three of these benchmarks consume the graph, so the run length
 	@# has to be something the graph can be sized against; with a time-based
@@ -197,8 +203,8 @@ vuln: ## Check dependencies against the Go vulnerability database
 #
 # There are exactly two, and the split is by cost, not by kind.
 #
-#   make check        no databases, no containers, no measurements.  ~10s warm
-#   make performance  everything else.
+#   make check      no databases, no containers, no measurements.   budget 10s
+#   make benchmark  real databases, e2e, complexity, throughput.    budget 5m
 #
 # The budget is the design constraint, not an aspiration. A gate a developer
 # will not wait for is a gate they route around, and one that takes fourteen
@@ -214,18 +220,18 @@ check: ## Fast gate: tidy, lint, race, coverage. No databases. ~10s warm
 	  cover '$(MAKE) --no-print-directory cover' \
 	  | $(PAR) 4
 	@echo
-	@echo "check: green. 'make performance' runs everything this leaves out."
+	@echo "check: green. 'make benchmark' runs everything this leaves out."
 
-.PHONY: performance
-performance: ## Everything check leaves out: real databases, e2e, and the measurements
+.PHONY: benchmark
+benchmark: ## Everything check leaves out: real databases, e2e, complexity, throughput. ~5 min
 	@$(MAKE) --no-print-directory integration
 	@$(MAKE) --no-print-directory complexity
-	@$(MAKE) --no-print-directory benchmark
+	@$(MAKE) --no-print-directory throughput
 	@echo
-	@echo "performance: green."
+	@echo "benchmark: green."
 
 .PHONY: check-everything
-check-everything: check performance million ## Both gates plus the 1M measurement (~30 min)
+check-everything: check benchmark million ## Both suites plus the 1M measurement (~30 min)
 
 .PHONY: all
-all: check performance ## Both gates
+all: check benchmark ## Both suites

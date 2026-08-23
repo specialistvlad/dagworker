@@ -13,25 +13,27 @@ commit type it carries — `feat/`, `fix/`, `docs/`, `test/`, `perf/`,
 Nothing merges red.
 
 ```
-make check       # the gate: ~8s, no databases, run it constantly
-make performance # real databases, e2e, and the measurements
-make down        # stop the containers when you are done
+make check      # the gate: ~7s, no databases, run it constantly
+make benchmark  # real databases, e2e, complexity, throughput: ~3m30s
+make down       # stop the containers when you are done
 ```
 
 `make` with no target lists every target and what it does, and an unknown
 target prints the same list rather than a bare "No rule to make target".
 
-| | what it runs | needs databases | budget |
-|---|---|---|---|
-| `make check` | tidy, lint, race, coverage | **no** | **10s** |
-| `make performance` | integration, e2e, complexity, benchmarks | yes | — |
-| `make benchmark` | throughput only, bounded iteration counts | yes | **60s** |
-| `make million` | the 1,000,000-node measurement | yes | ~10 min |
+| | what it runs | needs databases | budget | measured |
+|---|---|---|---|---|
+| `make check` | tidy, lint, race, coverage | **no** | **10s** | 6.7s |
+| `make benchmark` | integration, e2e, complexity, throughput | yes | **5 min** | 3m31s |
+| `make million` | the 1,000,000-node measurement | yes | — | ~10 min |
 
-The two budgets are enforced by review, not by a timer, and they are the reason
-the split exists: `make check` used to be four minutes and the full sweep
-fourteen, so in practice people pushed and waited. If a change pushes `check`
-past ten seconds it belongs in `performance`.
+Inside `benchmark` the parts are also targets, for when you want just one:
+`make integration`, `make complexity`, `make throughput`.
+
+The budgets are enforced by review, not by a timer, and they are the reason the
+split exists: the old gate was fourteen minutes, so in practice people pushed
+and waited. If a change pushes `check` past ten seconds it belongs in
+`benchmark`.
 
 If `make check` fails on `main`, that is a bug and a report is welcome.
 
