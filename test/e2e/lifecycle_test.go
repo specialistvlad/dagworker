@@ -144,7 +144,7 @@ func TestFailurePropagatesAndCleanupRuns(t *testing.T) {
 		if err != nil {
 			t.Fatalf("TryClaim: %v", err)
 		}
-		if err := m.Nack(ctx, lease, errors.New("source unavailable")); err != nil {
+		if _, err := m.Nack(ctx, lease, errors.New("source unavailable")); err != nil {
 			t.Fatalf("Nack: %v", err)
 		}
 

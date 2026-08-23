@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	dw "github.com/specialistvlad/dagworker"
 	grpcadapter "github.com/specialistvlad/dagworker/adapters/grpc"
 	pb "github.com/specialistvlad/dagworker/adapters/grpc/gen/dagworker/v1"
-	dw "github.com/specialistvlad/dagworker"
 	"github.com/specialistvlad/dagworker/dagstoretest"
 	"github.com/specialistvlad/dagworker/storage/memory"
 	"google.golang.org/grpc"
@@ -148,6 +148,56 @@ func TestClaimAckRoundTrip(t *testing.T) {
 	}
 	if got.GetNode().GetStatus() != pb.NodeStatus_NODE_STATUS_SUCCESS {
 		t.Fatalf("status = %v, want SUCCESS", got.GetNode().GetStatus())
+	}
+}
+
+// TestExtendLeaseMovesDeadlineForward confirms the heartbeat RPC moves the
+// deadline out from the server's current clock, not from the original grant
+// (docs/research/13-grpc-worker-protocol.md's ExtendLease doc comment).
+func TestExtendLeaseMovesDeadlineForward(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	addOneNode(t, h, "scope-hb", "n1")
+	claimResp, err := h.worker.ClaimNode(ctx, &pb.ClaimNodeRequest{
+		Scope:         "scope-hb",
+		LeaseDuration: durationpb.New(200 * time.Millisecond),
+		PollTimeout:   durationpb.New(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("ClaimNode: %v", err)
+	}
+	token := claimResp.GetLease().GetTaskToken()
+	originalDeadline := claimResp.GetLease().GetLeaseExpiresAt().AsTime()
+
+	// Move the store's clock close to, but not past, the original deadline —
+	// the extension must still succeed and move the deadline out from here,
+	// not from the original grant.
+	h.clock.Advance(150 * time.Millisecond)
+
+	extendResp, err := h.worker.ExtendLease(ctx, &pb.ExtendLeaseRequest{
+		TaskToken:          token,
+		RequestedExtension: durationpb.New(5 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("ExtendLease: %v", err)
+	}
+	newDeadline := extendResp.GetLeaseExpiresAt().AsTime()
+
+	if !newDeadline.After(originalDeadline) {
+		t.Fatalf("extended deadline %s did not move past the original %s", newDeadline, originalDeadline)
+	}
+	wantAround := h.clock.Now().Add(5 * time.Second)
+	if diff := newDeadline.Sub(wantAround); diff < -time.Millisecond || diff > time.Millisecond {
+		t.Fatalf("extended deadline = %s, want ~%s (measured from now, not from the original grant)", newDeadline, wantAround)
+	}
+
+	// The now-extended lease must still be completable: the fencing epoch
+	// never changed, only the deadline did.
+	if _, err := h.worker.CompleteNode(ctx, &pb.CompleteNodeRequest{TaskToken: token}); err != nil {
+		t.Fatalf("CompleteNode after extend: %v", err)
 	}
 }
 
@@ -306,9 +356,12 @@ func TestWatchDeliversEvents(t *testing.T) {
 		t.Fatalf("CompleteNode: %v", err)
 	}
 
-	transition := recvEventOfKind(t, stream, pb.WatchEventKind_WATCH_EVENT_KIND_TRANSITION)
-	if transition.GetNode().GetStatus() != pb.NodeStatus_NODE_STATUS_SUCCESS {
-		t.Fatalf("transition status = %v, want SUCCESS", transition.GetNode().GetStatus())
+	// The claim itself also produces a TRANSITION (New -> InProgress) before
+	// the completion's (InProgress -> Success); skip past it rather than
+	// asserting on whichever transition happens to arrive first.
+	transition := recvTransitionToStatus(t, stream, pb.NodeStatus_NODE_STATUS_SUCCESS)
+	if transition.GetNode().GetId() != "n1" {
+		t.Fatalf("transition event node id = %q, want n1", transition.GetNode().GetId())
 	}
 }
 
@@ -329,6 +382,27 @@ func recvEventOfKind(t *testing.T, stream pb.ControlService_WatchClient, kind pb
 		}
 	}
 	t.Fatalf("did not observe a %v event within 10 responses", kind)
+	return nil
+}
+
+// recvTransitionToStatus skips every event that is not a TRANSITION landing
+// on the requested resulting status — in particular the claim's own
+// New -> InProgress transition, which arrives on the same watch before the
+// completion's InProgress -> Success one this helper is usually asked for.
+func recvTransitionToStatus(t *testing.T, stream pb.ControlService_WatchClient, want pb.NodeStatus) *pb.WatchEvent {
+	t.Helper()
+	for i := 0; i < 10; i++ {
+		resp, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("Recv: %v", err)
+		}
+		for _, ev := range resp.GetEvents() {
+			if ev.GetKind() == pb.WatchEventKind_WATCH_EVENT_KIND_TRANSITION && ev.GetNode().GetStatus() == want {
+				return ev
+			}
+		}
+	}
+	t.Fatalf("did not observe a transition to %v within 10 responses", want)
 	return nil
 }
 

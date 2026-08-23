@@ -60,7 +60,7 @@ func TestTypedClaimBlocks(t *testing.T) {
 	if lease.Payload.URL != "u" {
 		t.Fatalf("payload is %+v", lease.Payload)
 	}
-	if err := tv.Nack(f.ctx, lease, errors.New("nope")); err != nil {
+	if _, err := tv.Nack(f.ctx, lease, errors.New("nope")); err != nil {
 		t.Fatalf("Nack: %v", err)
 	}
 }

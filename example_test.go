@@ -83,7 +83,7 @@ func Example_failurePropagation() {
 	})
 
 	lease, _ := m.TryClaim(ctx, "job")
-	_ = m.Nack(ctx, lease, errors.New("upstream returned 503"))
+	_, _ = m.Nack(ctx, lease, errors.New("upstream returned 503"))
 
 	for _, id := range []dagworker.NodeID{"fetch", "transform", "load", "cleanup"} {
 		n, _ := m.GetNode(ctx, "job", id)

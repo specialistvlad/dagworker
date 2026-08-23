@@ -282,7 +282,7 @@ func TestNackSkipAndExtend(t *testing.T) {
 	f.add("skip")
 
 	l1 := f.claim()
-	if err := f.m.Nack(f.ctx, l1, errors.New("exploded")); err != nil {
+	if _, err := f.m.Nack(f.ctx, l1, errors.New("exploded")); err != nil {
 		t.Fatalf("Nack: %v", err)
 	}
 	n, _ := f.m.GetNode(f.ctx, "s", l1.NodeID)
@@ -302,7 +302,7 @@ func TestNackSkipAndExtend(t *testing.T) {
 	// Nack with a nil cause must not panic.
 	f.add("third")
 	l3 := f.claim()
-	if err := f.m.Nack(f.ctx, l3, nil); err != nil {
+	if _, err := f.m.Nack(f.ctx, l3, nil); err != nil {
 		t.Fatalf("Nack(nil): %v", err)
 	}
 }

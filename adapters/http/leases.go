@@ -105,11 +105,12 @@ func (s *Server) handleFail(w http.ResponseWriter, r *http.Request, lease dagwor
 	if body.Message != "" {
 		cause = errors.New(body.Message)
 	}
-	if err := s.mgr.Nack(r.Context(), lease, cause); err != nil {
+	outcome, err := s.mgr.Nack(r.Context(), lease, cause)
+	if err != nil {
 		s.writeProblem(w, r, err)
 		return
 	}
-	s.writeCompletion(w, r, lease)
+	s.writeCompletionWithOutcome(w, r, lease, &outcome)
 }
 
 func (s *Server) handleSkip(w http.ResponseWriter, r *http.Request, lease dagworker.Lease) {
@@ -151,10 +152,34 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request, lease dagwo
 // those three convenience methods, so the honest way to answer "what happened
 // to the node" is to look at the node.
 func (s *Server) writeCompletion(w http.ResponseWriter, r *http.Request, lease dagworker.Lease) {
+	s.writeCompletionWithOutcome(w, r, lease, nil)
+}
+
+// writeCompletionWithOutcome renders the node's post-completion state, with the
+// retry fields taken from the completing operation itself when the caller has
+// them.
+//
+// That distinction matters. Reading the node back is a second, unfenced look at
+// a node that is claimable again the instant it is scheduled for retry -- so on
+// a busy scope another worker can claim and complete it between the two calls,
+// and the response would describe that worker's attempt rather than this one's.
+// Manager.Nack returns the decision from inside the atomic write, so where it
+// is available it wins.
+func (s *Server) writeCompletionWithOutcome(
+	w http.ResponseWriter, r *http.Request, lease dagworker.Lease, outcome *dagworker.AttemptResult,
+) {
 	resp, err := s.completionResponse(r.Context(), lease.Scope, lease.NodeID)
 	if err != nil {
 		s.writeProblem(w, r, err)
 		return
+	}
+	if outcome != nil {
+		resp.Retrying = outcome.Retrying
+		resp.NextAttemptAt = nil
+		if !outcome.NextAttemptAt.IsZero() {
+			t := outcome.NextAttemptAt
+			resp.NextAttemptAt = &t
+		}
 	}
 	writeJSON(w, http.StatusOK, "application/json", resp)
 }

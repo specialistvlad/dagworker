@@ -70,7 +70,7 @@ func TestNodeRetryOverridesScopePerField(t *testing.T) {
 	}
 
 	l := f.claim(dw.AsWorker("worker-1"))
-	if err := f.m.Nack(f.ctx, l, errors.New("first")); err != nil {
+	if _, err := f.m.Nack(f.ctx, l, errors.New("first")); err != nil {
 		t.Fatalf("Nack: %v", err)
 	}
 	if got := f.status("stubborn"); got != dw.StatusNew {

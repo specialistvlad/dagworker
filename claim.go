@@ -202,16 +202,33 @@ func (m *Manager) Ack(ctx context.Context, lease Lease, result []byte) error {
 	return m.complete(ctx, CompleteRequest{Lease: lease, Success: true, Result: result})
 }
 
+// AttemptResult reports what recording a failed attempt did.
+//
+// The retry decision belongs to the scope's policy, not the worker, so the
+// worker has no way to predict it -- and reading it back with a second call
+// would be a different question asked at a different instant. This comes from
+// the same atomic operation that made the decision.
+type AttemptResult struct {
+	// Retrying is true when the failure was recorded as another attempt and the
+	// node returned to [StatusNew], false when it became terminal.
+	Retrying bool
+	// NextAttemptAt is when a retrying node becomes claimable again. Zero when
+	// Retrying is false.
+	NextAttemptAt time.Time
+}
+
 // Nack reports that the attempt failed. Whether that ends the node or schedules
-// another attempt is the scope's retry policy, not the worker's decision.
-func (m *Manager) Nack(ctx context.Context, lease Lease, cause error) error {
+// another attempt is the scope's retry policy, not the worker's decision; the
+// returned [AttemptResult] says which happened.
+func (m *Manager) Nack(ctx context.Context, lease Lease, cause error) (AttemptResult, error) {
 	msg := ""
 	if cause != nil {
 		msg = cause.Error()
 	}
-	return m.complete(ctx, CompleteRequest{
+	res, err := m.completeWithResult(ctx, CompleteRequest{
 		Lease: lease, Success: false, Reason: ReasonWorkerError, Message: msg,
 	})
+	return AttemptResult{Retrying: res.Retrying, NextAttemptAt: res.NextAttemptAt}, err
 }
 
 // Skip reports that there was nothing to do. Unlike [Manager.Nack] this is
@@ -226,15 +243,20 @@ func (m *Manager) Skip(ctx context.Context, lease Lease, reason string) error {
 }
 
 func (m *Manager) complete(ctx context.Context, req CompleteRequest) error {
+	_, err := m.completeWithResult(ctx, req)
+	return err
+}
+
+func (m *Manager) completeWithResult(ctx context.Context, req CompleteRequest) (CompleteResult, error) {
 	if m.isClosed() {
-		return ErrClosed
+		return CompleteResult{}, ErrClosed
 	}
 	if !req.Lease.Valid() {
-		return invalidArg("lease", "is not one this library issued")
+		return CompleteResult{}, invalidArg("lease", "is not one this library issued")
 	}
 	res, err := m.store.Complete(ctx, req)
 	m.publish(req.Lease.Scope, res.Effects)
-	return err
+	return res, err
 }
 
 // Extend moves a lease's deadline out by d, measured from now rather than from

@@ -78,7 +78,7 @@ func (t Typed[T]) decode(ctx context.Context, lease Lease) (TypedLease[T], error
 	if len(lease.Node.Payload) > 0 {
 		if err := json.Unmarshal(lease.Node.Payload, &payload); err != nil {
 			decodeErr := fmt.Errorf("dagworker: decoding payload of node %q: %w", lease.NodeID, err)
-			if nackErr := t.m.Nack(ctx, lease, decodeErr); nackErr != nil {
+			if _, nackErr := t.m.Nack(ctx, lease, decodeErr); nackErr != nil {
 				return TypedLease[T]{}, fmt.Errorf("%w (also failed to report it: %v)", decodeErr, nackErr)
 			}
 			return TypedLease[T]{}, decodeErr
@@ -99,8 +99,9 @@ func (t Typed[T]) Ack(ctx context.Context, lease TypedLease[T], result any) erro
 	return t.m.Ack(ctx, lease.Lease, raw)
 }
 
-// Nack reports that the attempt failed.
-func (t Typed[T]) Nack(ctx context.Context, lease TypedLease[T], cause error) error {
+// Nack reports that the attempt failed, and says whether the scope's retry
+// policy turned it into another attempt.
+func (t Typed[T]) Nack(ctx context.Context, lease TypedLease[T], cause error) (AttemptResult, error) {
 	return t.m.Nack(ctx, lease.Lease, cause)
 }
 

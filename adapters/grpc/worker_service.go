@@ -6,6 +6,8 @@ import (
 	"time"
 
 	dw "github.com/specialistvlad/dagworker"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	pb "github.com/specialistvlad/dagworker/adapters/grpc/gen/dagworker/v1"
 )
 
@@ -150,30 +152,25 @@ func (w *workerServer) CompleteNode(ctx context.Context, req *pb.CompleteNodeReq
 
 // FailNode reports that an attempt did not succeed.
 //
-// will_retry and next_attempt_at are best-effort: dagworker.Manager.Nack
-// commits the retry-or-terminate decision atomically but does not return it
-// to its caller (see claim.go's Manager.complete, which discards the
-// store's CompleteResult), so this handler makes one further, unfenced
-// GetNode read to report the node's resulting state. That read is not part
-// of the same atomic operation — a second worker could in principle claim
-// and complete the node again between the two calls on a retried node — so
-// a client that needs the authoritative answer should treat these two
-// fields as an optimization, not a promise, and confirm via GetNode or Watch
-// when it matters. This is a disclosed limitation of the core Manager API,
-// not a bug in this adapter: the fix belongs in dagworker.Manager.Nack's
-// signature, which is outside this module.
+// will_retry and next_attempt_at come from the same atomic operation that made
+// the decision, not from a follow-up read. An earlier version of this handler
+// had to call GetNode afterwards because Manager.Nack discarded the store's
+// result; that read was outside the fenced write, so on a retried node a second
+// worker could claim and complete it in the gap and the answer would describe
+// the wrong attempt. Manager.Nack now returns the decision directly.
 func (w *workerServer) FailNode(ctx context.Context, req *pb.FailNodeRequest) (*pb.FailNodeResponse, error) {
 	lease, err := decodeTaskToken(req.GetTaskToken())
 	if err != nil {
 		return nil, err
 	}
-	if err := w.mgr.Nack(ctx, lease, errors.New(req.GetMessage())); err != nil { //nolint:err113 // the worker's own message, not a sentinel
+	outcome, err := w.mgr.Nack(ctx, lease, errors.New(req.GetMessage())) //nolint:err113 // the worker's own message, not a sentinel
+	if err != nil {
 		return nil, mapError(err)
 	}
 
-	resp := &pb.FailNodeResponse{}
-	if node, getErr := w.mgr.GetNode(ctx, lease.Scope, lease.NodeID); getErr == nil {
-		resp.WillRetry = node.Status == dw.StatusNew
+	resp := &pb.FailNodeResponse{WillRetry: outcome.Retrying}
+	if !outcome.NextAttemptAt.IsZero() {
+		resp.NextAttemptAt = timestamppb.New(outcome.NextAttemptAt)
 	}
 	return resp, nil
 }
