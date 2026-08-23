@@ -50,8 +50,14 @@ while IFS=$'\t' read -r label command; do
   [ -n "${label:-}" ] || continue
   throttle
   labels+=("$label")
-  ( eval "$command" ) >"$tmp/$i.out" 2>&1 &
-  echo $! >"$tmp/$i.pid"
+  # The exit status is recorded by the subshell itself, into a file. It cannot
+  # be recovered afterwards with `wait`: the bare `wait` below reaps every
+  # background job, and a later `wait <pid>` on an already-reaped pid returns
+  # 127 rather than what the command exited with. An earlier version of this
+  # script did exactly that and then mapped 127 back to 0, which discarded
+  # every status and left only the output grep -- so `go test` failures were
+  # caught (they print FAIL) and lint and tidy failures were reported green.
+  ( eval "$command"; echo $? >"$tmp/$i.rc" ) >"$tmp/$i.out" 2>&1 &
   pids+=("$!")
   i=$((i + 1))
 done
@@ -60,16 +66,11 @@ wait
 
 status=0
 for n in $(seq 0 $((i - 1))); do
-  rc=0
-  pid=$(cat "$tmp/$n.pid" 2>/dev/null || echo)
-  if [ -n "$pid" ]; then
-    wait "$pid" 2>/dev/null
-    rc=$?
-    # An already-reaped PID gives 127; the recorded output is what matters then.
-    [ "$rc" = 127 ] && rc=0
-  fi
-  # go test prints FAIL to stdout, and a compile error starts with "# pkg".
-  if [ "$rc" -ne 0 ] || grep -qE '^(FAIL|# )' "$tmp/$n.out" 2>/dev/null; then
+  # A missing status file means the subshell was killed before it could write
+  # one, which is a failure however it happened.
+  rc=$(cat "$tmp/$n.rc" 2>/dev/null || echo 1)
+  case $rc in ''|*[!0-9]*) rc=1 ;; esac
+  if [ "$rc" -ne 0 ]; then
     printf '==> %s  FAILED\n' "${labels[$n]}"
     status=1
   else
