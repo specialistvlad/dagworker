@@ -140,7 +140,8 @@ shape as the in-process loop above; only the transport differs.
 protocol is a committed `.proto` any language's gRPC stack can consume:
 
 ```go
-conn, _ := client.Dial("dns:///dagworkerd.svc.cluster.local:443", insecureOrTLSCreds)
+conn, _ := client.Dial("dns:///dagworkerd.svc.cluster.local:443", tlsCreds,
+	client.WithBearerToken(os.Getenv("DAGWORKER_TOKEN")))
 w := client.NewWorker(conn, "release", client.WithWorkerID("worker-1"))
 
 err := w.Run(ctx, func(ctx context.Context, n *pb.Node) client.Outcome {
@@ -163,7 +164,8 @@ capacity signal: a host wanting N-way concurrency runs N `Worker`s, not one
 client, with the same auto-renewing shape available via `ClaimAndRenew`:
 
 ```go
-c := client.New("https://dagworkerd.example.com/v1")
+c := client.New("https://dagworkerd.example.com/v1",
+	client.WithBearerToken(os.Getenv("DAGWORKER_TOKEN")))
 handles, _ := c.ClaimAndRenew(ctx, "release", client.ClaimOptions{Wait: 30 * time.Second}, 0)
 for _, h := range handles {
 	result, err := doTheWork(ctx, h.Lease().Node)
@@ -184,6 +186,16 @@ pool whose free capacity the server can't see is how a queue overwhelms its
 own workers. One outstanding claim per worker slot makes the transport's own
 flow control — HTTP/2's stream limit, or simply "how many `Worker`s you
 run" — the capacity signal instead.
+
+**Both examples send a credential, and that is not decoration.** A server
+built with no authorizer serves every method to anyone who can reach the
+port, which is defensible for a loopback listener inside a trusted process
+and nothing else. `dagworkerd` refuses to start if it is asked to bind a
+non-loopback address with no `--auth-token-file` configured — a wildcard bind
+counts — so the anonymous case has to be typed out as `--insecure` rather
+than arrived at. A deployment with real identities passes its own
+`WithAuthorizer` instead of a shared token; see
+[SECURITY.md](https://github.com/specialistvlad/dagworker/blob/main/SECURITY.md).
 
 Both adapters map the same error taxonomy identically — `ErrLeaseMismatch`
 always becomes `ABORTED`/409 with a `lease-superseded` problem type,

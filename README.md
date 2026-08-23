@@ -67,6 +67,53 @@ dies. That is the whole job.
   same at a million nodes as at a thousand. This is enforced by tests, not
   claimed in a README — see [Performance](#performance).
 
+## Two cases it was built for
+
+Both of these run end to end against all three backends in `test/e2e`, with
+real worker pools claiming, failing, retrying and completing — not seeded
+fixtures.
+
+**A pipeline whose shape is decided while it runs.**
+[`scenario_transcode_test.go`](test/e2e/scenario_transcode_test.go)
+
+```
+ingest ──▶ probe ──┬──▶ rendition:240p ──┐
+                   ├──▶ rendition:720p ──┼──▶ manifest ──▶ publish
+                   └──▶ rendition:1080p ─┘
+                   ▲
+                   └── these do not exist until probe has run
+```
+
+Probing the source decides how many renditions there are. Each is a separate
+unit of work for a separate machine, and the manifest cannot be written until
+every one of them is done. A task queue has no edges, so either the manifest
+step polls or the probe blocks a worker until the renditions finish. A workflow
+engine expresses it at the cost of running your code inside its runtime. Here
+the fan-out is three lines in the probe handler: add the nodes, add the edges
+into `manifest`, acknowledge. `manifest` was already waiting on dependencies
+that did not exist when it was created.
+
+**CI/CD orchestration over a runner fleet you already operate.**
+[`scenario_release_test.go`](test/e2e/scenario_release_test.go)
+
+```
+checkout ──▶ build ──┬──▶ test:unit ────────┐
+                     ├──▶ test:integration ─┼──▶ package ──▶ publish ──▶ notify
+                     └──▶ lint ─────────────┘                              ▲
+                          (notify uses all_done, so it runs even if publish fails)
+```
+
+Heterogeneous pools claim by `Kind` — builders are expensive and few, testers
+are many, publishing is serialised to one. A flaky step retries with backoff. A
+branch that is not taken is skipped, and skipping propagates. `notify` uses
+`all_done` so a failed release still tells somebody. If your runners are
+long-lived machines rather than pods, and you want the dependency graph without
+adopting a control plane, this is the shape.
+
+**Where it is the wrong tool:** work with no dependencies (use a queue), work
+that must survive as *durable execution of your own functions* (use Temporal),
+or a graph you want a UI and an operator to manage for you (use Argo).
+
 ## What it deliberately is not
 
 - **Not a workflow engine.** There is no DSL, no retries-with-compensation, no

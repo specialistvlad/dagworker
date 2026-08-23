@@ -127,9 +127,7 @@ is one atomic storage operation that:
 
 1. selects an eligible node from the ready set, honoring priority then FIFO;
 2. sets `Status = InProgress`;
-3. **increments the epoch** and sets `Attempt` to the new epoch value — they
-   are the same integer, which is why a retry count and a fencing token
-   never disagree;
+3. **increments the epoch** and, separately, the attempt count;
 4. sets the deadline to the storage backend's own clock plus the lease
    timeout;
 5. indexes that deadline so a sweep can find it later without scanning.
@@ -159,17 +157,49 @@ errors.Is(err, dagworker.ErrLeaseMismatch) // true
 
 `ErrLeaseMismatch` is never retryable, and the library never tells a caller
 otherwise: by the time you see it, the work this lease represented may
-already have been redone by whoever holds the epoch now. There is a second,
-narrower error, `ErrLeaseExpired`, for the case where the epoch still
-matches but the deadline itself has passed — distinct because the epoch
-comparison and the deadline comparison answer different questions.
+already have been redone by whoever holds the epoch now.
+
+**A late acknowledgement is accepted, if nobody has taken the node away.**
+The deadline is enforced at reclaim time, not on the acknowledgement itself.
+A worker that overruns its lease and finishes anyway, before any sweep or
+claim has reclaimed the node, has its result accepted — the deadline exists
+to make a dead worker's node claimable again, not to discard work that was
+genuinely done. Once the node *has* been reclaimed, the epoch has moved and
+the same acknowledgement is `ErrLeaseMismatch`, which is what actually
+protects the second attempt. There is an `ErrLeaseExpired` sentinel for a
+backend that enforces the deadline directly; nothing in this library returns
+it today (ADR-0044 §6).
+
+### The epoch and the attempt count are two different numbers
+
+They agree for any node that is created once and never deleted, which is why
+they were originally one field. They diverge as soon as a node identifier is
+reused — delete a node and add another under the same `NodeID`, which
+`RemoveNode` plus `AddNodes` makes an ordinary thing to do.
+
+The **epoch** must never go backwards for an identifier, because a worker
+that has been unreachable across the deletion still holds a lease naming
+`(scope, node, epoch)`; if the recycled node restarted at zero it would
+eventually re-issue that epoch, and a fenced write from a worker that was
+long since fenced out would be accepted. Each scope therefore carries an
+**epoch floor**, raised past a node's epoch as it is deleted, and new nodes
+start from it.
+
+The **attempt count** must restart, because to you the recycled identifier is
+a new node. Carried forward, it would be terminal on its first failure with
+`MaxAttempts` already spent.
+
+`Node.Attempt` is the attempt count. The epoch a node's current lease was
+granted at is `Inspection.LeaseEpoch`; the epoch you must present is in the
+`Lease` itself. See ADR-0043.
 
 **`Extend` is a separate operation from `Ack`/`Nack`, on purpose.**
 Conflating "I am still here" with "I am finished" is exactly the bug class
 that bit early Kafka consumer groups, where a slow message handler starved
 the heartbeat and triggered a spurious eviction. `Extend(ctx, lease, d)`
 moves the deadline to `now + d`, fenced on the same epoch, and changes
-nothing else — not `Status`, not `Attempt`, not the event sequence. See
+nothing else — not `Status`, not `Attempt`, not the epoch, not the event
+sequence. See
 [Writing workers](/dagworker/guide/workers/) for the heartbeat pattern that
 uses it.
 

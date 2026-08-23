@@ -20,11 +20,31 @@ own service.
 
 ```console
 $ dagworkerd --store=postgres --postgres-dsn-file=/run/secrets/postgres_dsn \
-    --grpc-addr=:9443 --http-addr=:8080
+    --grpc-addr=:9443 --http-addr=:8080 \
+    --auth-token-file=/run/secrets/dagworker_tokens
 ```
 
 At least one of `--grpc-addr`/`--http-addr` must be set — a daemon with
 neither enabled would serve nothing but its own admin endpoints.
+
+**A reachable address needs a credential, and the daemon will not start
+without one.** `:9443` and `0.0.0.0:9443` both count as reachable, as does
+anything the daemon cannot prove is loopback. Without `--auth-token-file`,
+startup fails rather than putting an anonymous claim-and-complete endpoint on
+the network; an operator who genuinely means that types `--insecure`.
+
+The token file holds one token per line, `#` comments ignored. More than one
+line is allowed so a token can be rotated with no window in which either is
+rejected: write the new one alongside the old, restart, drop the old on the
+next restart. A file with no tokens in it is *also* a startup failure — an
+authorizer that accepts nothing is indistinguishable in the logs from one
+that works, right up until every worker is locked out.
+
+A shared token establishes that a caller is one of yours. It is not an
+authorization model — every holder is the same principal with access to every
+scope — and it is readable by anything on the network path, so it belongs
+behind TLS, which the daemon does not terminate. A deployment with real
+identities embeds the adapters in its own binary and passes `WithAuthorizer`.
 
 **Configuration resolves through one precedence order:** flag beats
 environment variable beats config file beats built-in default, and a
@@ -38,6 +58,7 @@ store: postgres
 postgres_dsn_file: /run/secrets/postgres_dsn
 grpc_addr: ":9443"
 http_addr: ":8080"
+auth_token_file: /run/secrets/dagworker_tokens
 admin_addr: "0.0.0.0:9090"
 log_level: info
 log_format: json
