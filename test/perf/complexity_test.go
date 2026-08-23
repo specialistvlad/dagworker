@@ -351,16 +351,26 @@ var _ = context.Background
 // the expensive part -- two thousand round trips -- and paying it once per
 // backend instead of once per operation is the difference between a suite that
 // runs and one nobody waits for.
+//
+// The backends run one at a time, and nothing in this test is parallel. That
+// costs wall-clock -- the total is now the sum rather than the slowest -- and
+// buys the only thing the numbers are for. Run in parallel, Redis's
+// per-operation costs were being sampled while PostgreSQL was seeding a
+// million rows through the same Docker network stack on the same laptop, which
+// inflated them by roughly an order of magnitude and made Redis look slower
+// than PostgreSQL at reading one node. A measurement that reports the load
+// from its own siblings is not a measurement.
+//
+//nolint:paralleltest // deliberately serial; see the paragraph above
 func TestMillionNodes(t *testing.T) {
-	t.Parallel()
 	if testing.Short() {
 		t.Skip("seeds a million nodes")
 	}
 	const n = 1_000_000
 
 	for _, backend := range perf.Backends() {
+		//nolint:paralleltest // deliberately serial; see TestMillionNodes' doc comment
 		t.Run(backend.Name, func(t *testing.T) {
-			t.Parallel()
 			ctx := t.Context()
 			st := backend.New(t)
 

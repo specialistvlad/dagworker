@@ -27,9 +27,18 @@ type Manager struct {
 	cfg   config
 	caps  Capabilities
 
-	mu      sync.RWMutex
-	subs    map[int64]*Subscription
-	nextSub int64
+	mu sync.RWMutex
+	// subs is the master registry, keyed by id, used to end every
+	// subscription on Close. byScope and anyScope index the same
+	// subscriptions for delivery: publish must be able to reach the
+	// subscribers of one scope without walking every other scope's, because
+	// it runs on the completion path, and a per-write cost proportional to
+	// how many unrelated scopes a Manager happens to serve is exactly the
+	// shape this library promises not to have.
+	subs     map[int64]*Subscription
+	byScope  map[Scope]map[int64]*Subscription
+	anyScope map[int64]*Subscription
+	nextSub  int64
 
 	// Only the cancel function is retained, never the context itself: a
 	// context belongs on the call stack of the work it governs, and a struct
@@ -62,10 +71,12 @@ func New(store Store, opts ...Option) (*Manager, error) {
 	}
 
 	m := &Manager{
-		store:  store,
-		cfg:    cfg,
-		subs:   make(map[int64]*Subscription),
-		closed: make(chan struct{}),
+		store:    store,
+		cfg:      cfg,
+		subs:     make(map[int64]*Subscription),
+		byScope:  make(map[Scope]map[int64]*Subscription),
+		anyScope: make(map[int64]*Subscription),
+		closed:   make(chan struct{}),
 	}
 	if r, ok := store.(CapabilityReporter); ok {
 		m.caps = r.Capabilities()
@@ -134,6 +145,8 @@ func (m *Manager) Close(ctx context.Context) error {
 		subs = append(subs, s)
 	}
 	m.subs = make(map[int64]*Subscription)
+	m.byScope = make(map[Scope]map[int64]*Subscription)
+	m.anyScope = make(map[int64]*Subscription)
 	m.mu.Unlock()
 
 	for _, s := range subs {

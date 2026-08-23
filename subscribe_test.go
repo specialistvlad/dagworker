@@ -3,6 +3,7 @@ package dagworker_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -300,5 +301,64 @@ func TestWatchRejectsAnExpiredCursor(t *testing.T) {
 	// per scope.
 	if _, err := st.Watch(ctx, dw.WatchRequest{From: 5}); !errors.Is(err, dw.ErrUnsupported) {
 		t.Fatalf("watching all scopes from a cursor gave %v", err)
+	}
+}
+
+// TestPublishDoesNotScanForeignScopes: a write in one scope must not cost
+// anything proportional to how many subscribers other scopes have.
+//
+// The registry was one flat map. Every completion copied the whole slice under
+// a lock and called wants() on every entry, so a Manager serving a thousand
+// scopes with one subscriber each taxed every single write with a thousand
+// filter calls that could only ever return false. It is the completion path,
+// which is the path that is supposed to be O(1).
+func TestPublishDoesNotScanForeignScopes(t *testing.T) {
+	t.Parallel()
+
+	st := memory.New()
+	m, err := dw.New(st, dw.WithoutBackgroundSweeper())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = m.Close(context.Background())
+		_ = st.Close(context.Background())
+	})
+	ctx := t.Context()
+
+	// Many subscribers, none of them on the scope being written to.
+	const foreign = 200
+	for i := range foreign {
+		sub, err := m.Subscribe(ctx, dw.SubscribeOptions{
+			Scope: dw.Scope("other-" + strconv.Itoa(i)),
+		})
+		if err != nil {
+			t.Fatalf("Subscribe: %v", err)
+		}
+		t.Cleanup(func() { sub.Close() })
+	}
+
+	// One subscriber that does care.
+	mine, err := m.Subscribe(ctx, dw.SubscribeOptions{Scope: "mine"})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(func() { mine.Close() })
+
+	if considered := m.SubscribersConsideredFor("mine"); considered > 1 {
+		t.Errorf("a write to \"mine\" would iterate %d subscriptions with %d of them on "+
+			"other scopes: the registry is not indexed by scope", considered, foreign)
+	}
+
+	if err := m.AddNode(ctx, "mine", "n", nil); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	select {
+	case ev := <-mine.Events():
+		if ev.NodeID != "n" {
+			t.Fatalf("got an event for %q", ev.NodeID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the subscriber on the written scope got nothing")
 	}
 }

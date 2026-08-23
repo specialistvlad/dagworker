@@ -350,6 +350,12 @@ func loadLeasedNode(ctx context.Context, eng *engine, lease dw.Lease) (nodeRow, 
 
 // Complete implements [dagworker.Store].
 func (s *Store) Complete(ctx context.Context, req dw.CompleteRequest) (dw.CompleteResult, error) {
+	return retryTransient(ctx, s, "Complete", func(ctx context.Context) (dw.CompleteResult, error) {
+		return s.completeOnce(ctx, req)
+	})
+}
+
+func (s *Store) completeOnce(ctx context.Context, req dw.CompleteRequest) (dw.CompleteResult, error) {
 	if !req.Lease.Valid() {
 		return dw.CompleteResult{}, fmt.Errorf("%w: lease is not well formed", dw.ErrInvalidArgument)
 	}

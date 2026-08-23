@@ -192,9 +192,25 @@ func (s *Store) WaitForWork(ctx context.Context, scope dw.Scope, kinds []string)
 		return nil
 	}
 
-	sub := s.rdb.Subscribe(ctx, s.keyBell(scope))
-	defer func() { _ = sub.Close() }()
-	ch := sub.Channel()
+	// One subscription per scope, shared by every waiter on it (bells.go).
+	// A subscription per waiter is a connection per waiter, and nothing in
+	// go-redis bounds those.
+	//
+	// It deliberately does not inherit ctx: the subscription is shared, so
+	// binding it to this caller's context would let the first worker to give
+	// up tear the bell out from under everyone else still waiting on it. The
+	// reference count is what ends it, and leave below is this caller's share.
+	//nolint:contextcheck // the shared subscription must outlive any one waiter's context
+	ch, leave := s.bells.join(string(scope))
+	defer leave()
+
+	// Re-check after joining. A node that became ready between the anyReady
+	// above and the subscription being established would otherwise be missed
+	// until the poll ticker, and on a scope that only ever gets one node, the
+	// poll interval is the whole latency.
+	if ready, err := s.anyReady(ctx, scope, kinds); err == nil && ready {
+		return nil
+	}
 
 	ticker := time.NewTicker(anyReadyPollInterval)
 	defer ticker.Stop()

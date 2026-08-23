@@ -184,7 +184,7 @@ func (m *Manager) Subscribe(ctx context.Context, opts SubscribeOptions) (*Subscr
 	m.mu.Lock()
 	m.nextSub++
 	s.id = m.nextSub
-	m.subs[s.id] = s
+	m.addSubLocked(s)
 	m.mu.Unlock()
 
 	m.wg.Add(1)
@@ -242,9 +242,58 @@ func (m *Manager) startDurable(ctx context.Context, s *Subscription, opts Subscr
 	return nil
 }
 
+// addSubLocked files a subscription in the master registry and in whichever
+// delivery index matches its scope filter. Caller holds m.mu.
+func (m *Manager) addSubLocked(s *Subscription) {
+	m.subs[s.id] = s
+	if s.opts.Scope == "" {
+		m.anyScope[s.id] = s
+		return
+	}
+	bucket, ok := m.byScope[s.opts.Scope]
+	if !ok {
+		bucket = make(map[int64]*Subscription)
+		m.byScope[s.opts.Scope] = bucket
+	}
+	bucket[s.id] = s
+}
+
+// subsFor returns the subscriptions a write to scope must be offered to: that
+// scope's own, plus the ones that asked for every scope. Caller holds m.mu.
+//
+// It allocates because the caller iterates without the lock — offering an
+// event calls into a subscriber's channel, and holding a Manager-wide lock
+// across that would let one subscriber's buffer stall every writer in the
+// process. The slice is the scope's own subscriber count, not the Manager's.
+func (m *Manager) subsFor(scope Scope) []*Subscription {
+	bucket := m.byScope[scope]
+	if len(bucket)+len(m.anyScope) == 0 {
+		return nil
+	}
+	out := make([]*Subscription, 0, len(bucket)+len(m.anyScope))
+	for _, s := range bucket {
+		out = append(out, s)
+	}
+	for _, s := range m.anyScope {
+		out = append(out, s)
+	}
+	return out
+}
+
 func (m *Manager) dropSub(id int64) {
 	m.mu.Lock()
-	delete(m.subs, id)
+	if s, ok := m.subs[id]; ok {
+		delete(m.subs, id)
+		delete(m.anyScope, id)
+		if bucket, ok := m.byScope[s.opts.Scope]; ok {
+			delete(bucket, id)
+			// A Manager may serve a scope per build or per tenant; leaving an
+			// empty bucket behind for each one is a leak with no upper bound.
+			if len(bucket) == 0 {
+				delete(m.byScope, s.opts.Scope)
+			}
+		}
+	}
 	m.mu.Unlock()
 }
 
@@ -258,15 +307,11 @@ func (m *Manager) publish(scope Scope, effects []Effect) {
 		return
 	}
 	m.mu.RLock()
-	if len(m.subs) == 0 {
-		m.mu.RUnlock()
+	subs := m.subsFor(scope)
+	m.mu.RUnlock()
+	if len(subs) == 0 {
 		return
 	}
-	subs := make([]*Subscription, 0, len(m.subs))
-	for _, s := range m.subs {
-		subs = append(subs, s)
-	}
-	m.mu.RUnlock()
 
 	for _, ef := range effects {
 		ev := Event{

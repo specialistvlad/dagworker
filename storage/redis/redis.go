@@ -92,6 +92,10 @@ type Store struct {
 	// it is set only through the unexported withKeyspace below.
 	keyspace string
 
+	// bells is the shared Pub/Sub fan-out behind WaitForWork: one subscription
+	// per scope anyone is waiting on, never one per waiter.
+	bells *bells
+
 	closed    chan struct{}
 	closeOnce sync.Once
 }
@@ -131,6 +135,9 @@ func New(client goredis.UniversalClient, opts ...Option) *Store {
 	for _, o := range opts {
 		o.apply(s)
 	}
+	// After the options: keyBell folds in the keyspace, which withKeyspace has
+	// only just set.
+	s.bells = newBells(client, func(scope string) string { return s.keyBell(dw.Scope(scope)) })
 	return s
 }
 
@@ -170,6 +177,7 @@ func (s *Store) isClosed() bool {
 func (s *Store) Close(context.Context) error {
 	s.closeOnce.Do(func() {
 		close(s.closed)
+		s.bells.closeAll()
 		if s.ownsClient {
 			_ = s.rdb.Close()
 		}

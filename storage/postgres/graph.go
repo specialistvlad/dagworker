@@ -231,6 +231,12 @@ func announceFresh(ctx context.Context, eng *engine, nodes map[dw.NodeID]nodeRow
 // needs entirely unnecessary here — a real ACID transaction already gives
 // AddNodes its all-or-nothing guarantee for free.
 func (s *Store) AddNodes(ctx context.Context, scope dw.Scope, specs []dw.NodeSpec) ([]dw.Effect, error) {
+	return retryTransient(ctx, s, "AddNodes", func(ctx context.Context) ([]dw.Effect, error) {
+		return s.addNodesOnce(ctx, scope, specs)
+	})
+}
+
+func (s *Store) addNodesOnce(ctx context.Context, scope dw.Scope, specs []dw.NodeSpec) ([]dw.Effect, error) {
 	if len(specs) == 0 {
 		return nil, nil
 	}
@@ -380,6 +386,12 @@ func (l *nodeLoader) put(id dw.NodeID, n nodeRow) { l.nodes[id] = n }
 
 // AddEdges implements [dagworker.Store].
 func (s *Store) AddEdges(ctx context.Context, scope dw.Scope, edges []dw.Edge) ([]dw.Effect, error) {
+	return retryTransient(ctx, s, "AddEdges", func(ctx context.Context) ([]dw.Effect, error) {
+		return s.addEdgesOnce(ctx, scope, edges)
+	})
+}
+
+func (s *Store) addEdgesOnce(ctx context.Context, scope dw.Scope, edges []dw.Edge) ([]dw.Effect, error) {
 	if len(edges) == 0 {
 		return nil, nil
 	}
@@ -420,6 +432,12 @@ func (s *Store) AddEdges(ctx context.Context, scope dw.Scope, edges []dw.Edge) (
 
 // RemoveEdges implements [dagworker.Store].
 func (s *Store) RemoveEdges(ctx context.Context, scope dw.Scope, edges []dw.Edge) ([]dw.Effect, error) {
+	return retryTransient(ctx, s, "RemoveEdges", func(ctx context.Context) ([]dw.Effect, error) {
+		return s.removeEdgesOnce(ctx, scope, edges)
+	})
+}
+
+func (s *Store) removeEdgesOnce(ctx context.Context, scope dw.Scope, edges []dw.Edge) ([]dw.Effect, error) {
 	if len(edges) == 0 {
 		return nil, nil
 	}
@@ -489,6 +507,12 @@ func applyCascade(ctx context.Context, eng *engine, id dw.NodeID, policy dw.Casc
 
 // RemoveNode implements [dagworker.Store].
 func (s *Store) RemoveNode(ctx context.Context, scope dw.Scope, id dw.NodeID, policy dw.CascadePolicy) ([]dw.Effect, error) {
+	return retryTransient(ctx, s, "RemoveNode", func(ctx context.Context) ([]dw.Effect, error) {
+		return s.removeNodeOnce(ctx, scope, id, policy)
+	})
+}
+
+func (s *Store) removeNodeOnce(ctx context.Context, scope dw.Scope, id dw.NodeID, policy dw.CascadePolicy) ([]dw.Effect, error) {
 	tx, eng, err := beginGraphTx(ctx, s, scope, "RemoveNode")
 	if err != nil {
 		return nil, err
@@ -543,6 +567,12 @@ func (s *Store) RemoveNode(ctx context.Context, scope dw.Scope, id dw.NodeID, po
 
 // Cancel implements [dagworker.Store].
 func (s *Store) Cancel(ctx context.Context, scope dw.Scope, ids []dw.NodeID) ([]dw.Effect, error) {
+	return retryTransient(ctx, s, "Cancel", func(ctx context.Context) ([]dw.Effect, error) {
+		return s.cancelOnce(ctx, scope, ids)
+	})
+}
+
+func (s *Store) cancelOnce(ctx context.Context, scope dw.Scope, ids []dw.NodeID) ([]dw.Effect, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
