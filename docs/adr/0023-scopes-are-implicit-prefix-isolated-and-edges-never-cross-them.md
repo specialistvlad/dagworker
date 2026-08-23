@@ -1,10 +1,11 @@
 # ADR-0023: Scopes are implicit, prefix-isolated, and edges never cross them
 
-- **Status:** Accepted, amended by ADR-0044
+- **Status:** Accepted, amended by ADR-0044 and ADR-0046
 - **Date:** 2026-08-22
 - **Deciders:** Vladyslav Kazantsev (project owner)
 - **Amends:** —
 - **Amended by:** ADR-0044 §9 -- `ErrCrossScopeEdge` is never returned, because `AddEdges` takes a single scope and a cross-scope edge is unrepresentable rather than rejected. The guarantee is stronger than described below, not weaker.
+- **Amended by:** ADR-0046 — §3 puts access control outside the library, which holds for the embedded case and not for a `cmd/dagworkerd` deployment, where the daemon *is* the host layer §3 expects to enforce it. Scope authorization is now an optional adapter facet.
 - **Backing research:** docs/research/12-dag-semantics-and-state-machine.md §4.1, §4.2, §4.3
 
 ## Context
