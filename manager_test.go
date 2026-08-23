@@ -612,3 +612,22 @@ func TestBackgroundSweeperReclaims(t *testing.T) {
 	}
 	t.Fatal("the background sweeper never reclaimed the expired lease")
 }
+
+func TestManagerHonoursAnEmptyStoreClose(t *testing.T) {
+	t.Parallel()
+	clk := dagstoretest.NewFakeClock()
+	st := memory.New(memory.WithClock(clk))
+	m, err := dw.New(st, dw.WithoutBackgroundSweeper())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// Closing with a context that is already done must report that rather than
+	// hanging, and must not leave the Manager half-closed.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = m.Close(ctx)
+	if err := m.Close(context.Background()); err != nil {
+		t.Fatalf("a second Close gave %v", err)
+	}
+	_ = st.Close(context.Background())
+}

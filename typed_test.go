@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	dw "github.com/specialistvlad/dagworker"
 	"github.com/specialistvlad/dagworker/storage/memory"
@@ -210,5 +211,36 @@ func TestTypedErrorsWrapSentinels(t *testing.T) {
 	}
 	if err := good.Ack(ctx, lease, make(chan int)); !errors.Is(err, dw.ErrInvalidArgument) {
 		t.Fatalf("Ack with an unencodable result gave %v", err)
+	}
+}
+
+func TestTypedAckRejectsUnencodableResult(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	tv := dw.NewTyped[job](f.m, "s")
+	if err := tv.AddNode(f.ctx, "a", job{URL: "u"}); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	l, err := tv.TryClaim(f.ctx)
+	if err != nil {
+		t.Fatalf("TryClaim: %v", err)
+	}
+	if err := tv.Ack(f.ctx, l, make(chan int)); err == nil {
+		t.Fatal("a result that cannot be marshalled was accepted")
+	}
+	// The lease is still live, so a correct ack still works.
+	if err := tv.Ack(f.ctx, l, nil); err != nil {
+		t.Fatalf("Ack after a failed encode: %v", err)
+	}
+}
+
+func TestTypedClaimPropagatesClaimErrors(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	tv := dw.NewTyped[job](f.m, "s")
+	ctx, cancel := context.WithTimeout(f.ctx, 60*time.Millisecond)
+	defer cancel()
+	if _, err := tv.Claim(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Typed.Claim with an expiring context gave %v", err)
 	}
 }

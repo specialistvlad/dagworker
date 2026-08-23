@@ -118,6 +118,22 @@ Docker-free by default. `docker-compose.test.yml` runs exactly two services — 
 — health-checked via `depends_on: condition: service_healthy`; **no memcached service**, per
 ADR-0017.
 
+## On the package name
+
+`dagstoretest` implies a `dagstore` package, and there is not one: the type is
+`dagworker.Store`. The name predates `Store` being folded into the root package
+— this ADR was written against a `dagstore.Store` — so it reads as a fossil, and
+it has been raised as one (issue #22).
+
+It is kept, and on the merits rather than on the cost of changing it. Go's
+convention for a test-support package is `<subject>test`, and the subject here
+is **the storage port**, not a package. A backend author imports this to test
+their `Store` implementation; they are not testing `dagworker`. `dagworkertest`
+would name the wrong subject, and would suggest a package that tests the
+library's own surface — which `RunConformance` explicitly does not do.
+
+Recorded so the next reader does not have to re-derive it.
+
 ## Consequences
 
 ### Positive

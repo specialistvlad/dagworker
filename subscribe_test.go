@@ -362,3 +362,26 @@ func TestPublishDoesNotScanForeignScopes(t *testing.T) {
 		t.Fatal("the subscriber on the written scope got nothing")
 	}
 }
+
+func TestSubscribeRejectsAnExpiredResumeCursor(t *testing.T) {
+	t.Parallel()
+	clk := dagstoretest.NewFakeClock()
+	st := memory.New(memory.WithClock(clk), memory.WithEventLogSize(4))
+	m, err := dw.New(st, dw.WithoutBackgroundSweeper())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = m.Close(context.Background())
+		_ = st.Close(context.Background())
+	})
+	ctx := t.Context()
+	for i := range 40 {
+		if err := m.AddNode(ctx, "s", dw.NodeID(string(rune('a'+i%26))+string(rune('0'+i/26))), nil); err != nil {
+			t.Fatalf("AddNode: %v", err)
+		}
+	}
+	if _, err := m.Subscribe(ctx, dw.SubscribeOptions{Scope: "s", From: 1}); !errors.Is(err, dw.ErrCursorExpired) {
+		t.Fatalf("resuming from an evicted cursor gave %v, want ErrCursorExpired", err)
+	}
+}

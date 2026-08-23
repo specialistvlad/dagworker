@@ -6,6 +6,14 @@
 // finished when RunConformance passes, and a disagreement between a backend and
 // this suite is a bug in the backend unless the suite is changed deliberately.
 //
+// On the name: Go's convention for a test-support package is <subject>test —
+// httptest, fstest, iotest — and the subject here is the storage port, not a
+// package. A backend author imports this to test their Store; dagworkertest
+// would read as testing the dagworker package, which is not what it does. The
+// name predates Store being folded into the dagworker package (ADR-0016 was
+// written against a dagstore.Store), so it looks like a fossil, and it has been
+// kept deliberately rather than by omission. See ADR-0018.
+//
 // Each test has a stable identifier — T-CLAIM-ATOMIC, T-FENCE-STALE-ACK and so
 // on — that backend documentation can cite. Tests for optional facets skip when
 // the backend does not report the capability; they never silently pass, so a
