@@ -1660,8 +1660,8 @@ a per-scope "is anything ready" flag checked on every <code>Claim</code> retry l
 <code>atomic.Int64</code> over an <code>RWMutex</code> entirely; a mutex is the wrong tool once the critical section is a
 single word.</p>
 <h3 id="10-4-atomic-pointer-and-copy-on-write-snapshots">10.4 atomic.Pointer and copy-on-write snapshots<a class="anchor" href="#10-4-atomic-pointer-and-copy-on-write-snapshots" aria-label="Link to this section">#</a></h3>
-<p><a href="https://pkg.go.dev/sync/atomic#Pointer" rel="noopener noreferrer"><code>atomic.Pointer[T]</code></a> — <em>"an atomic pointer of type </em>T
-[with] Load, Store, Swap, CompareAndSwap"* — is the right primitive for state that is read
+<p><a href="https://pkg.go.dev/sync/atomic#Pointer" rel="noopener noreferrer"><code>atomic.Pointer[T]</code></a> — <em>"an atomic pointer of type *T
+[with] Load, Store, Swap, CompareAndSwap"</em> — is the right primitive for state that is read
 constantly by every hot path but changed rarely: the resolved <code>config</code> a <code>Manager</code> was constructed
 with, a scope's cached shard-count/topology, or (most usefully here) a <strong>per-scope
 dependents-index snapshot</strong> used to fan out "node X completed, who's now ready" without holding a

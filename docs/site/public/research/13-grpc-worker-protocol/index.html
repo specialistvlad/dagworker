@@ -758,7 +758,7 @@ requested amount (<a href="https://www.reactive-streams.org/" rel="noopener nore
 useful when one producer must serve many slow, heterogeneous consumers over one channel each
 with a different, fluctuating appetite — genuinely credit-based flow control. gRPC/Buildbarn's
 REv2 world doesn't need a bespoke version of it because of §4's observation: <strong>when the
-"credit" a worker has is just "one open slot," a unary RPC per slot already </strong>is** the
+"credit" a worker has is just "one open slot," a unary RPC per slot already **is</strong> the
 <code>request(1)</code> call** — no separate credit message needs inventing.</p>
 <hr>
 <h2 id="4-why-the-hybrid-is-narrow-http-2-s-own-flow-control-is-the-credit-protocol">4. Why the hybrid is narrow: HTTP/2's own flow control <strong>is</strong> the credit protocol<a class="anchor" href="#4-why-the-hybrid-is-narrow-http-2-s-own-flow-control-is-the-credit-protocol" aria-label="Link to this section">#</a></h2>

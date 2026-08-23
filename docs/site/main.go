@@ -5,7 +5,9 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -15,13 +17,28 @@ import (
 )
 
 func main() {
+	serve := flag.Bool("serve", false, "after building, serve public/ locally under the same /dagworker/ path prefix GitHub Pages uses")
+	addr := flag.String("addr", ":8000", "address to listen on, with -serve")
+	flag.Parse()
+
 	repoRoot := "../.."
-	if len(os.Args) > 1 {
-		repoRoot = os.Args[1]
+	if flag.NArg() > 0 {
+		repoRoot = flag.Arg(0)
 	}
 	outDir := "public"
 
 	if err := build(repoRoot, outDir); err != nil {
+		fmt.Fprintln(os.Stderr, "site: "+err.Error())
+		os.Exit(1)
+	}
+
+	if !*serve {
+		return
+	}
+	fmt.Printf("site: serving %s at http://localhost%s%s/ (ctrl-c to stop)\n", outDir, *addr, basePath)
+	mux := http.NewServeMux()
+	mux.Handle(basePath+"/", http.StripPrefix(basePath, http.FileServer(http.Dir(outDir))))
+	if err := http.ListenAndServe(*addr, mux); err != nil {
 		fmt.Fprintln(os.Stderr, "site: "+err.Error())
 		os.Exit(1)
 	}

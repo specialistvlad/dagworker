@@ -141,12 +141,12 @@ func TestLinks(t *testing.T) {
 
 	t.Run("full reference link", func(t *testing.T) {
 		res := renderMarkdown("See [the spec][spec-ref].\n\n[spec-ref]: https://example.com/spec", nil)
-		contains(t, res.HTML, `<a href="https://example.com/spec">the spec</a>`)
+		contains(t, res.HTML, `<a href="https://example.com/spec" rel="noopener noreferrer">the spec</a>`)
 	})
 
 	t.Run("shortcut reference link", func(t *testing.T) {
 		res := renderMarkdown("## [Unreleased]\n\n[Unreleased]: https://example.com/compare", nil)
-		contains(t, res.HTML, `<a href="https://example.com/compare">Unreleased</a>`)
+		contains(t, res.HTML, `<a href="https://example.com/compare" rel="noopener noreferrer">Unreleased</a>`)
 	})
 
 	t.Run("repo-relative links are rewritten by the resolver", func(t *testing.T) {
