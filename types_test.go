@@ -2,6 +2,7 @@ package dagworker_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -392,4 +393,44 @@ func manyLabels(n int) map[string]string {
 		out[string(rune('a'+i%26))+string(rune('a'+i/26))] = "v"
 	}
 	return out
+}
+
+func TestTriggerRuleNames(t *testing.T) {
+	t.Parallel()
+	want := map[dw.TriggerRule]string{
+		dw.TriggerAllSuccess:              "all_success",
+		dw.TriggerAllDone:                 "all_done",
+		dw.TriggerNoneFailed:              "none_failed",
+		dw.TriggerNoneFailedMinOneSuccess: "none_failed_min_one_success",
+		dw.TriggerAlways:                  "always",
+	}
+	for rule, name := range want {
+		if got := rule.String(); got != name {
+			t.Fatalf("rule %d is %q, want %q", rule, got, name)
+		}
+	}
+}
+
+func TestIdentifierLimits(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	long := dw.Scope(strings.Repeat("s", dw.MaxScopeLen+1))
+	if err := f.m.AddNode(f.ctx, long, "a", nil); !errors.Is(err, dw.ErrInvalidArgument) {
+		t.Fatalf("an oversized scope gave %v", err)
+	}
+	badUTF8 := dw.Scope([]byte{0xff, 0xfe})
+	if err := f.m.AddNode(f.ctx, badUTF8, "a", nil); !errors.Is(err, dw.ErrInvalidArgument) {
+		t.Fatalf("a non-UTF-8 scope gave %v", err)
+	}
+	badKind := strings.Repeat("k", dw.MaxKindLen+1)
+	if err := f.m.AddNode(f.ctx, "s", "a", nil, dw.WithKind(badKind)); !errors.Is(err, dw.ErrInvalidArgument) {
+		t.Fatalf("an oversized kind gave %v", err)
+	}
+	if err := f.m.AddNode(f.ctx, "s", "a", nil, dw.WithKind(string([]byte{0xff}))); !errors.Is(err, dw.ErrInvalidArgument) {
+		t.Fatalf("a non-UTF-8 kind gave %v", err)
+	}
+	if err := f.m.AddNode(f.ctx, "s", "a", nil,
+		dw.WithLabels(map[string]string{string([]byte{0xff}): "v"})); !errors.Is(err, dw.ErrInvalidArgument) {
+		t.Fatalf("a non-UTF-8 label gave %v", err)
+	}
 }
