@@ -1,71 +1,68 @@
 # dagworker documentation site
 
-The generator behind <https://specialistvlad.github.io/dagworker/>. `main.go` (plus
-`markdown.go`, `inline.go`, `highlight.go`, `render.go`, `css.go`) renders this
-repository's Markdown — the READMEs, all 42 ADRs, all 16 research dossiers, the
-normative spec, and a handful of hand-written guide pages — into `public/`, a folder of
-plain HTML ready for GitHub Pages. Standard library only: no Node, no Ruby, no CDN, no
-JavaScript framework. `docs/site` is its own Go module (`go.mod`), independent of the
-core library's.
+The generator behind <https://specialistvlad.github.io/dagworker/>. It is an
+[Astro](https://astro.build) project using the
+[Starlight](https://starlight.astro.build) documentation theme, and it renders
+this repository's Markdown — the guide pages, all 46 ADRs, all 16 research
+dossiers, the normative spec, `CONTRIBUTING.md` and `CHANGELOG.md` — into
+`dist/`, ready for GitHub Pages.
 
 ## Build and preview, in two commands
 
 ```
 cd docs/site
-GOWORK=off go run . -serve
+npm install
+npm run dev
 ```
 
-Then open <http://localhost:8000/dagworker/>. `-serve` builds `public/` and serves it
-under the same `/dagworker/` path prefix GitHub Pages uses, so every link, including the
-root-relative ones the generator emits, resolves exactly as it will in production.
-Ctrl-C to stop.
+Then open the URL it prints. `npm run build` produces `dist/`; `npm run
+preview` serves what was built.
 
-To only build — what CI does on every push and pull request — drop `-serve`:
+Both `dev` and `build` run the ingest step first, so the rendered site can
+never be built from a stale copy of the repository's Markdown.
 
-```
-GOWORK=off go run .
-```
+## How the content gets here
 
-Either command accepts the repository root as a positional argument; it defaults to
-`../..`, correct when run from `docs/site` itself:
+The ADRs, dossiers and spec are **not** moved into this directory, and they
+should not be. Their paths are referenced from Go doc comments, from
+`CLAUDE.md`, from GitHub issues, and from each other; relocating them to suit a
+documentation tool would be the tool wagging the project.
 
-```
-GOWORK=off go run . -serve /path/to/dag-worker-go
-```
+Instead `scripts/ingest.mjs` copies them into `src/content/docs/`, which is
+what Astro's content collection reads. That directory is generated on every
+build and is not committed. The script adds the front matter Starlight needs,
+deriving each page's title from its own H1 and then removing that H1 so the
+title is not printed twice, and it points each page's "Edit page" link at the
+real source file rather than at the generated copy.
 
-### Why `GOWORK=off`
+Two remark plugins handle what a copy cannot:
 
-The repository root has a `go.work` that resolves the core module against its
-backends and adapters (ADR-0031). `docs/site` is deliberately not one of that
-workspace's `use` directories — a documentation generator has no business being part of
-the library's module graph — so if Go finds `go.work` by walking upward from this
-directory, it refuses to treat `docs/site` as a package at all. `GOWORK=off` tells the
-go tool to ignore that file and use `docs/site/go.mod` on its own terms, which is what
-this module actually is.
+- **`plugins/remark-repo-links.mjs`** rewrites repository-relative links
+  (`docs/adr/0044-….md`) to the URLs this site serves, and sends anything the
+  site does not publish to the file on GitHub. It is a port of the Go
+  generator's `resolveRepoLink`, moved to the syntax tree so that a
+  link-shaped string inside a code fence is left alone.
+- **`plugins/remark-legacy-heading-ids.mjs`** reproduces the previous
+  generator's heading-anchor slugs. The two schemes disagree about
+  punctuation — `1.1 Static Kahn (1962)` was `1-1-static-kahn-1962` and would
+  otherwise become `11-static-kahn-1962` — which would have broken 398 of the
+  site's 1,010 anchors and every deep link into them.
 
-## Layout
+## Why this is not a Go module
 
-- `main.go` — the page manifest, repo-relative link resolution, and output writing.
-- `markdown.go` / `inline.go` — the Markdown renderer: block structure (headings,
-  paragraphs, fenced code, blockquotes, lists at any nesting depth, GitHub-flavoured
-  pipe tables, horizontal rules, link reference definitions) and inline formatting
-  (code spans, bold/italic, links, images), all HTML-escaped by construction.
-- `highlight.go` — a small per-language tokenizer (keywords, strings, comments,
-  numbers) for Go, SQL, Lua, YAML, JSON, protobuf and shell fenced code blocks.
-- `render.go` / `css.go` — the page shell (header, sidebar, footer, skip link, table of
-  contents) and the stylesheet: one accent colour, a ~70ch measure, a light and a dark
-  palette as CSS custom properties, and a theme toggle that persists to `localStorage`.
-- `main_test.go` — table-driven tests for the renderer, including the cases that break a
-  hand-rolled parser: a pipe inside inline code, a fenced code block containing a line
-  that looks like a heading, nested lists, and a link whose URL itself contains parens.
-- `content/` — hand-written source: the real landing page (`index.md`) and the eight
-  guide pages under `guide/`. The guide pages are placeholders: title and front matter
-  are final, the prose is for the next pass to write.
-- `public/` — generated output. Not committed — `.gitignore`d, and rebuilt by CI on
-  every deploy.
+It was one, and the generator was 3,011 lines of hand-written Go: a Markdown
+parser, an inline-span parser, and a syntax highlighter, which together were
+54% of it. Those are solved problems, and the reason to have written them —
+this repository's zero-dependency rule — does not apply here.
 
-## Tests
+That rule (ADR-0037) binds the **core module**, and is enforced on it by
+`go mod tidy -diff` and a `depguard` block. `docs/site` is not the core module.
+It produces no published artifact, appears in nobody's dependency graph, is
+absent from the root `go.work`, and is absent from `MODULES` in the `Makefile`
+— so it is outside `make check` entirely and cannot affect that gate's
+ten-second budget. It is built by one job in `.github/workflows/pages.yml` and
+nothing else.
 
-```
-GOWORK=off go test ./...
-```
+Search is [Pagefind](https://pagefind.app), which Starlight builds into the
+site automatically. It runs entirely in the browser, needs no service and no
+account, and it is the reason 62 dense documents are now findable.

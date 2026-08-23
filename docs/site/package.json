@@ -1,0 +1,17 @@
+{
+  "name": "dagworker-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "ingest": "node scripts/ingest.mjs",
+    "dev": "npm run ingest && astro dev",
+    "build": "npm run ingest && astro build",
+    "preview": "astro preview",
+    "check": "npm run ingest && astro check"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.41.7",
+    "astro": "^7.2.4",
+    "sharp": "^0.35.3"
+  }
+}
