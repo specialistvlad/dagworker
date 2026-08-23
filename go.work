@@ -11,4 +11,5 @@ use (
 	.
 	./storage/postgres
 	./storage/redis
+	./test/perf
 )
