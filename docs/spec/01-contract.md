@@ -334,10 +334,10 @@ Two counters, because one cannot do both jobs (ADR-0041):
 - **`Seq`** is per node, bumped on every write to that node. Events for one node are totally
   ordered by `Seq`, and a snapshot's `Seq` detects a stale read. There is **no** cross-node
   ordering guarantee from `Seq`.
-- **`Cursor`** is per scope, a position in that scope's event log. Events within a scope arrive in
-  `Cursor` order, and `Cursor` is what a subscription resumes from. A *global* cross-scope counter
-  is forbidden: it would serialize every writer in the backend. A per-scope counter is free,
-  because writes within a scope are already serialized by the atomicity §12 requires.
+- **`Cursor`** is a position in a scope's event log. Events within a scope arrive in `Cursor`
+  order, and `Cursor` is what a subscription resumes from. Cursors **MUST** be strictly increasing
+  within a scope; they **MAY** be allocated from a store-wide sequence and so need not be
+  contiguous, which lets a backend avoid a second hot row on its write path (ADR-0042 §4).
 
 `Subscribe(From: cursor)` replays from just after `cursor`. If it predates retained history the
 subscription fails with `ErrCursorExpired`, and the documented recovery — identical on every
