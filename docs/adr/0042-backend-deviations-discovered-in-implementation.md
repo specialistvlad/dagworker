@@ -74,7 +74,12 @@ rather than contiguity.
 There is no compaction job, so `ErrCursorExpired` is unreachable and
 `T-WATCH-CURSOR-EXPIRED` skips. Unbounded retention is a stronger guarantee
 than the contract asks for, not a weaker one, and the skip is honest rather
-than silent. A retention job is future work; the table is partitioned for it.
+than silent. A retention job is future work, and the table is **not** partitioned for it --
+`dagw.events` is an ordinary table and the string `PARTITION` appears in no migration. Its key,
+`(scope, cursor)`, is partition-compatible, which is a fair thing to say and a smaller one: range
+partitioning on `cursor` would need no new column, and would turn retention into `DROP PARTITION`
+rather than a `DELETE` that leaves bloat in the fastest-growing table in the schema. Whether to do
+it is tracked in issue #20. Claiming it was already done removed the reason anyone would.
 
 ### 6. Structural mutation serializes per scope; the hot path does not
 

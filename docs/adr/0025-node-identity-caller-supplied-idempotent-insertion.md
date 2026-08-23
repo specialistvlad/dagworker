@@ -1,9 +1,10 @@
 # ADR-0025: Node identity is caller-supplied and insertion is idempotent
 
-- **Status:** Accepted
+- **Status:** Accepted, amended by ADR-0044
 - **Date:** 2026-08-22
 - **Deciders:** Vladyslav Kazantsev (project owner)
 - **Amends:** —
+- **Amended by:** ADR-0044 §8 -- the `GenerateID()` helper described below was never written, and the argument for leaving it unbuilt is recorded there.
 - **Backing research:** docs/research/12-dag-semantics-and-state-machine.md §5.1
 
 ## Context
