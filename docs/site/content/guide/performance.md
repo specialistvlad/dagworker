@@ -89,6 +89,22 @@ ScopeStats         0.73x
 GetNode            3.51x   (cache misses, not complexity)
 ```
 
+### Running it yourself
+
+The ratio guards are part of the `benchmark` suite, not the fast gate — they
+need real PostgreSQL and Redis, and a gate with a ten-second budget cannot
+contain them:
+
+```
+make benchmark    # integration, e2e, complexity, throughput   ~3m30s
+make complexity   # the ratio guards alone
+make throughput   # absolute numbers alone
+make million      # the 1,000,000-node table above
+```
+
+`make check` is the fast gate and deliberately runs none of this: no container,
+no database, ~7 seconds.
+
 A ratio below 1.0 is real, not a typo — it means the operation measured
 *faster* at a million nodes than at a thousand, most likely because a larger
 run amortizes warm-up cost differently. The guard only fires in one

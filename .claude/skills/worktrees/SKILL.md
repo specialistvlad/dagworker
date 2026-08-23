@@ -48,13 +48,14 @@ The non-negotiable rules:
 4. **The test databases are shared, and that is the one real hazard.**
    `make up` starts PostgreSQL and Redis on fixed ports (15432, 16379) from
    `test/e2e/docker-compose.test.yml`. Every worktree talks to those same two
-   containers, and `make integration` and `make complexity` both begin by
-   truncating them. Two worktrees running either target at once will destroy
-   each other's data mid-test and fail in ways that look like real bugs.
+   containers, and every part of `make benchmark` begins by truncating them. Two
+   worktrees running them at once will destroy each other's data mid-test and
+   fail in ways that look like real bugs.
 
-   Run database-backed targets in one worktree at a time. `make check`,
-   `make test`, `make race` and `make complexity-quick` need no databases and
-   are safe to run anywhere, concurrently.
+   Run `make benchmark`, and any of its parts, in one worktree at a time.
+   `make check` needs no databases at all -- it starts no container and opens no
+   socket -- so it is safe to run anywhere, concurrently, from as many worktrees
+   as you like.
 
 5. **Open it in VS Code — the worktree is not done until this runs.** A
    worktree nobody can see is useless: VS Code never discovers a new sibling
