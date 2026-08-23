@@ -141,8 +141,8 @@ containers on the same laptop:
 
 | | in-memory | Redis | PostgreSQL |
 |---|---|---|---|
-| `Claim` + `Complete` | 1.7 µs | 797 µs | 3.6 ms |
-| seed 1M nodes | 0.9 s | 34 s | 21 min |
+| `Claim` + `Complete` | 1.7 µs | 649 µs | 3.5 ms |
+| seed 1M nodes | 0.9 s | 33 s | 7 min 34 s |
 
 The number that matters is not any single figure — it is that none of them
 change with the size of the graph. CI asserts the *ratio* of per-operation

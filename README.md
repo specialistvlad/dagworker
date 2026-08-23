@@ -258,15 +258,30 @@ databases in containers on the same laptop:
 
 | | in-memory | Redis | PostgreSQL |
 |---|---|---|---|
-| `ScopeStats` | 31 ns | 177 µs | 167 µs |
-| `GetNode` | 443 ns | 196 µs | 185 µs |
-| `Claim` + `Complete` | 1.7 µs | 797 µs | 3.6 ms |
-| seed 1M nodes | 0.9 s | 34 s | 21 min |
+| `ScopeStats` | 29 ns | 134 µs | 153 µs |
+| `GetNode` | 458 ns | 156 µs | 175 µs |
+| `Claim` + `Complete` | 1.7 µs | 649 µs | 3.5 ms |
+| seed 1M nodes | 0.9 s | 33 s | 7 min 34 s |
 
-One round trip to a container here is ~185 µs, which is why the two networked
-backends bottom out where they do: nothing single-shot beats a round trip.
-PostgreSQL's seeding cost is roughly six un-pipelined round trips per node —
-a constant factor, and `pgx.Batch` pipelining is the known fix.
+One round trip to a container on this machine is ~150 µs — Docker Desktop on
+macOS routes loopback through a VM — which is why both networked backends bottom
+out where they do: nothing single-shot beats a round trip, and on Linux with a
+local socket these numbers are several times smaller.
+
+Seeding is the one place a per-node cost is visible, and it is round trips, not
+work: PostgreSQL was six un-pipelined round trips per node and is now **2.06**,
+measured deterministically by counting them through a `pgx` tracer rather than
+by timing a loaded laptop. That is what took the 1M seed from 21 minutes to
+7m34s. Claim is 10.0 round trips at 200 nodes and 10.0 at 10,000 — the count is
+asserted in CI, so a regression that adds a query fails the build instead of
+showing up as a slow afternoon.
+
+The three backends are measured **one at a time**. They used to run as parallel
+subtests, which meant Redis's per-operation costs were sampled while PostgreSQL
+seeded a million rows through the same network stack on the same laptop: it
+roughly doubled them and made Redis look slower than PostgreSQL at reading one
+node. A measurement that reports the load from its own siblings is not a
+measurement.
 
 The number that matters is not any of those — it is that they do not change
 with the size of the graph. CI asserts the *ratio* of per-operation cost between

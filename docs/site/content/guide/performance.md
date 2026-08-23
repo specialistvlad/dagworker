@@ -16,20 +16,39 @@ in containers on the same laptop:
 
 | | in-memory | Redis | PostgreSQL |
 |---|---|---|---|
-| `ScopeStats` | 31 ns | 177 µs | 167 µs |
-| `GetNode` | 443 ns | 196 µs | 185 µs |
-| `Claim` + `Complete` | 1.7 µs | 797 µs | 3.6 ms |
-| seed 1,000,000 nodes | 0.9 s | 34 s | 21 min |
+| `ScopeStats` | 29 ns | 134 µs | 153 µs |
+| `GetNode` | 458 ns | 156 µs | 175 µs |
+| `Claim` + `Complete` | 1.7 µs | 649 µs | 3.5 ms |
+| seed 1,000,000 nodes | 0.9 s | 33 s | 7 min 34 s |
 
-One round trip to a container here is roughly 185 µs, which is why the two
-networked backends bottom out where they do — nothing single-shot beats a
-round trip, no matter how the query is written. PostgreSQL's seeding cost
-works out to roughly six un-pipelined round trips per node inserted; that's
-a constant factor, not growth with graph size, and pipelining those inserts
-with `pgx.Batch` is the known, not-yet-taken optimization. See [Choosing a
-backend](/dagworker/guide/backends/) for the same shape of comparison at a
-more modest 30,000 nodes, and for what each backend actually durability-wise
-promises in exchange for its cost.
+One round trip to a container on this machine is roughly 150 µs — Docker
+Desktop on macOS routes loopback through a VM — which is why the two
+networked backends bottom out where they do: nothing single-shot beats a
+round trip, no matter how the query is written, and on Linux against a local
+socket these numbers are several times smaller.
+
+**Measure round trips, not wall clock.** Seeding is the one place a per-node
+cost is visible, and what it measures is round trips. PostgreSQL was six
+un-pipelined round trips per node inserted and is now **2.06**, which is what
+took the 1,000,000-node seed from 21 minutes to 7m34s. That number is counted
+through a `pgx` tracer rather than timed: the same code measured 341 µs and
+825 µs on a laptop ten minutes apart, and a round-trip count does not move at
+all. `Claim` is 10.0 round trips at 200 nodes and 10.0 at 10,000 — provably
+independent of graph size, and asserted in CI, so a regression that adds a
+query fails the build rather than showing up as a slow afternoon.
+
+**The backends are measured one at a time.** They used to run as parallel
+subtests, and Redis's per-operation costs were being sampled while PostgreSQL
+seeded a million rows through the same Docker network stack on the same
+laptop. It roughly doubled them and made Redis look slower than PostgreSQL at
+reading a single node. A measurement that reports the load from its own
+siblings is not a measurement — the fix costs wall-clock, since the total is
+now the sum rather than the slowest, and buys the only thing the numbers are
+for.
+
+See [Choosing a backend](/dagworker/guide/backends/) for the same shape of
+comparison at a more modest 30,000 nodes, and for what each backend promises
+durability-wise in exchange for its cost.
 
 ## Why a ratio, and not a number
 
