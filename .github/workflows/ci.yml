@@ -47,6 +47,18 @@ jobs:
         with:
           version: v2.13.1
           install-only: true
+      # install-only skips the action's own caching along with its run mode, and
+      # golangci-lint's analysis cache is separate from the Go build cache
+      # setup-go restores. Without this the lint step costs 62s warm or cold --
+      # measured, on run 32659274682 attempt 2, where every other job's cache
+      # restored and lint alone did not improve at all.
+      - name: Cache golangci-lint analysis
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/golangci-lint
+          key: golangci-v2.13.1-${{ runner.os }}-${{ hashFiles('**/go.sum', '.golangci.yml') }}
+          restore-keys: |
+            golangci-v2.13.1-${{ runner.os }}-
       - name: lint every module
         run: make lint
 
@@ -167,7 +179,7 @@ jobs:
           # dependencies -- so setup-go's default lookup finds nothing and warns
           # on every job. The seven that exist are one level down.
           cache-dependency-path: "**/go.sum"
-      - run: make bench | tee bench.txt
+      - run: make benchmark | tee bench.txt
       - uses: actions/upload-artifact@v7
         with:
           name: benchmarks

@@ -3,6 +3,7 @@ package perf_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime"
 	"testing"
 	"time"
@@ -11,16 +12,47 @@ import (
 	"github.com/specialistvlad/dagworker/test/perf"
 )
 
-// benchSizes are the graph sizes the throughput benchmarks run at. Absolute
-// numbers belong here and in a benchstat-tracked nightly job, never in a CI
-// gate: a shared runner's absolute throughput says more about its neighbours
-// than about this code. The CI gate is the ratio guard in complexity_test.go.
-var benchSizes = []int{1_000, 100_000, 1_000_000}
+// Graph sizes the throughput benchmarks run at, chosen per backend rather than
+// from one shared list.
+//
+// The shared list was {1e3, 1e5, 1e6} for everything, which meant every
+// benchmark seeded a million nodes into PostgreSQL before measuring anything --
+// at a measured 454us per node that is seven and a half minutes of setup, per
+// benchmark, to produce a number about an operation that takes milliseconds.
+// Five benchmarks and three backends made `make bench` a half-hour job with a
+// 30-minute timeout, which is why nobody ran it.
+//
+// Absolute throughput on a shared machine says more about that machine's
+// neighbours than about this code, so the size only has to be large enough that
+// the data structure under test is not trivially small. The guard that actually
+// protects complexity is the ratio sweep in complexity_test.go, and the
+// million-node figures come from `make million`.
+// The sizes must also exceed the iteration count, because three of these
+// benchmarks CONSUME the graph -- a claim removes a node from the ready set --
+// and skip rather than lie once it is exhausted. `make benchmark` pins the
+// iteration count with -benchtime=1000x precisely so the graph can be sized
+// against it instead of against a wall-clock budget nobody can predict.
+var (
+	// memorySizes can afford to be large: seeding is ~1us per node.
+	memorySizes = []int{100_000}
+	// networkedSizes cannot. Every node is a round trip, ~454us on PostgreSQL.
+	networkedSizes = []int{5_000}
+)
+
+func sizesFor(backend perf.Backend) []int {
+	if os.Getenv("DAGWORKER_PERF_FULL") != "" {
+		return []int{1_000, 100_000, 1_000_000}
+	}
+	if backend.Networked {
+		return networkedSizes
+	}
+	return memorySizes
+}
 
 func eachBackend(b *testing.B, fn func(b *testing.B, backend perf.Backend, n int)) {
 	b.Helper()
 	for _, backend := range perf.Backends() {
-		for _, n := range benchSizes {
+		for _, n := range sizesFor(backend) {
 			b.Run(fmt.Sprintf("%s/n=%d", backend.Name, n), func(b *testing.B) {
 				b.Helper()
 				fn(b, backend, n)
@@ -34,8 +66,9 @@ func BenchmarkClaim(b *testing.B) {
 		b.Helper()
 		ctx := b.Context()
 		st := backend.New(b)
-		perf.SeedWide(b, st, "bench", n)
-		req := dw.ClaimRequest{Scope: "bench", Max: 1, Timeout: time.Hour}
+		scope := perf.Scope("bench")
+		perf.SeedWide(b, st, scope, n)
+		req := dw.ClaimRequest{Scope: scope, Max: 1, Timeout: time.Hour}
 
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -65,8 +98,9 @@ func BenchmarkClaimBatch(b *testing.B) {
 		b.Helper()
 		ctx := b.Context()
 		st := backend.New(b)
-		perf.SeedWide(b, st, "bench", n)
-		req := dw.ClaimRequest{Scope: "bench", Max: batch, Timeout: time.Hour}
+		scope := perf.Scope("bench")
+		perf.SeedWide(b, st, scope, n)
+		req := dw.ClaimRequest{Scope: scope, Max: batch, Timeout: time.Hour}
 
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -88,7 +122,8 @@ func BenchmarkGetNode(b *testing.B) {
 		b.Helper()
 		ctx := b.Context()
 		st := backend.New(b)
-		perf.SeedWide(b, st, "bench", n)
+		scope := perf.Scope("bench")
+		perf.SeedWide(b, st, scope, n)
 
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -96,7 +131,7 @@ func BenchmarkGetNode(b *testing.B) {
 		for b.Loop() {
 			// Stride through the keyspace so the measurement pays the cache
 			// misses a real workload pays.
-			if _, err := st.GetNode(ctx, "bench", perf.NodeID((i*7919)%n)); err != nil {
+			if _, err := st.GetNode(ctx, scope, perf.NodeID((i*7919)%n)); err != nil {
 				b.Fatalf("GetNode: %v", err)
 			}
 			i++
@@ -109,8 +144,9 @@ func BenchmarkClaimComplete(b *testing.B) {
 		b.Helper()
 		ctx := b.Context()
 		st := backend.New(b)
-		perf.SeedFanIn(b, st, "bench", n)
-		req := dw.ClaimRequest{Scope: "bench", Max: 1, Timeout: time.Hour}
+		scope := perf.Scope("bench")
+		perf.SeedFanIn(b, st, scope, n)
+		req := dw.ClaimRequest{Scope: scope, Max: 1, Timeout: time.Hour}
 
 		b.ReportAllocs()
 		b.ResetTimer()
@@ -137,7 +173,8 @@ func BenchmarkAddNodesBatch(b *testing.B) {
 			b.Helper()
 			ctx := b.Context()
 			st := backend.New(b)
-			if err := st.SetScopeConfig(ctx, "bench", dw.ScopeConfig{MaxBatchSize: batch}); err != nil {
+			scope := perf.Scope("bench")
+			if err := st.SetScopeConfig(ctx, scope, dw.ScopeConfig{MaxBatchSize: batch}); err != nil {
 				b.Fatalf("SetScopeConfig: %v", err)
 			}
 
@@ -150,7 +187,7 @@ func BenchmarkAddNodesBatch(b *testing.B) {
 					specs[i] = dw.NodeSpec{ID: perf.NodeID(next)}
 					next++
 				}
-				if _, err := st.AddNodes(ctx, "bench", specs); err != nil {
+				if _, err := st.AddNodes(ctx, scope, specs); err != nil {
 					b.Fatalf("AddNodes: %v", err)
 				}
 			}
@@ -180,7 +217,7 @@ func TestMemoryFootprint(t *testing.T) {
 			runtime.ReadMemStats(&before)
 
 			st := backend.New(t)
-			perf.SeedChain(t, st, "footprint", n)
+			perf.SeedChain(t, st, perf.Scope("footprint"), n)
 
 			runtime.GC()
 			var after runtime.MemStats
