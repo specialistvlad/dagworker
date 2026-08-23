@@ -1,0 +1,58 @@
+# Example: dagworkerd over Redis, both network adapters enabled, secrets
+# mounted as files rather than passed as env values (see README.md's
+# "Secrets are file paths" section for why). Build from the REPOSITORY ROOT,
+# not this directory — see the "build:" stanza below.
+#
+#   docker compose -f cmd/dagworkerd/docker-compose.yml up --build
+#
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass-file", "/run/secrets/redis_password"]
+    # redis:7-alpine's own entrypoint does not resolve --requirepass-file;
+    # this line documents the intent, not a working flag — set REDIS
+    # password another way (a bind-mounted redis.conf, or ACL) in a real
+    # deployment. Compose secrets are shown here for dagworkerd's own flags,
+    # which is what this example exists to demonstrate.
+    volumes:
+      - redis-data:/data
+    secrets:
+      - redis_password
+
+  dagworkerd:
+    build:
+      context: ../..            # the repository root: go.work spans every module
+      dockerfile: cmd/dagworkerd/Dockerfile
+    depends_on:
+      - redis
+    ports:
+      - "9443:9443"   # gRPC
+      - "8080:8080"   # HTTP/JSON
+      # The admin port is deliberately NOT published: /debug/pprof and
+      # /metrics are for the orchestrator's own network, never the public
+      # internet (README.md's admin-listener section).
+    environment:
+      DAGWORKERD_STORE: redis
+      DAGWORKERD_REDIS_ADDR: redis:6379
+      DAGWORKERD_REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      DAGWORKERD_GRPC_ADDR: ":9443"
+      DAGWORKERD_HTTP_ADDR: ":8080"
+      DAGWORKERD_ADMIN_ADDR: "0.0.0.0:9090"
+      DAGWORKERD_LOG_FORMAT: json
+      DAGWORKERD_LOG_LEVEL: info
+    secrets:
+      - redis_password
+    healthcheck:
+      test: ["CMD", "/dagworkerd", "--version"] # distroless ships no shell/curl; see README for a real /readyz probe option
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+secrets:
+  redis_password:
+    file: ./secrets/redis_password.txt # create this file locally; never commit it
+
+volumes:
+  redis-data:

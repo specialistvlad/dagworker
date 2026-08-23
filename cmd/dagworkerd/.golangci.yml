@@ -1,0 +1,117 @@
+# Module-scoped override of the repo root's .golangci.yml.
+#
+# golangci-lint resolves configuration by walking up from the working
+# directory and stopping at the first file it finds — it does not merge a
+# child config with a parent one. Running `golangci-lint run ./...` from
+# inside this directory therefore uses this file, not ../../.golangci.yml,
+# which is deliberate: the root config's "core-no-network" depguard rule bans
+# importing net/http and google.golang.org/grpc in every non-test file it
+# lints — a lint-level tripwire for ADR-0037's "the core module has zero
+# import edge to the network adapters" rule. dagworkerd is the composition
+# root and the one module explicitly permitted to import everything,
+# including both adapters and net/http for its own admin listener, so that
+# rule does not apply here. Every other linter, setting, and threshold below
+# is copied from the root file unchanged — and from adapters/grpc/.golangci.yml,
+# which carries the identical override for the identical reason.
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - bodyclose
+    - sqlclosecheck
+    - rowserrcheck
+    - contextcheck
+    - containedctx
+    - noctx
+    - exhaustive
+    - revive
+    - gocritic
+    - ireturn
+    - nilnil
+    - paralleltest
+    - tparallel
+    - thelper
+    - testifylint
+    - gosec
+    - prealloc
+    - makezero
+    - perfsprint
+    - funlen
+    - cyclop
+    - gocognit
+    - depguard
+    - forbidigo
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+        - name: error-return
+        - name: error-strings
+        - name: context-as-argument
+        - name: unused-parameter
+        - name: indent-error-flow
+        - name: range-val-in-closure
+
+    exhaustive:
+      default-signifies-exhaustive: false
+      check: [switch, map]
+
+    ireturn:
+      allow:
+        - error
+        - empty
+        - anon
+        - generic
+        - stdlib
+
+    gocognit:
+      min-complexity: 20
+
+    cyclop:
+      max-complexity: 15
+
+    funlen:
+      lines: 80
+      statements: 50
+
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: "github.com/pkg/errors"
+              desc: "use stdlib errors + fmt.Errorf(\"...: %w\", err) instead"
+            - pkg: "io/ioutil"
+              desc: "deprecated since Go 1.16; use io or os directly"
+
+    forbidigo:
+      forbid:
+        - pattern: '^fmt\.Print.*$'
+          msg: "use the configured slog.Logger, not fmt.Print*, in library code"
+
+    gosec:
+      excludes: [G104]
+
+  exclusions:
+    rules:
+      - path: "_test\\.go"
+        linters: [errcheck, gosec, funlen, cyclop, gocognit, containedctx]
+        # table-driven test bodies and test helpers legitimately run long and sometimes
+        # intentionally ignore errors from test-only setup calls; a test fixture holding
+        # the subtest's context is the ordinary shape for a harness (matches the root
+        # config's identical exclusion).
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
