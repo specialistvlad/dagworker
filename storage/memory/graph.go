@@ -27,6 +27,26 @@ type journal struct {
 	edges   [][2]int32
 }
 
+// orderedSet keeps insertion order while still deduplicating, so that the order
+// in which nodes enter the ready set is the order the caller asked for rather
+// than whatever a map iteration produced.
+type orderedSet struct {
+	items []int32
+	seen  map[int32]struct{}
+}
+
+func newOrderedSet(hint int) *orderedSet {
+	return &orderedSet{items: make([]int32, 0, hint), seen: make(map[int32]struct{}, hint)}
+}
+
+func (o *orderedSet) add(h int32) {
+	if _, dup := o.seen[h]; dup {
+		return
+	}
+	o.seen[h] = struct{}{}
+	o.items = append(o.items, h)
+}
+
 func (s *scope) rollback(j *journal) {
 	for i := len(j.edges) - 1; i >= 0; i-- {
 		s.unlinkEdge(j.edges[i][0], j.edges[i][1])
@@ -143,10 +163,16 @@ func (st *Store) AddNodes(_ context.Context, name dw.Scope, specs []dw.NodeSpec)
 
 	// Pass two: link declared dependencies. This is where a cycle can be
 	// discovered, which is why the journal exists.
-	touched := make(map[int32]struct{}, len(specs))
+	//
+	// The touched set is an ordered slice, not a map. Settling in map order
+	// would assign ready-set insertion numbers in a random order, so two nodes
+	// added in one batch would be served in an arbitrary order rather than the
+	// order the caller wrote them — which is exactly the fairness property
+	// equal-priority FIFO is supposed to provide.
+	touched := newOrderedSet(len(specs))
 	for _, spec := range specs {
 		to := s.index[spec.ID]
-		touched[to] = struct{}{}
+		touched.add(to)
 		for _, dep := range spec.Deps {
 			from, exists := s.lookup(dep)
 			if !exists {
@@ -176,7 +202,7 @@ func (st *Store) AddNodes(_ context.Context, name dw.Scope, specs []dw.NodeSpec)
 	for _, h := range fresh {
 		effects = append(effects, s.record(h, dw.EventCreated, dw.StatusNew))
 	}
-	for h := range touched {
+	for _, h := range touched.items {
 		effects = s.settle(h, effects)
 	}
 	s.stats.Complete = s.sealed && s.stats.NonTerminal() == 0
@@ -204,7 +230,7 @@ func (st *Store) AddEdges(_ context.Context, name dw.Scope, edges []dw.Edge) ([]
 		}
 	}()
 
-	touched := make(map[int32]struct{}, len(edges))
+	touched := newOrderedSet(len(edges))
 	for _, e := range edges {
 		from, ok := s.lookup(e.From)
 		if !ok {
@@ -230,13 +256,13 @@ func (st *Store) AddEdges(_ context.Context, name dw.Scope, edges []dw.Edge) ([]
 		}
 		s.linkEdge(from, to)
 		j.edges = append(j.edges, [2]int32{from, to})
-		touched[to] = struct{}{}
+		touched.add(to)
 	}
 
 	committed = true
 
 	var effects []dw.Effect
-	for h := range touched {
+	for _, h := range touched.items {
 		effects = s.settle(h, effects)
 	}
 	return effects, nil
@@ -255,7 +281,7 @@ func (st *Store) RemoveEdges(_ context.Context, name dw.Scope, edges []dw.Edge) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	touched := make(map[int32]struct{}, len(edges))
+	touched := newOrderedSet(len(edges))
 	for _, e := range edges {
 		from, ok := s.lookup(e.From)
 		if !ok {
@@ -266,12 +292,12 @@ func (st *Store) RemoveEdges(_ context.Context, name dw.Scope, edges []dw.Edge) 
 			return nil, fmt.Errorf("%w: edge target %q", dw.ErrNotFound, e.To)
 		}
 		if s.unlinkEdge(from, to) {
-			touched[to] = struct{}{}
+			touched.add(to)
 		}
 	}
 
 	var effects []dw.Effect
-	for h := range touched {
+	for _, h := range touched.items {
 		effects = s.settle(h, effects)
 	}
 	return effects, nil

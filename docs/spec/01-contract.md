@@ -110,6 +110,7 @@ never see that as a status regression (ADR-0002).
 | T7 | `New/Ready` | `InProgress/Claimed` | Worker (via `Claim`) | claim granted | **yes — epoch++** |
 | T8 | `InProgress/Claimed` | `Success/Done` | Worker | `Ack` | **yes — CAS on epoch** |
 | T9 | `InProgress/Claimed` | `Error/Done` (`WorkerError`) | Worker | `Nack`, attempts exhausted | **yes — CAS on epoch** |
+| T9b | `InProgress/Claimed` | `Error/Done` (`Skipped`) | Worker | `Nack` with `ReasonSkipped` — terminal on first report, never retried | **yes — CAS on epoch** |
 | T10 | `InProgress/Claimed` | `New/Scheduled` | Engine | `Nack`, attempts remain | **yes — CAS on epoch** |
 | T11 | `InProgress/Claimed` | `Error/Done` (`Timeout`) | Sweeper | deadline elapsed, attempts exhausted | **yes — CAS on epoch** |
 | T12 | `InProgress/Claimed` | `New/Scheduled` | Sweeper | deadline elapsed, attempts remain | **yes — CAS on epoch** |

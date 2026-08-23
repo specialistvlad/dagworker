@@ -87,19 +87,13 @@ func (s *scope) ringDoorbell() {
 // definitely there". A spurious wakeup costs one wasted claim attempt and a
 // missed one costs a poll interval, so neither can produce a wrong answer.
 func (st *Store) WaitForWork(ctx context.Context, scopeName dw.Scope, kinds []string) error {
-	s, err := st.scopeFor(scopeName, false)
+	// Create the scope if it is new. Waiting on a scope nobody has written to
+	// yet is an ordinary thing to do — a worker often starts before its
+	// producer — and parking without a doorbell to wait on would mean sleeping
+	// through the work when it arrives. Scopes are implicit and cost nothing.
+	s, err := st.scopeFor(scopeName, true)
 	if err != nil {
 		return err
-	}
-	if s == nil {
-		// The scope does not exist yet, so no work can appear in it until
-		// someone writes to it. Wait for the caller to give up.
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-st.closed:
-			return dw.ErrClosed
-		}
 	}
 
 	s.mu.RLock()
@@ -143,22 +137,28 @@ func (s *scope) anyReady(kinds []string) bool {
 // appended after the given cursor is delivered in cursor order, and a
 // subscriber that falls behind the window is told so with ErrCursorExpired
 // rather than being handed a stream with a silent hole in it.
-func (st *Store) Watch(ctx context.Context, scopeName dw.Scope, from dw.Cursor) (<-chan dw.Event, error) {
-	if scopeName == "" {
+func (st *Store) Watch(ctx context.Context, req dw.WatchRequest) (<-chan dw.Event, error) {
+	if req.Scope == "" {
 		return nil, dw.ErrUnsupported
 	}
-	s, err := st.scopeFor(scopeName, true)
+	s, err := st.scopeFor(req.Scope, true)
 	if err != nil {
 		return nil, err
 	}
 
 	s.mu.RLock()
-	next := from + 1
-	if from == 0 {
+	var next dw.Cursor
+	switch {
+	case req.From > 0:
+		next = req.From + 1
+		if next < s.logStart {
+			s.mu.RUnlock()
+			return nil, dw.ErrCursorExpired
+		}
+	case req.Replay:
+		next = s.logStart
+	default:
 		next = s.cursor + 1
-	} else if from+1 < s.logStart {
-		s.mu.RUnlock()
-		return nil, dw.ErrCursorExpired
 	}
 	s.mu.RUnlock()
 

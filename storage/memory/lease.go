@@ -227,6 +227,19 @@ func (st *Store) Complete(_ context.Context, req dw.CompleteRequest) (dw.Complet
 		if reason == dw.ReasonNone {
 			reason = dw.ReasonWorkerError
 		}
+		if reason == dw.ReasonSkipped {
+			// Skipping is a decision, not a fault: the worker looked and
+			// concluded there was nothing to do. Retrying it would just reach
+			// the same conclusion, so it is terminal on the first report. This
+			// is the branch primitive the trigger rules exist to serve, and it
+			// is the only way ReasonSkipped enters a graph.
+			s.leases.Remove(h)
+			s.deadline[h] = 0
+			r.worker = ""
+			out.Effects = s.terminate(h, dw.StatusError, dw.ReasonSkipped, req.Message, nil)
+			s.stats.Complete = s.sealed && s.stats.NonTerminal() == 0
+			return out, nil
+		}
 		out.Effects = s.failAttempt(h, reason, req.Message, cfg, now, nil)
 		if s.recs[h].phase == dw.PhaseScheduled {
 			out.Retrying = true

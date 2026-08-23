@@ -149,14 +149,18 @@ type SubscribeOptions struct {
 	// means all.
 	NodeKinds []string
 
-	// From resumes just after this log position. Zero starts from now. If the
-	// cursor predates retained history the subscription fails with
-	// [ErrCursorExpired]; recover by reading current state and resubscribing
-	// from now.
+	// From resumes just after this log position. Zero means "not resuming"; use
+	// Replay to choose which end to start at. If the cursor predates retained
+	// history the subscription fails with [ErrCursorExpired]; recover by
+	// reading current state and resubscribing from now.
 	//
 	// Resuming is only meaningful for a single scope: cursors are per scope, so
 	// a subscription with an empty Scope and a non-zero From is rejected.
 	From Cursor
+
+	// Replay starts from the oldest retained event instead of from now.
+	// Ignored when From is set.
+	Replay bool
 
 	// BufferSize overrides the Manager's default channel depth. Zero uses it.
 	BufferSize int

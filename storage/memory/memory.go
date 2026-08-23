@@ -205,6 +205,7 @@ func (st *Store) ScopeStats(_ context.Context, name dw.Scope) (dw.ScopeStats, er
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := s.stats
+	out.Cursor = s.cursor
 	out.Complete = s.sealed && out.NonTerminal() == 0
 	return out, nil
 }

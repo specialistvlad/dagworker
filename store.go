@@ -92,6 +92,13 @@ type CompleteRequest struct {
 	Success bool
 
 	// Reason and Message describe a failure. Ignored when Success is true.
+	//
+	// ReasonSkipped is special: it reports that the worker looked and concluded
+	// there was nothing to do. It is terminal on the first report rather than
+	// retried, because a retry would reach the same conclusion, and it is the
+	// only way a skip enters a graph. Successors distinguish it from a genuine
+	// failure through their trigger rule — TriggerNoneFailed runs after a
+	// skipped predecessor, TriggerAllSuccess does not.
 	Reason  Reason
 	Message string
 
@@ -149,6 +156,11 @@ type ScopeStats struct {
 	// nodes. Complete is Sealed with no non-terminal nodes remaining.
 	Sealed   bool
 	Complete bool
+
+	// Cursor is the scope's current event-log position. A subscriber that wants
+	// only what happens from now on starts here; one that wants everything
+	// still retained starts at zero.
+	Cursor Cursor
 }
 
 // NonTerminal returns the number of nodes that have not reached a final status.
@@ -346,16 +358,37 @@ type Lister interface {
 	ListNodes(ctx context.Context, scope Scope, opts ListOptions) (ListResult, error)
 }
 
+// WatchRequest asks for an event stream.
+//
+// The three ways to choose a starting point are deliberately distinct, because
+// overloading one field to mean both "from the beginning" and "from now" makes
+// the common case and the recovery case indistinguishable:
+//
+//	From: 0,  Replay: false  start from now — only what happens next
+//	From: 0,  Replay: true   start from the oldest event still retained
+//	From: n,  (Replay ignored) resume: deliver events with Cursor strictly above n
+type WatchRequest struct {
+	// Scope to watch. Empty watches every scope, in which case From must be
+	// zero because cursors are per scope.
+	Scope Scope
+
+	// From resumes after a known position. Zero means "not resuming"; see
+	// Replay for which end to start at.
+	From Cursor
+
+	// Replay starts from the oldest retained event. Ignored when From is set.
+	Replay bool
+}
+
 // DurableEventStream is the optional at-least-once, resumable event feed. A
 // backend implements it only when it genuinely provides that guarantee; one
 // that can offer only fire-and-forget delivery must not implement it, so that
 // SubscribeOptions.Durable fails loudly rather than degrading in silence.
 type DurableEventStream interface {
-	// Watch streams a scope's events from just after the given log position. A
-	// zero cursor starts from now. A cursor older than retained history returns
-	// ErrCursorExpired. An empty scope watches every scope, in which case from
-	// must be zero because cursors are per scope.
-	Watch(ctx context.Context, scope Scope, from Cursor) (<-chan Event, error)
+	// Watch streams a scope's events. The channel is closed when the context
+	// ends or the store closes. A From older than retained history returns
+	// ErrCursorExpired rather than a stream with a silent hole in it.
+	Watch(ctx context.Context, req WatchRequest) (<-chan Event, error)
 }
 
 // Doorbell is the optional "work may be available" signal that lets a blocking
