@@ -16,20 +16,81 @@ import (
 // node's trigger rule newly satisfiable or newly unsatisfiable: AddNodes and
 // AddEdges (a dependency was linked), RemoveEdges and RemoveNode's
 // CascadeDetach (a dependency was dropped).
+// settleTouched re-evaluates every node named by ids against its current
+// dependency tally.
+//
+// The loads are pipelined into one round trip, which is safe only because of
+// the rule below. Settling one node can cascade into another, so a snapshot of
+// every node taken up front can be stale by the time a later id's turn comes.
+// The original implementation avoided that by re-reading each node
+// individually — correct, and two round trips per node.
+//
+// Instead: take all the snapshots at once, and notice when a settle touches any
+// node other than the one being settled. That is the only way a later
+// snapshot can go stale, so from that point on the remaining nodes are re-read
+// individually. In the common case — nodes becoming ready, touching nobody —
+// nothing is re-read and the whole set costs one round trip.
 func settleTouched(ctx context.Context, eng *engine, ids []int64) ([]dw.Effect, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	rows, err := eng.loadManyForUpdate(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: settle: load: %w", err)
+	}
+	snapshots := make(map[int64]nodeRow, len(rows))
+	for i := range rows {
+		snapshots[rows[i].ID] = rows[i]
+	}
+
 	var effects []dw.Effect
+	stale := false
 	for _, id := range ids {
-		n, err := eng.loadForUpdate(ctx, id)
-		if err != nil {
-			return nil, fmt.Errorf("postgres: settle: load: %w", err)
+		n, ok := snapshots[id]
+		if !ok {
+			// Deleted between being named and being read. Nothing to settle.
+			continue
 		}
-		more, err := eng.settle(ctx, &n)
+		more, cascaded, err := settleOne(ctx, eng, id, n, stale)
 		if err != nil {
 			return nil, err
 		}
+		stale = stale || cascaded
 		effects = append(effects, more...)
 	}
 	return effects, nil
+}
+
+// settleOne settles a single node, re-reading it first if an earlier settle in
+// the same call may have moved it. It reports whether this settle itself
+// reached beyond its own node, which is what makes every later snapshot
+// suspect.
+func settleOne(
+	ctx context.Context, eng *engine, id int64, snapshot nodeRow, reload bool,
+) (effects []dw.Effect, cascaded bool, err error) {
+	n := snapshot
+	if reload {
+		fresh, err := eng.loadForUpdate(ctx, id)
+		if err != nil {
+			if isNoRows(err) {
+				return nil, false, nil
+			}
+			return nil, false, fmt.Errorf("postgres: settle: reload: %w", err)
+		}
+		n = fresh
+	}
+
+	effects, err = eng.settle(ctx, &n)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, ef := range effects {
+		if string(ef.NodeID) != n.NodeID {
+			cascaded = true
+		}
+	}
+	return effects, cascaded, nil
 }
 
 // validateAddNodesBatch rejects a malformed batch before anything is
@@ -62,25 +123,38 @@ func validateAddNodesBatch(cfg dw.ScopeConfig, specs []dw.NodeSpec) error {
 // in the same call already created rows — which the caller's deferred
 // Rollback discards along with everything else.
 func materialiseAddNodesBatch(ctx context.Context, eng *engine, specs []dw.NodeSpec) (nodes map[dw.NodeID]nodeRow, fresh []dw.NodeID, err error) {
+	ids := make([]string, len(specs))
+	for i := range specs {
+		ids[i] = string(specs[i].ID)
+	}
+	existing, err := eng.loadManyForUpdateByExternal(ctx, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	nodes = make(map[dw.NodeID]nodeRow, len(specs))
+	toCreate := make([]dw.NodeSpec, 0, len(specs))
 	for _, spec := range specs {
-		existing, err := eng.loadForUpdateByExternal(ctx, string(spec.ID))
-		switch {
-		case err == nil:
-			if !specMatches(existing, spec) {
-				return nil, nil, fmt.Errorf("%w: node %q", dw.ErrIDConflict, spec.ID)
-			}
-			nodes[spec.ID] = existing
-		case isNoRows(err):
-			n, err := eng.createNode(ctx, spec)
-			if err != nil {
-				return nil, nil, err
-			}
-			nodes[spec.ID] = n
-			fresh = append(fresh, spec.ID)
-		default:
-			return nil, nil, fmt.Errorf("postgres: AddNodes: load %q: %w", spec.ID, err)
+		n, ok := existing[string(spec.ID)]
+		if !ok {
+			toCreate = append(toCreate, spec)
+			continue
 		}
+		// Re-adding a node with an identical definition is a no-op; with a
+		// different one it is a conflict.
+		if !specMatches(n, spec) {
+			return nil, nil, fmt.Errorf("%w: node %q", dw.ErrIDConflict, spec.ID)
+		}
+		nodes[spec.ID] = n
+	}
+
+	created, err := eng.createNodes(ctx, toCreate)
+	if err != nil {
+		return nil, nil, err
+	}
+	for i := range created {
+		nodes[toCreate[i].ID] = created[i]
+		fresh = append(fresh, toCreate[i].ID)
 	}
 	return nodes, fresh, nil
 }
@@ -121,21 +195,34 @@ func linkAddNodesBatch(ctx context.Context, eng *engine, specs []dw.NodeSpec, no
 // readiness so a subscriber never sees a node become claimable before it has
 // heard the node exists.
 func announceFresh(ctx context.Context, eng *engine, nodes map[dw.NodeID]nodeRow, fresh []dw.NodeID) ([]dw.Effect, error) {
-	var effects []dw.Effect
-	for _, extID := range fresh {
-		n := nodes[extID]
-		seq, err := eng.bumpSeq(ctx, n.ID)
-		if err != nil {
-			return nil, err
-		}
-		n.Seq = seq
-		ef, err := eng.insertEvent(ctx, n.NodeID, n.Kind, dw.EventCreated, dw.StatusNew, n.Status, n.Reason, n.Message, n.Attempt, n.Seq)
-		if err != nil {
-			return nil, err
-		}
-		effects = append(effects, ef)
+	if len(fresh) == 0 {
+		return nil, nil
 	}
-	return effects, nil
+	ids := make([]int64, len(fresh))
+	for i, extID := range fresh {
+		ids[i] = nodes[extID].ID
+	}
+	seqs, err := eng.bumpSeqMany(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+
+	evs := make([]pendingEvent, len(fresh))
+	for i, extID := range fresh {
+		n := nodes[extID]
+		evs[i] = pendingEvent{
+			nodeID:   n.NodeID,
+			nodeKind: n.Kind,
+			kind:     dw.EventCreated,
+			from:     dw.StatusNew,
+			to:       n.Status,
+			reason:   n.Reason,
+			message:  n.Message,
+			attempt:  n.Attempt,
+			seq:      seqs[i],
+		}
+	}
+	return eng.insertEvents(ctx, evs)
 }
 
 // AddNodes implements [dagworker.Store]. It is one Postgres transaction:

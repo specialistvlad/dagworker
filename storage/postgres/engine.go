@@ -177,16 +177,55 @@ func (e *engine) flushCounters(ctx context.Context) error {
 	return nil
 }
 
+// insertNodeSQL and insertEventSQL are shared between the one-at-a-time and
+// the pipelined paths in pipeline.go, so the two can never drift into writing
+// different columns.
+var (
+	insertNodeSQL = `
+INSERT INTO dagw.nodes (
+	scope, node_id, kind, status, reason, phase, priority, trigger_rule,
+	retry_max_attempts, retry_base_delay_ns, retry_max_delay_ns, payload, labels,
+	created_at, updated_at
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, clock_timestamp(), clock_timestamp())
+RETURNING ` + nodeColumns
+
+	insertEventSQL = `
+INSERT INTO dagw.events (scope, node_id, kind, seq, from_status, to_status, reason, message, attempt, node_kind, at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, clock_timestamp())
+RETURNING cursor, at`
+)
+
+// scanEventEffect decodes what insertEventSQL returns into the effect the
+// Manager will publish.
+func scanEventEffect(row scanRow, scope string, ev pendingEvent) (dw.Effect, error) {
+	var cursor int64
+	var at time.Time
+	if err := row.Scan(&cursor, &at); err != nil {
+		return dw.Effect{}, err
+	}
+	_ = scope
+	return dw.Effect{
+		NodeID:   dw.NodeID(ev.nodeID),
+		Kind:     ev.kind,
+		From:     ev.from,
+		To:       ev.to,
+		Reason:   ev.reason,
+		Message:  ev.message,
+		Attempt:  ev.attempt,
+		NodeKind: ev.nodeKind,
+		Seq:      ev.seq,
+		Cursor:   dw.Cursor(narrowU64(cursor)),
+		At:       at,
+	}, nil
+}
+
 // insertEvent appends one durable log row and returns the [dagworker.Effect]
 // the caller reports back to the Manager. Setting e.notify marks this
 // transaction as having something worth a pg_notify wakeup once it commits.
 func (e *engine) insertEvent(ctx context.Context, nodeID, nodeKind string, kind dw.EventKind, from, to dw.Status, reason dw.Reason, message string, attempt uint32, seq dw.Seq) (dw.Effect, error) {
 	var cursor int64
 	var at time.Time
-	err := e.tx.QueryRow(ctx, `
-INSERT INTO dagw.events (scope, node_id, kind, seq, from_status, to_status, reason, message, attempt, node_kind, at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, clock_timestamp())
-RETURNING cursor, at`,
+	err := e.tx.QueryRow(ctx, insertEventSQL,
 		e.scope, nodeID, int16(kind), widenI64(seq), int16(from), int16(to), int16(reason), message, narrowI32(attempt), nodeKind,
 	).Scan(&cursor, &at)
 	if err != nil {
@@ -485,40 +524,6 @@ func (e *engine) bumpSeq(ctx context.Context, id int64) (dw.Seq, error) {
 		return 0, fmt.Errorf("postgres: bump seq: %w", err)
 	}
 	return dw.Seq(narrowU64(seq)), nil
-}
-
-// createNode inserts a brand-new node in PhaseBlocked/StatusNew — every node
-// is born there, dependency-free or not, and pass three's settle call is
-// what promotes it to Ready (or straight to a terminal status) once its
-// declared dependencies are linked. Mirrors memory's create().
-func (e *engine) createNode(ctx context.Context, spec dw.NodeSpec) (nodeRow, error) {
-	labels, err := labelsJSON(spec.Labels)
-	if err != nil {
-		return nodeRow{}, fmt.Errorf("postgres: create node: labels: %w", err)
-	}
-	var payload []byte
-	if len(spec.Payload) > 0 {
-		payload = spec.Payload
-	}
-	row := e.tx.QueryRow(ctx, `
-INSERT INTO dagw.nodes (
-	scope, node_id, kind, status, reason, phase, priority, trigger_rule,
-	retry_max_attempts, retry_base_delay_ns, retry_max_delay_ns, payload, labels,
-	created_at, updated_at
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, clock_timestamp(), clock_timestamp())
-RETURNING `+nodeColumns,
-		e.scope, string(spec.ID), spec.Kind, int16(dw.StatusNew), int16(dw.ReasonNone), int16(dw.PhaseBlocked),
-		spec.Priority, int16(spec.Trigger),
-		narrowI32(spec.Retry.MaxAttempts), int64(spec.Retry.BaseDelay), int64(spec.Retry.MaxDelay),
-		payload, labels,
-	)
-	n, err := scanNode(row)
-	if err != nil {
-		return nodeRow{}, fmt.Errorf("postgres: create node: %w", err)
-	}
-	e.enterBucket(n.Phase, n.Status)
-	e.addTotal(1)
-	return n, nil
 }
 
 // specMatches reports whether an existing node was created from a
