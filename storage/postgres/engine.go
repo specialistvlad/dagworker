@@ -318,13 +318,7 @@ func (e *engine) settle(ctx context.Context, n *nodeRow) ([]dw.Effect, error) {
 // not impose a maximum DAG depth), locking and updating each successor set in
 // ascending id order before touching any of them.
 func (e *engine) terminate(ctx context.Context, root int64, status dw.Status, reason dw.Reason, message string) ([]dw.Effect, error) {
-	type item struct {
-		id      int64
-		status  dw.Status
-		reason  dw.Reason
-		message string
-	}
-	queue := []item{{root, status, reason, message}}
+	queue := []terminateItem{{root, status, reason, message}}
 
 	var effects []dw.Effect
 	for len(queue) > 0 {

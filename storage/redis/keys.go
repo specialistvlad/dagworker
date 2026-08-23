@@ -50,21 +50,8 @@ func (s *Store) keyCfg(scope dw.Scope) string    { return s.prefix(scope) + sufC
 func (s *Store) keyStats(scope dw.Scope) string  { return s.prefix(scope) + sufStats }
 func (s *Store) keyCursor(scope dw.Scope) string { return s.prefix(scope) + sufCursor }
 func (s *Store) keyIdx(scope dw.Scope) string    { return s.prefix(scope) + sufIdx }
-func (s *Store) keyLeases(scope dw.Scope) string { return s.prefix(scope) + sufLeases }
 func (s *Store) keyEvents(scope dw.Scope) string { return s.prefix(scope) + sufEvents }
 func (s *Store) keyBell(scope dw.Scope) string   { return s.prefix(scope) + sufBell }
 func (s *Store) keyReady(scope dw.Scope, kind string) string {
 	return s.prefix(scope) + "r:" + kind
-}
-func (s *Store) keyNode(scope dw.Scope, id dw.NodeID) string {
-	return s.prefix(scope) + "n:" + string(id)
-}
-func (s *Store) keyBlob(scope dw.Scope, id dw.NodeID) string {
-	return s.prefix(scope) + "b:" + string(id)
-}
-func (s *Store) keySucc(scope dw.Scope, id dw.NodeID) string {
-	return s.prefix(scope) + "s:" + string(id)
-}
-func (s *Store) keyPred(scope dw.Scope, id dw.NodeID) string {
-	return s.prefix(scope) + "p:" + string(id)
 }

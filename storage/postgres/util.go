@@ -52,6 +52,10 @@ func int64s(rows pgx.Rows) ([]int64, error) {
 
 // beginTx starts a transaction. Factored out purely so every mutating method
 // begins one identically; it is not a boundary any caller reasons about.
+// Returning the pgx.Tx interface rather than a concrete type is required —
+// pgxpool.Pool.Begin has no other return shape — not a stylistic choice.
+//
+//nolint:ireturn
 func beginTx(ctx context.Context, s *Store) (pgx.Tx, error) {
 	return s.pool.Begin(ctx)
 }

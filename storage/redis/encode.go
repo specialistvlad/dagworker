@@ -2,6 +2,7 @@ package redis
 
 import (
 	"encoding/json"
+	"math"
 	"strconv"
 	"time"
 
@@ -72,17 +73,17 @@ func hashToCfg(m map[string]string) dw.ScopeConfig {
 		DefaultLeaseTimeout: msToDur(atoi64(m[fDefaultLeaseMs])),
 		MinLeaseTimeout:     msToDur(atoi64(m[fMinLeaseMs])),
 		MaxLeaseTimeout:     msToDur(atoi64(m[fMaxLeaseMs])),
-		MaxAttempts:         uint32(atoi64(m[fMaxAttempts])),
+		MaxAttempts:         narrowU32(atoi64(m[fMaxAttempts])),
 		RetryBaseDelay:      msToDur(atoi64(m[fRetryBaseMs])),
 		RetryMaxDelay:       msToDur(atoi64(m[fRetryMaxMs])),
 		TerminalRetention:   msToDur(atoi64(m[fTerminalRetentionMs])),
 		MaxSubscriberLag:    msToDur(atoi64(m[fMaxSubscriberLagMs])),
-		MaxInFlight:         uint32(atoi64(m[fMaxInFlight])),
+		MaxInFlight:         narrowU32(atoi64(m[fMaxInFlight])),
 		PayloadCap:          int(atoi64(m[fPayloadCap])),
 		MaxBatchSize:        int(atoi64(m[fMaxBatchSize])),
 		SweepBatchSize:      int(atoi64(m[fSweepBatchSize])),
 		SweepInterval:       msToDur(atoi64(m[fSweepIntervalMs])),
-		PartitionCount:      uint32(atoi64(m[fPartitionCount])),
+		PartitionCount:      narrowU32(atoi64(m[fPartitionCount])),
 	}
 }
 
@@ -131,15 +132,15 @@ func decodeLabels(s string) map[string]string {
 func decodeEffect(row []any) dw.Effect {
 	return dw.Effect{
 		NodeID:   dw.NodeID(toStr(row[0])),
-		Kind:     dw.EventKind(toInt(row[1])),
-		From:     dw.Status(toInt(row[2])),
-		To:       dw.Status(toInt(row[3])),
-		Reason:   dw.Reason(toInt(row[4])),
+		Kind:     dw.EventKind(narrowU8(toInt(row[1]))),
+		From:     dw.Status(narrowU8(toInt(row[2]))),
+		To:       dw.Status(narrowU8(toInt(row[3]))),
+		Reason:   dw.Reason(narrowU8(toInt(row[4]))),
 		Message:  toStr(row[5]),
-		Attempt:  uint32(toInt(row[6])),
+		Attempt:  narrowU32(toInt(row[6])),
 		NodeKind: toStr(row[7]),
-		Seq:      dw.Seq(toInt(row[8])),
-		Cursor:   dw.Cursor(toInt(row[9])),
+		Seq:      dw.Seq(narrowU64(toInt(row[8]))),
+		Cursor:   dw.Cursor(narrowU64(toInt(row[9]))),
 		At:       msToTime(toInt(row[10])),
 	}
 }
@@ -203,18 +204,18 @@ func nodeFromHash(scope dw.Scope, id dw.NodeID, n, b map[string]string) dw.Node 
 		Scope:     scope,
 		ID:        id,
 		Kind:      n["kind"],
-		Status:    dw.Status(atoi64(n["status"])),
-		Reason:    dw.Reason(atoi64(n["reason"])),
+		Status:    dw.Status(narrowU8(atoi64(n["status"]))),
+		Reason:    dw.Reason(narrowU8(atoi64(n["reason"]))),
 		Message:   n["message"],
-		Attempt:   uint32(atoi64(n["attempt"])),
-		Priority:  int16(atoi64(n["priority"])),
-		Trigger:   dw.TriggerRule(atoi64(n["trigger"])),
+		Attempt:   narrowU32(atoi64(n["attempt"])),
+		Priority:  narrowI16(atoi64(n["priority"])),
+		Trigger:   dw.TriggerRule(narrowU8(atoi64(n["trigger"]))),
 		Seq:       dw.Seq(atou64(n["seq"])),
 		CreatedAt: msToTime(atoi64(n["createdAt"])),
 		UpdatedAt: msToTime(atoi64(n["updatedAt"])),
 	}
 	node.Retry = dw.RetryPolicy{
-		MaxAttempts: uint32(atoi64(n["retryMaxAttempts"])),
+		MaxAttempts: narrowU32(atoi64(n["retryMaxAttempts"])),
 		BaseDelay:   msToDur(atoi64(n["retryBaseMs"])),
 		MaxDelay:    msToDur(atoi64(n["retryMaxMs"])),
 	}
@@ -223,4 +224,62 @@ func nodeFromHash(scope dw.Scope, id dw.NodeID, n, b map[string]string) dw.Node 
 	}
 	node.Labels = decodeLabels(b["labels"])
 	return node
+}
+
+// Redis replies arrive as int64 whatever the field's real width. These narrow
+// them safely.
+//
+// The store wrote every one of these values itself, so in practice they are in
+// range by construction. Clamping rather than wrapping matters anyway: if a key
+// is ever corrupted, shared with another writer, or migrated from a future
+// version, a saturated value is visibly wrong while a wrapped one is a small
+// plausible number that silently does the wrong thing -- a MaxAttempts that
+// wraps to 2 disables retries and looks deliberate.
+func narrowU32(v int64) uint32 {
+	switch {
+	case v < 0:
+		return 0
+	case v > math.MaxUint32:
+		return math.MaxUint32
+	default:
+		return uint32(v)
+	}
+}
+
+func narrowU8(v int64) uint8 {
+	switch {
+	case v < 0:
+		return 0
+	case v > math.MaxUint8:
+		return math.MaxUint8
+	default:
+		return uint8(v)
+	}
+}
+
+func narrowI16(v int64) int16 {
+	switch {
+	case v < math.MinInt16:
+		return math.MinInt16
+	case v > math.MaxInt16:
+		return math.MaxInt16
+	default:
+		return int16(v)
+	}
+}
+
+func narrowU64(v int64) uint64 {
+	if v < 0 {
+		return 0
+	}
+	return uint64(v)
+}
+
+// widenU64 goes the other way, for a value about to be sent to Lua, where a
+// number is a float64 and anything above 2^53 is not exactly representable.
+func widenU64(v uint64) int64 {
+	if v > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(v)
 }

@@ -114,6 +114,15 @@ func (n *notifier) run() {
 // listenOnce acquires a connection, LISTENs, and pumps notifications until
 // the connection errors, the notifier is stopped, or the pool's context
 // otherwise ends. It returns nil only when n.stopCh caused the exit.
+//
+// context.Background() is deliberate, not an oversight a linter should flag:
+// this loop is a detached background worker whose lifetime is the Store's,
+// governed by n.stopCh (wired below), not by whatever caller's context
+// happened to be in scope when Open started it. Inheriting a request-scoped
+// context here would make the listener die with the first unrelated request
+// that cancels its own context.
+//
+//nolint:contextcheck
 func (n *notifier) listenOnce() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

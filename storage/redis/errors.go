@@ -30,21 +30,18 @@ func mapScriptErr(err error, scope dw.Scope) error {
 	}
 	code, args := fields[0], fields[1:]
 
+	// Most codes are a sentinel plus whatever detail the script wrote. Those
+	// live in a table so that mapScriptErr's branching stays proportional to
+	// the cases that genuinely need code rather than growing with every new
+	// error the scripts can raise.
+	if sentinel, ok := scriptSentinels[code]; ok {
+		if detail := strings.Join(args, " "); detail != "" {
+			return fmt.Errorf("%w: %s", sentinel, detail)
+		}
+		return sentinel
+	}
+
 	switch code {
-	case "NOTFOUND", "NOTFOUND-FROM", "NOTFOUND-TO":
-		return fmt.Errorf("%w: %s", dw.ErrNotFound, strings.Join(args, " "))
-	case "IDCONFLICT":
-		return fmt.Errorf("%w: %s", dw.ErrIDConflict, arg(args, 0))
-	case "SEALED":
-		return dw.ErrScopeSealed
-	case "TERMINAL":
-		return fmt.Errorf("%w: %s", dw.ErrAlreadyTerminal, arg(args, 0))
-	case "HASSUCC":
-		return fmt.Errorf("%w: %s", dw.ErrHasSuccessors, arg(args, 0))
-	case "INFLIGHT":
-		return fmt.Errorf("%w: %s", dw.ErrNodeInFlight, arg(args, 0))
-	case "LEASEMISMATCH":
-		return fmt.Errorf("%w: %s", dw.ErrLeaseMismatch, arg(args, 0))
 	case "BATCHSIZE":
 		n, max := arg(args, 0), arg(args, 1)
 		return &dw.InvalidArgumentError{Field: "specs", Detail: fmt.Sprintf("batch of %s exceeds the scope's limit of %s", n, max)}
@@ -60,6 +57,19 @@ func mapScriptErr(err error, scope dw.Scope) error {
 	default:
 		return err
 	}
+}
+
+// scriptSentinels maps a script's error code to the library sentinel it names.
+var scriptSentinels = map[string]error{
+	"NOTFOUND":      dw.ErrNotFound,
+	"NOTFOUND-FROM": dw.ErrNotFound,
+	"NOTFOUND-TO":   dw.ErrNotFound,
+	"IDCONFLICT":    dw.ErrIDConflict,
+	"SEALED":        dw.ErrScopeSealed,
+	"TERMINAL":      dw.ErrAlreadyTerminal,
+	"HASSUCC":       dw.ErrHasSuccessors,
+	"INFLIGHT":      dw.ErrNodeInFlight,
+	"LEASEMISMATCH": dw.ErrLeaseMismatch,
 }
 
 func arg(args []string, i int) string {

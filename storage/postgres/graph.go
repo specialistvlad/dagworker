@@ -389,7 +389,9 @@ func applyCascade(ctx context.Context, eng *engine, id dw.NodeID, policy dw.Casc
 			effects = append(effects, more...)
 		}
 		return effects, nil
-	default: // dw.CascadeDetach
+	case dw.CascadeDetach:
+		return nil, nil
+	default:
 		return nil, nil
 	}
 }

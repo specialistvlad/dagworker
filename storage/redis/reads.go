@@ -55,16 +55,16 @@ func (s *Store) Inspect(ctx context.Context, scope dw.Scope, id dw.NodeID) (dw.I
 
 	insp := dw.Inspection{
 		Node:          node,
-		Phase:         dw.Phase(atoi64(n["phase"])),
+		Phase:         dw.Phase(narrowU8(atoi64(n["phase"]))),
 		Rank:          atoi64(n["ord"]),
 		LeaseDeadline: msToTime(atoi64(n["deadline"])),
 		ReadyAt:       msToTime(atoi64(n["readyAt"])),
 	}
 	insp.Deps = dw.DepCounts{
-		Unsatisfied: uint32(atoi64(n["depsUnsatisfied"])),
-		Succeeded:   uint32(atoi64(n["depsSucceeded"])),
-		Skipped:     uint32(atoi64(n["depsSkipped"])),
-		Failed:      uint32(atoi64(n["depsFailed"])),
+		Unsatisfied: narrowU32(atoi64(n["depsUnsatisfied"])),
+		Succeeded:   narrowU32(atoi64(n["depsSucceeded"])),
+		Skipped:     narrowU32(atoi64(n["depsSkipped"])),
+		Failed:      narrowU32(atoi64(n["depsFailed"])),
 	}
 	pred := hgetallMap(predFlat)
 	for from, satisfied := range pred {
@@ -84,6 +84,49 @@ func (s *Store) Inspect(ctx context.Context, scope dw.Scope, id dw.NodeID) (dw.I
 // never an offset, and never a scan of the whole scope to build one page:
 // each round only reads as many ids as it takes to fill the page, batching
 // forward through ZRANGEBYLEX when a status/kind filter excludes some.
+// matches reports whether a node survives the caller's filters.
+func matches(node dw.Node, opts dw.ListOptions) bool {
+	if len(opts.Statuses) > 0 && !containsStatus(opts.Statuses, node.Status) {
+		return false
+	}
+	if len(opts.Kinds) > 0 && !containsStr(opts.Kinds, node.Kind) {
+		return false
+	}
+	return true
+}
+
+// collectPage appends the nodes among ids that survive filtering, and reports
+// whether the page is now full.
+//
+// A node that vanished between the index read and its own read is skipped
+// rather than raising: the two reads are not one operation, and a concurrent
+// deletion in that window is ordinary rather than exceptional.
+func (s *Store) collectPage(
+	ctx context.Context, scope dw.Scope, ids []string, opts dw.ListOptions, limit int, out *dw.ListResult,
+) bool {
+	for _, idStr := range ids {
+		node, err := s.GetNode(ctx, scope, dw.NodeID(idStr))
+		if err != nil {
+			continue
+		}
+		if !matches(node, opts) {
+			continue
+		}
+		if len(out.Nodes) == limit {
+			out.Next = string(out.Nodes[len(out.Nodes)-1].ID)
+			return true
+		}
+		out.Nodes = append(out.Nodes, node)
+	}
+	return false
+}
+
+// ListNodes implements [dagworker.Lister].
+//
+// Paging is keyset over the scope's lexical index, never an offset: skipping
+// rows to reach a page is the linear operation this library promises not to
+// have. The index is walked in batches because filtering happens after the
+// read, so a page may need several index batches to fill.
 func (s *Store) ListNodes(ctx context.Context, scope dw.Scope, opts dw.ListOptions) (dw.ListResult, error) {
 	if s.isClosed() {
 		return dw.ListResult{}, dw.ErrClosed
@@ -94,43 +137,29 @@ func (s *Store) ListNodes(ctx context.Context, scope dw.Scope, opts dw.ListOptio
 	}
 
 	const batch = 200
-	min := "-"
+	lower := "-"
 	if opts.Cursor != "" {
-		min = "(" + opts.Cursor
+		lower = "(" + opts.Cursor
 	}
 
 	var out dw.ListResult
 	for {
-		ids, err := s.rdb.ZRangeByLex(ctx, s.keyIdx(scope), &goredis.ZRangeBy{Min: min, Max: "+", Count: batch}).Result()
+		ids, err := s.rdb.ZRangeByLex(ctx, s.keyIdx(scope),
+			&goredis.ZRangeBy{Min: lower, Max: "+", Count: batch}).Result()
 		if err != nil {
 			return dw.ListResult{}, fmt.Errorf("redis: ListNodes: %w", err)
 		}
 		if len(ids) == 0 {
 			return out, nil
 		}
-		for _, idStr := range ids {
-			id := dw.NodeID(idStr)
-			node, err := s.GetNode(ctx, scope, id)
-			if err != nil {
-				continue // deleted between the index read and this read: skip, not an error
-			}
-			if len(opts.Statuses) > 0 && !containsStatus(opts.Statuses, node.Status) {
-				continue
-			}
-			if len(opts.Kinds) > 0 && !containsStr(opts.Kinds, node.Kind) {
-				continue
-			}
-			if len(out.Nodes) == limit {
-				out.Next = string(out.Nodes[len(out.Nodes)-1].ID)
-				return out, nil
-			}
-			out.Nodes = append(out.Nodes, node)
+		if s.collectPage(ctx, scope, ids, opts, limit, &out) {
+			return out, nil
 		}
-		min = "(" + ids[len(ids)-1]
 		if len(ids) < batch {
 			// Exhausted the index; whatever survived filtering is the last page.
 			return out, nil
 		}
+		lower = "(" + ids[len(ids)-1]
 	}
 }
 

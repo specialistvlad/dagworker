@@ -50,7 +50,7 @@ func (s *Store) Claim(ctx context.Context, req dw.ClaimRequest) (dw.ClaimResult,
 			continue
 		}
 		id := dw.NodeID(toStr(tuple[0]))
-		epoch := uint64(toInt(tuple[1]))
+		epoch := narrowU64(toInt(tuple[1]))
 		deadlineMs := toInt(tuple[2])
 		nodeFlat, _ := tuple[3].([]any)
 		blobFlat, _ := tuple[4].([]any)
@@ -84,7 +84,7 @@ func (s *Store) Complete(ctx context.Context, req dw.CompleteRequest) (dw.Comple
 		success = 1
 	}
 	header, effects, err := s.runScript(ctx, s.scripts.complete, req.Lease.Scope,
-		string(req.Lease.NodeID), int64(req.Lease.Epoch), success,
+		string(req.Lease.NodeID), widenU64(req.Lease.Epoch), success,
 		int64(req.Reason), req.Message, req.Result, cfg.PayloadCap)
 	if err != nil {
 		return dw.CompleteResult{}, err
@@ -116,7 +116,7 @@ func (s *Store) Extend(ctx context.Context, req dw.ExtendRequest) (time.Time, er
 	leaseFor := cfg.ClampLease(req.Timeout)
 
 	header, _, err := s.runScript(ctx, s.scripts.extend, req.Lease.Scope,
-		string(req.Lease.NodeID), int64(req.Lease.Epoch), durToMs(leaseFor))
+		string(req.Lease.NodeID), widenU64(req.Lease.Epoch), durToMs(leaseFor))
 	if err != nil {
 		return time.Time{}, err
 	}

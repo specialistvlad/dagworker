@@ -99,6 +99,11 @@ func quoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
+// newHarnessStore returns dw.Store, not *postgres.Store, because it plugs
+// directly into dagstoretest.Harness.New below, whose signature — fixed by
+// the shared conformance package — is the interface type.
+//
+//nolint:ireturn
 func newHarnessStore(t *testing.T) dw.Store {
 	t.Helper()
 	dsn := newScratchDatabase(t)
@@ -120,6 +125,7 @@ func TestConformance(t *testing.T) {
 	dagstoretest.RunConformance(t, dagstoretest.Harness{
 		Name: "postgres",
 		New: func(t *testing.T) (dw.Store, func(time.Duration)) {
+			t.Helper()
 			return newHarnessStore(t), nil
 		},
 	})

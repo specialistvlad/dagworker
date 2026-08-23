@@ -139,16 +139,16 @@ func (s *Store) pumpEvents(ctx context.Context, scope dw.Scope, startID string, 
 func decodeStreamEvent(scope dw.Scope, msg goredis.XMessage) dw.Event {
 	v := msg.Values
 	return dw.Event{
-		Kind:     dw.EventKind(atoi64(valStr(v["kind"]))),
+		Kind:     dw.EventKind(narrowU8(atoi64(valStr(v["kind"])))),
 		Scope:    scope,
 		NodeID:   dw.NodeID(valStr(v["id"])),
 		Seq:      dw.Seq(atou64(valStr(v["seq"]))),
 		Cursor:   dw.Cursor(parseStreamCursor(msg.ID)),
-		From:     dw.Status(atoi64(valStr(v["from"]))),
-		To:       dw.Status(atoi64(valStr(v["to"]))),
-		Reason:   dw.Reason(atoi64(valStr(v["reason"]))),
+		From:     dw.Status(narrowU8(atoi64(valStr(v["from"])))),
+		To:       dw.Status(narrowU8(atoi64(valStr(v["to"])))),
+		Reason:   dw.Reason(narrowU8(atoi64(valStr(v["reason"])))),
 		Message:  valStr(v["message"]),
-		Attempt:  uint32(atoi64(valStr(v["attempt"]))),
+		Attempt:  narrowU32(atoi64(valStr(v["attempt"]))),
 		NodeKind: valStr(v["nodeKind"]),
 		At:       msToTime(atoi64(valStr(v["at"]))),
 	}

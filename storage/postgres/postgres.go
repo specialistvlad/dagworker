@@ -90,13 +90,13 @@ func WithPollInterval(d time.Duration) Option {
 	})
 }
 
-// withJitter replaces the randomness used for retry backoff. Unexported: it
-// exists for this package's own conformance test, which needs a
-// deterministic schedule the way dagstoretest's memory harness does: tests
-// import the harness's FakeClock but this backend cannot accept an injected
-// Clock at all (PostgreSQL owns its own clock unconditionally), so a
-// deterministic jitter is the only lever conformance timing tests have.
-func withJitter(fn func(n int64) int64) Option {
+// WithJitter replaces the randomness used for retry backoff, mirroring
+// memory.WithJitter for the same reason: a test wants a reproducible retry
+// schedule. It matters more here than for an in-memory store, because this
+// backend cannot accept an injected Clock at all — PostgreSQL owns its clock
+// unconditionally — so a deterministic jitter is the only lever a timing
+// test driving this backend has. fn must return a value in [0, n).
+func WithJitter(fn func(n int64) int64) Option {
 	return optionFunc(func(s *Store) {
 		if fn != nil {
 			s.jitter = fn

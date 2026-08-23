@@ -77,6 +77,7 @@ func TestConformance(t *testing.T) {
 	dagstoretest.RunConformance(t, dagstoretest.Harness{
 		Name: "redis",
 		New: func(t *testing.T) (dw.Store, func(time.Duration)) {
+			t.Helper()
 			ns := randomKeyspace(t)
 			st := New(client, withKeyspace(ns))
 			t.Cleanup(func() {
