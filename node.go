@@ -273,7 +273,10 @@ type NodeSpec struct {
 	Deps []NodeID
 }
 
-func (s NodeSpec) validate() error {
+// Validate reports whether the spec is well formed. Backends call it so that a
+// malformed spec is rejected identically everywhere rather than surfacing as a
+// different, less intelligible error from each backend's own storage layer.
+func (s NodeSpec) Validate() error {
 	if err := s.ID.validate(); err != nil {
 		return err
 	}

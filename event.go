@@ -11,10 +11,20 @@ import (
 type EventKind uint8
 
 const (
+	// EventCreated reports that a node came into existence. It is the first
+	// event any node produces, always with Seq 1, and it carries the node's
+	// initial status — which is not always [StatusNew]: a node inserted behind
+	// a predecessor that has already failed is born terminal.
+	//
+	// It exists as its own kind rather than being inferred from Seq so that a
+	// subscriber maintaining a live view of the graph does not have to know a
+	// trick to spot a new node.
+	EventCreated EventKind = iota
+
 	// EventTransition reports that a node's public [Status] changed. This is
 	// the observation feed: on a backend that supports a durable stream it is
-	// at-least-once and resumable from a [Seq] cursor.
-	EventTransition EventKind = iota
+	// at-least-once and resumable from a [Cursor].
+	EventTransition
 
 	// EventReady reports that a node became claimable. It is a doorbell, not a
 	// delivery: it is coalescing, best-effort, and may be dropped entirely
@@ -30,6 +40,8 @@ const (
 // String implements [fmt.Stringer].
 func (k EventKind) String() string {
 	switch k {
+	case EventCreated:
+		return "created"
 	case EventTransition:
 		return "transition"
 	case EventReady:

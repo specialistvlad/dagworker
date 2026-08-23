@@ -107,9 +107,14 @@ type ScopeConfig struct {
 	PartitionCount uint32
 }
 
-// resolved returns c with every zero-means-fallback field filled in. Fields
-// whose zero means "disabled" are left alone.
-func (c ScopeConfig) resolved() ScopeConfig {
+// Resolved returns c with every zero-means-fallback field filled in. Fields
+// whose zero means "disabled" — TerminalRetention, MaxSubscriberLag and
+// MaxInFlight — are left alone.
+//
+// Backends call this so that every implementation resolves a partially
+// specified configuration identically. A backend that reimplemented the
+// fallbacks would be a second source of truth, and the two would drift.
+func (c ScopeConfig) Resolved() ScopeConfig {
 	out := c
 	if out.DefaultLeaseTimeout <= 0 {
 		out.DefaultLeaseTimeout = DefaultLeaseTimeout
@@ -150,7 +155,7 @@ func (c ScopeConfig) resolved() ScopeConfig {
 }
 
 func (c ScopeConfig) validate() error {
-	r := c.resolved()
+	r := c.Resolved()
 	if r.MinLeaseTimeout > r.MaxLeaseTimeout {
 		return invalidArg("scope config", "min lease timeout %s exceeds max %s",
 			r.MinLeaseTimeout, r.MaxLeaseTimeout)
@@ -172,9 +177,14 @@ func (c ScopeConfig) validate() error {
 	return nil
 }
 
-// clampLease brings a requested lease duration inside the scope's bounds.
-func (c ScopeConfig) clampLease(d time.Duration) time.Duration {
-	r := c.resolved()
+// ClampLease brings a requested lease duration inside the scope's bounds,
+// substituting the scope default when the request is zero.
+//
+// The clamp lives in the store, not the caller, so that every instance sharing
+// a backend agrees on the effective deadline regardless of what each was
+// configured with locally.
+func (c ScopeConfig) ClampLease(d time.Duration) time.Duration {
+	r := c.Resolved()
 	if d <= 0 {
 		d = r.DefaultLeaseTimeout
 	}
