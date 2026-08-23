@@ -91,8 +91,9 @@ The library promises that no operation's cost grows with the size of the graph,
 and [`test/perf`](test/perf/) enforces it. If you change a hot path, run:
 
 ```
-make complexity   # the ratio guards, at a million nodes
-make bench        # absolute throughput, for a benchstat comparison
+make complexity   # the ratio guards
+make throughput   # absolute throughput, for a benchstat comparison
+make million      # the 1,000,000-node figures, when a claim needs them
 ```
 
 A performance claim in a commit message needs a `benchstat` comparison behind

@@ -1,9 +1,10 @@
 # ADR-0040: Testing strategy, coverage policy, and CI topology
 
-- **Status:** Accepted, amended by ADR-0044
+- **Status:** Accepted, amended by ADR-0044 and ADR-0045
 - **Date:** 2026-08-22
 - **Deciders:** Vladyslav Kazantsev (project owner)
 - **Amends:** —
+- **Amended by:** ADR-0045 — the gate assignments in the tier table below, the `test/feature/` tier, and the CI job matrix. There are now two suites split by measured cost, with budgets: `make check` (10s, no databases) and `make benchmark` (5 min).
 - **Amended by:** ADR-0044 §4 — none of `synctest`, `rapid`, `internal/chaos`, or Porcupine were built. What replaced each, and which loss is real, is recorded there.
 - **Backing research:** docs/research/11-testing-verification-and-ci.md §1-5; docs/research/00-synthesis.md §1, §8-9
 

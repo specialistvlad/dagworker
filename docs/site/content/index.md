@@ -175,8 +175,18 @@ those three places, with the paper or the post-mortem that argued for it.
 ## Contributing
 
 See [Contributing](/dagworker/contributing/). In short: `make check` must pass, new
-behaviour needs a test that fails without it, and a design change needs an
-ADR.
+behaviour needs a test that fails without it, and a design change needs an ADR.
+
+Two suites, split by cost, and both budgets are constraints rather than hopes:
+
+```
+make check      tidy, lint, race, coverage.  No databases.   ~7s
+make benchmark  integration, e2e, complexity, throughput.    ~3m30s
+```
+
+`make check` starts no container and opens no socket to a database, so it is
+meant to be run constantly — and it stays honest only while it is fast. Run it
+with the containers stopped and it must give the same answer in the same time.
 
 ## License
 
