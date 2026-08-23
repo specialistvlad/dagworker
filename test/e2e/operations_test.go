@@ -48,7 +48,7 @@ func TestE2E_Operations(t *testing.T) {
 		t.Run("edges-added-and-removed-at-runtime", func(t *testing.T) {
 			t.Parallel()
 			m, ctx, scope := fixture(t, b)
-			mustAdd(t, m, ctx, scope,
+			mustAdd(ctx, t, m, scope,
 				dw.NodeSpec{ID: "a", Kind: "a"}, dw.NodeSpec{ID: "b", Kind: "b"})
 
 			if err := m.AddEdge(ctx, scope, "a", "b"); err != nil {
@@ -68,7 +68,7 @@ func TestE2E_Operations(t *testing.T) {
 		t.Run("cycles-are-refused", func(t *testing.T) {
 			t.Parallel()
 			m, ctx, scope := fixture(t, b)
-			mustAdd(t, m, ctx, scope,
+			mustAdd(ctx, t, m, scope,
 				dw.NodeSpec{ID: "a"}, dw.NodeSpec{ID: "b", Deps: []dw.NodeID{"a"}},
 				dw.NodeSpec{ID: "c", Deps: []dw.NodeID{"b"}})
 
@@ -86,7 +86,7 @@ func TestE2E_Operations(t *testing.T) {
 		t.Run("remove-node-policies", func(t *testing.T) {
 			t.Parallel()
 			m, ctx, scope := fixture(t, b)
-			mustAdd(t, m, ctx, scope,
+			mustAdd(ctx, t, m, scope,
 				dw.NodeSpec{ID: "up", Kind: "up"},
 				dw.NodeSpec{ID: "down", Kind: "down", Deps: []dw.NodeID{"up"}})
 
@@ -106,7 +106,7 @@ func TestE2E_Operations(t *testing.T) {
 		t.Run("remove-node-cascading-failure", func(t *testing.T) {
 			t.Parallel()
 			m, ctx, scope := fixture(t, b)
-			mustAdd(t, m, ctx, scope,
+			mustAdd(ctx, t, m, scope,
 				dw.NodeSpec{ID: "up"},
 				dw.NodeSpec{ID: "mid", Deps: []dw.NodeID{"up"}},
 				dw.NodeSpec{ID: "leaf", Deps: []dw.NodeID{"mid"}})
@@ -128,7 +128,7 @@ func TestE2E_Operations(t *testing.T) {
 		t.Run("claim-by-kind-and-priority", func(t *testing.T) {
 			t.Parallel()
 			m, ctx, scope := fixture(t, b)
-			mustAdd(t, m, ctx, scope,
+			mustAdd(ctx, t, m, scope,
 				dw.NodeSpec{ID: "cpu-low", Kind: "cpu", Priority: 1},
 				dw.NodeSpec{ID: "cpu-high", Kind: "cpu", Priority: 100},
 				dw.NodeSpec{ID: "gpu-only", Kind: "gpu"})
@@ -153,7 +153,7 @@ func TestE2E_Operations(t *testing.T) {
 			for i := range specs {
 				specs[i] = dw.NodeSpec{ID: dw.NodeID(fmt.Sprintf("n%02d", i))}
 			}
-			mustAdd(t, m, ctx, scope, specs...)
+			mustAdd(ctx, t, m, scope, specs...)
 
 			leases, err := m.ClaimBatch(ctx, scope, 10)
 			if err != nil {
@@ -172,7 +172,7 @@ func TestE2E_Operations(t *testing.T) {
 		t.Run("result-round-trips", func(t *testing.T) {
 			t.Parallel()
 			m, ctx, scope := fixture(t, b)
-			mustAdd(t, m, ctx, scope, dw.NodeSpec{ID: "a"})
+			mustAdd(ctx, t, m, scope, dw.NodeSpec{ID: "a"})
 
 			l, err := m.TryClaim(ctx, scope)
 			if err != nil {
@@ -198,7 +198,7 @@ func TestE2E_Operations(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("Configure: %v", err)
 			}
-			mustAdd(t, m, ctx, scope, dw.NodeSpec{ID: "flaky"})
+			mustAdd(ctx, t, m, scope, dw.NodeSpec{ID: "flaky"})
 
 			l, err := m.TryClaim(ctx, scope)
 			if err != nil {
@@ -212,7 +212,7 @@ func TestE2E_Operations(t *testing.T) {
 				t.Fatal("a failure with attempts remaining did not schedule a retry")
 			}
 
-			second := claimEventually(t, ctx, m, scope)
+			second := claimEventually(ctx, t, m, scope)
 			if second.Epoch <= l.Epoch {
 				t.Fatalf("retry claimed at epoch %d, not above %d", second.Epoch, l.Epoch)
 			}
@@ -232,12 +232,12 @@ func TestE2E_Operations(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("Configure: %v", err)
 			}
-			mustAdd(t, m, ctx, scope,
+			mustAdd(ctx, t, m, scope,
 				dw.NodeSpec{ID: "doomed"},
 				dw.NodeSpec{ID: "downstream", Deps: []dw.NodeID{"doomed"}})
 
 			for attempt := 1; attempt <= 2; attempt++ {
-				l := claimEventually(t, ctx, m, scope)
+				l := claimEventually(ctx, t, m, scope)
 				if _, err := m.Nack(ctx, l, fmt.Errorf("attempt %d failed", attempt)); err != nil { //nolint:err113 // test message
 					t.Fatalf("Nack: %v", err)
 				}
@@ -263,7 +263,7 @@ func TestE2E_Operations(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("Configure: %v", err)
 			}
-			mustAdd(t, m, ctx, scope, dw.NodeSpec{ID: "slow"})
+			mustAdd(ctx, t, m, scope, dw.NodeSpec{ID: "slow"})
 
 			l, err := m.TryClaim(ctx, scope, dw.WithLeaseTimeout(300*time.Millisecond))
 			if err != nil {
@@ -288,7 +288,7 @@ func TestE2E_Operations(t *testing.T) {
 		t.Run("cancel-revokes-in-flight-work", func(t *testing.T) {
 			t.Parallel()
 			m, ctx, scope := fixture(t, b)
-			mustAdd(t, m, ctx, scope, dw.NodeSpec{ID: "a"}, dw.NodeSpec{ID: "b"})
+			mustAdd(ctx, t, m, scope, dw.NodeSpec{ID: "a"}, dw.NodeSpec{ID: "b"})
 
 			l, err := m.TryClaim(ctx, scope)
 			if err != nil {
@@ -308,7 +308,7 @@ func TestE2E_Operations(t *testing.T) {
 		t.Run("inspect-explains-a-stuck-node", func(t *testing.T) {
 			t.Parallel()
 			m, ctx, scope := fixture(t, b)
-			mustAdd(t, m, ctx, scope,
+			mustAdd(ctx, t, m, scope,
 				dw.NodeSpec{ID: "a", Kind: "a"}, dw.NodeSpec{ID: "b", Kind: "b"},
 				dw.NodeSpec{ID: "join", Deps: []dw.NodeID{"a", "b"}})
 
@@ -339,7 +339,7 @@ func TestE2E_Operations(t *testing.T) {
 			if err := m.Configure(ctx, scope, dw.ScopeConfig{MaxInFlight: 2}); err != nil {
 				t.Fatalf("Configure: %v", err)
 			}
-			mustAdd(t, m, ctx, scope,
+			mustAdd(ctx, t, m, scope,
 				dw.NodeSpec{ID: "a"}, dw.NodeSpec{ID: "b"}, dw.NodeSpec{ID: "c"})
 
 			for range 2 {
@@ -375,7 +375,7 @@ func TestE2E_Operations(t *testing.T) {
 			for i := range specs {
 				specs[i] = dw.NodeSpec{ID: dw.NodeID(fmt.Sprintf("n%02d", i))}
 			}
-			mustAdd(t, m, ctx, scope, specs...)
+			mustAdd(ctx, t, m, scope, specs...)
 
 			seen := map[dw.NodeID]bool{}
 			cursor := ""
@@ -410,7 +410,7 @@ func TestE2E_Operations(t *testing.T) {
 			}
 			defer func() { _ = sub.Close() }()
 
-			mustAdd(t, m, ctx, scope, dw.NodeSpec{ID: "a"})
+			mustAdd(ctx, t, m, scope, dw.NodeSpec{ID: "a"})
 			l, err := m.TryClaim(ctx, scope)
 			if err != nil {
 				t.Fatalf("TryClaim: %v", err)
@@ -444,7 +444,7 @@ func TestE2E_Operations(t *testing.T) {
 			}
 			// Write first, subscribe after: a durable stream can deliver what
 			// happened before the subscriber existed.
-			mustAdd(t, m, ctx, scope, dw.NodeSpec{ID: "early"})
+			mustAdd(ctx, t, m, scope, dw.NodeSpec{ID: "early"})
 
 			sub, err := m.Subscribe(ctx, dw.SubscribeOptions{Scope: scope, Durable: true, Replay: true})
 			if err != nil {
@@ -470,7 +470,7 @@ func fixture(t *testing.T, b e2e.Backend) (*dw.Manager, context.Context, dw.Scop
 	return newManager(t, b), t.Context(), e2e.UniqueScope(t)
 }
 
-func mustAdd(t *testing.T, m *dw.Manager, ctx context.Context, scope dw.Scope, specs ...dw.NodeSpec) {
+func mustAdd(ctx context.Context, t *testing.T, m *dw.Manager, scope dw.Scope, specs ...dw.NodeSpec) {
 	t.Helper()
 	if err := m.AddNodes(ctx, scope, specs); err != nil {
 		t.Fatalf("AddNodes: %v", err)
@@ -479,7 +479,7 @@ func mustAdd(t *testing.T, m *dw.Manager, ctx context.Context, scope dw.Scope, s
 
 // claimEventually retries a non-blocking claim for a short while, which is what
 // a caller must do after a retry has been scheduled behind a backoff.
-func claimEventually(t *testing.T, ctx context.Context, m *dw.Manager, scope dw.Scope) dw.Lease {
+func claimEventually(ctx context.Context, t *testing.T, m *dw.Manager, scope dw.Scope) dw.Lease {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {

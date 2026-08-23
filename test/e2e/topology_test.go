@@ -247,11 +247,10 @@ func httpWorker(ctx context.Context, base, scope, id string, x *tally) error {
 		}
 		for _, l := range leases {
 			x.record(l.Node.ID)
-			// A completion never inherits the poll loop's context: the lease
-			// outlives the call that granted it, and cancelling the loop must
-			// not cancel the acknowledgement.
-			//nolint:contextcheck // deliberately detached; see the comment above
-			cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			// A completion drops the poll loop's cancellation but keeps its
+			// values: the lease outlives the call that granted it, and
+			// stopping the loop must not abandon an acknowledgement mid-flight.
+			cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 			_, err := c.Complete(cctx, scope, l.ID, nil)
 			cancel()
 			if err != nil {
@@ -279,6 +278,8 @@ func serveGRPC(t *testing.T, m *dw.Manager) string {
 	if err != nil {
 		t.Fatalf("grpc.New: %v", err)
 	}
+	// The server outlives every request context it serves and is stopped by
+	// t.Cleanup, which runs after t.Context() is already cancelled.
 	ctx, cancel := context.WithCancel(context.Background())
 	lis, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -303,6 +304,8 @@ func serveHTTP(t *testing.T, m *dw.Manager) string {
 	if err != nil {
 		t.Fatalf("http.New: %v", err)
 	}
+	// The server outlives every request context it serves and is stopped by
+	// t.Cleanup, which runs after t.Context() is already cancelled.
 	ctx, cancel := context.WithCancel(context.Background())
 	lis, err := (&net.ListenConfig{}).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
