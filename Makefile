@@ -90,8 +90,28 @@ cover-html: cover ## Open the coverage report in a browser
 	go tool cover -html=coverage.out
 
 .PHONY: complexity
-complexity: ## Prove no operation's cost grows with the size of the graph
-	cd test/perf && go test -count=1 -timeout 30m -run TestComplexity -v ./...
+complexity: up reset-db ## Prove no operation's cost grows with the size of the graph
+	cd test/perf && DAGWORKER_INTEGRATION=1 go test -count=1 -tags=integration \
+		-timeout 30m -run TestComplexity -v ./...
+
+.PHONY: complexity-quick
+complexity-quick: ## The same guards, in-memory only, no databases needed
+	cd test/perf && go test -count=1 -timeout 10m -run TestComplexity -v ./...
+
+.PHONY: million
+million: up reset-db ## Measure every backend at 1,000,000 nodes (slow: ~25 min)
+	@echo "Seeding a million nodes per backend. PostgreSQL takes about 20 minutes."
+	@# The output is captured rather than piped: piping into grep would make the
+	@# pipeline exit with grep's status, so a failed measurement would report
+	@# success. The log is kept on failure so there is something to read.
+	@log=$$(mktemp -t dagworker-million); \
+	  (cd test/perf && DAGWORKER_INTEGRATION=1 go test -count=1 -tags=integration \
+	      -timeout 60m -run TestMillionNodes -v ./...) > $$log 2>&1; \
+	  status=$$?; \
+	  grep -E 'seeded|at 1000000|--- (PASS|FAIL)' $$log || true; \
+	  $(MAKE) --no-print-directory reset-db; \
+	  if [ $$status -ne 0 ]; then echo "FAILED - full output: $$log"; exit $$status; fi; \
+	  rm -f $$log
 
 .PHONY: bench
 bench: ## Throughput benchmarks (absolute numbers; compare with benchstat)
@@ -122,4 +142,7 @@ vuln: ## Check dependencies against the Go vulnerability database
 check: tidy-check lint race cover ## Everything CI runs that needs no database
 
 .PHONY: check-all
-check-all: check integration complexity ## Everything, databases included
+check-all: check integration complexity ## Everything except the million-node run
+
+.PHONY: check-everything
+check-everything: check-all million ## check-all plus the 1M measurement (~30 min)

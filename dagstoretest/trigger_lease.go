@@ -253,13 +253,13 @@ func leaseTests() []conformanceTest {
 			// A long lease: this test is about the in-flight cap, and a lease
 			// lapsing mid-test would let the third claim through for a reason
 			// that has nothing to do with the cap.
-			if _, ok := s.claimLong(); !ok {
+			if _, ok := s.tryClaim(); !ok {
 				s.t.Fatal("first claim found nothing")
 			}
-			if _, ok := s.claimLong(); !ok {
+			if _, ok := s.tryClaim(); !ok {
 				s.t.Fatal("second claim found nothing")
 			}
-			if l, ok := s.claimLong(); ok {
+			if l, ok := s.tryClaim(); ok {
 				s.t.Fatalf("Claim returned %q with two already in flight and a cap of 2", l.NodeID)
 			}
 		}},
@@ -279,7 +279,7 @@ func leaseTests() []conformanceTest {
 			// The deadline is set by the store from its own clock at the moment
 			// of the grant, not computed by the caller.
 			s.add(spec("a"))
-			l := s.claim()
+			l := s.claimExpiring()
 			if l.Epoch != 1 {
 				s.t.Fatalf("first claim has epoch %d, want 1", l.Epoch)
 			}
@@ -318,7 +318,7 @@ func leaseTests() []conformanceTest {
 			// The whole point of the epoch: a worker that was paused rather
 			// than dead must not be able to write after being superseded.
 			s.add(spec("a"))
-			stale := s.claim()
+			stale := s.claimExpiring()
 			s.reclaimExpired()
 			fresh, ok := s.tryClaim()
 			if !ok {
@@ -381,7 +381,7 @@ func leaseTests() []conformanceTest {
 		{"T-TIMEOUT-RECLAIM", func(s *suite) {
 			s.configure(dw.ScopeConfig{MaxAttempts: 1})
 			s.add(spec("a"))
-			s.claim()
+			s.claimExpiring()
 			s.statusIs("a", dw.StatusInProgress)
 			s.passLease()
 			res, err := s.st.Sweep(s.ctx, s.scope, 10)
@@ -400,7 +400,7 @@ func leaseTests() []conformanceTest {
 				MaxAttempts: 3, RetryBaseDelay: time.Millisecond, RetryMaxDelay: time.Millisecond,
 			})
 			s.add(spec("a"))
-			s.claim()
+			s.claimExpiring()
 			s.passLease()
 			if _, err := s.st.Sweep(s.ctx, s.scope, 10); err != nil {
 				s.t.Fatalf("Sweep: %v", err)
@@ -420,7 +420,7 @@ func leaseTests() []conformanceTest {
 			// ever running: whoever asks for work also reclaims what it finds
 			// expired. This test never calls Sweep, which is the whole point.
 			s.add(spec("a"))
-			first := s.claim()
+			first := s.claimExpiring()
 			s.passLease()
 
 			l, ok := s.tryClaim()
@@ -444,7 +444,7 @@ func leaseTests() []conformanceTest {
 
 		{"T-EXTEND", func(s *suite) {
 			s.add(spec("a"))
-			l := s.claim()
+			l := s.claimExpiring()
 			longer := s.lease() * 3
 			deadline, err := s.st.Extend(s.ctx, dw.ExtendRequest{Lease: l, Timeout: longer})
 			if err != nil {
@@ -475,7 +475,7 @@ func leaseTests() []conformanceTest {
 
 		{"T-EXTEND-FENCED", func(s *suite) {
 			s.add(spec("a"))
-			stale := s.claim()
+			stale := s.claimExpiring()
 			s.reclaimExpired()
 			if _, ok := s.tryClaim(); !ok {
 				s.t.Fatal("the expired lease was not reclaimed")

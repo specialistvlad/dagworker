@@ -105,24 +105,35 @@ func (s *suite) lease() time.Duration {
 	return realLease
 }
 
-// longLease is for tests that are not about expiry at all. They must not have a
-// lease lapse underneath them just because the machine was busy: a claim that
-// is silently reclaimed mid-test looks exactly like a double-grant or a broken
-// in-flight cap, and blames the backend for the runner's load.
+// longLease is what an ordinary claim in this suite gets, and the default is
+// this way round deliberately.
+//
+// Almost no test here is about expiry, but every test used to inherit a
+// 400ms real-clock lease. On a loaded machine that lease lapses mid-test, the
+// node is reclaimed, and the symptom looks like whatever the test was actually
+// checking: a priority ordering that serves the same node twice, an in-flight
+// cap that lets a third claim through, a race that reports a double grant. All
+// of them blame the backend for the runner's load.
+//
+// So a claim lasts an hour unless the test says otherwise, and the handful of
+// tests that genuinely need a lease to lapse ask for a short one explicitly
+// with claimExpiring.
 const longLease = time.Hour
 
-func (s *suite) claimLong(kinds ...string) (dw.Lease, bool) {
+// claimExpiring takes a node on a deliberately short lease, for the tests whose
+// subject is what happens when that lease runs out.
+func (s *suite) claimExpiring() dw.Lease {
 	s.t.Helper()
 	res, err := s.st.Claim(s.ctx, dw.ClaimRequest{
-		Scope: s.scope, Kinds: kinds, Max: 1, Timeout: longLease, WorkerID: "w",
+		Scope: s.scope, Max: 1, Timeout: s.lease(), WorkerID: "w",
 	})
 	if err != nil {
 		s.t.Fatalf("Claim: %v", err)
 	}
 	if len(res.Leases) == 0 {
-		return dw.Lease{}, false
+		s.t.Fatal("Claim returned no lease, want one")
 	}
-	return res.Leases[0], true
+	return res.Leases[0]
 }
 
 // passLease moves past the current lease deadline, by driving the clock when
@@ -290,7 +301,7 @@ func (s *suite) claim() dw.Lease {
 func (s *suite) tryClaim(kinds ...string) (dw.Lease, bool) {
 	s.t.Helper()
 	res, err := s.st.Claim(s.ctx, dw.ClaimRequest{
-		Scope: s.scope, Kinds: kinds, Max: 1, Timeout: s.lease(), WorkerID: "w",
+		Scope: s.scope, Kinds: kinds, Max: 1, Timeout: longLease, WorkerID: "w",
 	})
 	if err != nil {
 		s.t.Fatalf("Claim: %v", err)
