@@ -1,9 +1,10 @@
 # ADR-0033: The blocking Claim wakeup protocol
 
-- **Status:** Accepted
+- **Status:** Accepted, amended by ADR-0044
 - **Date:** 2026-08-22
 - **Deciders:** Vladyslav Kazantsev (project owner)
 - **Amends:** —
+- **Amended by:** ADR-0044 §3 — the counting-signal doorbell described below was not built. All three backends broadcast; the reasoning and the trade are recorded there.
 - **Backing research:** docs/research/10-event-bus-and-delivery-semantics.md §7.2, §9; docs/research/03-leases-heartbeats-timeouts.md §2.1–§2.2; docs/research/04-postgres-backend.md §3; docs/research/05-redis-backend.md §10; docs/research/08-go-api-and-concurrency-design.md §9
 
 ## Context

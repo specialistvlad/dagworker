@@ -409,6 +409,67 @@ func leaseTests() []conformanceTest {
 			}
 		}},
 
+		{"T-INSPECT-LEASE-HOLDER", func(s *suite) {
+			// ClaimRequest.WorkerID is documented as identifying the claimant
+			// "for observability". That is only true if it can be observed:
+			// it was being written by two backends, dropped entirely by the
+			// third, and read back by none of them.
+			s.add(spec("a"))
+			if _, err := s.st.Claim(s.ctx, dw.ClaimRequest{
+				Scope: s.scope, Max: 1, Timeout: longLease, WorkerID: "worker-7",
+			}); err != nil {
+				s.t.Fatalf("Claim: %v", err)
+			}
+			insp, err := s.st.Inspect(s.ctx, s.scope, "a")
+			if err != nil {
+				s.t.Fatalf("Inspect: %v", err)
+			}
+			if insp.LeaseHolder != "worker-7" {
+				s.t.Fatalf("Inspect reported holder %q, want the claimant's WorkerID", insp.LeaseHolder)
+			}
+
+			// And once the node is no longer claimed, nobody holds it. A
+			// backend that simply leaves the last claimant's name in place
+			// would answer "who has this node" with a name that is months old.
+			if _, err := s.st.Cancel(s.ctx, s.scope, []dw.NodeID{"a"}); err != nil {
+				s.t.Fatalf("Cancel: %v", err)
+			}
+			insp, err = s.st.Inspect(s.ctx, s.scope, "a")
+			if err != nil {
+				s.t.Fatalf("Inspect: %v", err)
+			}
+			if insp.LeaseHolder != "" {
+				s.t.Fatalf("an unclaimed node reports holder %q", insp.LeaseHolder)
+			}
+		}},
+
+		{"T-LATE-ACK-IS-ACCEPTED-UNTIL-RECLAIMED", func(s *suite) {
+			// A lease deadline is enforced at reclaim time, not on the
+			// acknowledgement itself: a worker that finishes late, before
+			// anyone has taken the node away from it, has its result accepted.
+			//
+			// This is deliberate. The deadline exists so a dead worker's node
+			// becomes claimable again, not to throw away work that was
+			// genuinely done. Once the node has been reclaimed the epoch has
+			// moved and the same ack is rejected as a mismatch, which is what
+			// actually protects the second attempt.
+			s.configure(dw.ScopeConfig{MinLeaseTimeout: time.Millisecond})
+			s.add(spec("a"))
+			l := s.claimExpiring()
+			s.passLease()
+
+			if _, err := s.st.Complete(s.ctx, dw.CompleteRequest{Lease: l, Success: true}); err != nil {
+				s.t.Fatalf("a late ack on a node nobody reclaimed was rejected: %v", err)
+			}
+			n, err := s.st.GetNode(s.ctx, s.scope, "a")
+			if err != nil {
+				s.t.Fatalf("GetNode: %v", err)
+			}
+			if n.Status != dw.StatusSuccess {
+				s.t.Fatalf("node is %v after a late ack, want Success", n.Status)
+			}
+		}},
+
 		{"T-FENCE-DOUBLE-ACK", func(s *suite) {
 			s.add(spec("a"))
 			l := s.claim()

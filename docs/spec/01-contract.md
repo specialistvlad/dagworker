@@ -32,7 +32,10 @@ Key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, **MAY** are to be 
 - `NodeID` **MUST** be non-empty, valid UTF-8, and **MUST NOT** exceed 255 bytes. Unique per scope.
 - `Kind` **MAY** be empty (the default partition). **MUST NOT** exceed 64 bytes.
 - Scopes are created implicitly on first write. There is no `CreateScope`.
-- Violations return `ErrInvalidIdentifier` wrapping the offending field name.
+- Violations return an `*InvalidArgumentError` naming the offending field, which unwraps to
+  `ErrInvalidArgument`. (The design draft called this `ErrInvalidIdentifier`; a separate sentinel
+  for identifiers earned nothing over one `invalid argument` class carrying the field name, and
+  every adapter maps them to the same status anyway.)
 
 ---
 
@@ -288,8 +291,12 @@ Every node carries an integer topological rank `ord`. For a proposed edge `u →
 
 v1 ships **full Pearce–Kelly**: two bounded depth-first searches bounding the affected region,
 then a merge that reassigns the union of that region's existing rank values in sorted order
-(ADR-0004 as amended by ADR-0041). The library **MUST** export a `topo_fastpath_hit_ratio` metric
-as an observability signal.
+(ADR-0004 as amended by ADR-0041).
+
+**Not shipped:** the draft required a `topo_fastpath_hit_ratio` metric. The library exports no
+metrics at all — it has no metrics interface, by the same argument that keeps a logger out of the
+hot path — so this is an unmet requirement, not an implemented one. What is observable today is
+`ScopeStats`, which a host can export itself. A metrics facet is a v0.5 question.
 
 `AddEdge` into a terminal node returns `ErrAlreadyTerminal`. There is no `WithReopen` in v1.
 
@@ -323,9 +330,16 @@ returns `ErrScopeSealed`.
 ### 7.1 Kinds
 
 ```
+EventCreated     a node came into existence. Always Seq 1. Carries its initial status.
 EventTransition  a node's public Status changed. Durable tier where the backend supports it.
 EventReady       a node became claimable. Advisory doorbell. Coalescing. Never load-bearing.
 ```
+
+`EventCreated` was added during implementation. A subscriber maintaining a live view of the graph
+otherwise had to infer "this node is new" from `Seq == 1` on its first transition, which is a trick
+rather than a contract — and the inference is wrong for the one case that most needs to be right: a
+node inserted behind a predecessor that has already failed is **born terminal**, so its first event
+is not a transition from `StatusNew` at all.
 
 ### 7.2 Ordering and resume
 
@@ -370,10 +384,13 @@ Subscriber code **MUST NOT** be invoked inline on the producer's goroutine.
 v1 is **pure pull-based competition** (ADR-0013): every instance races on the storage's native
 atomic claim. No membership table, no partition ownership, no leader.
 
-The internal `PartitionAssigner` interface exists from the first commit with the trivial `P=1`
-implementation, so the v0.5 upgrade — jump consistent hash for node→partition, HRW for
-partition→instance — is an internal refactor and **MUST NOT** change any public signature
-(ADR-0014).
+**Not shipped:** ADR-0014 planned a `PartitionAssigner` interface present from the first commit
+with a trivial `P=1` implementation, so that the v0.5 upgrade — jump consistent hash for
+node→partition, HRW for partition→instance — would be an internal refactor. No such interface
+exists. What ADR-0014 was really protecting is intact and is what matters: **no public signature
+mentions a partition**, so introducing one later remains an internal change. The placeholder
+interface would have been an unused abstraction with exactly one implementation, which is the
+shape this project's own coding standards reject; the ADR's guarantee did not depend on it.
 
 Leader election is permitted **only** for low-frequency maintenance (sweep-shard rebalancing),
 never for dispatch (ADR-0015).
@@ -443,13 +460,26 @@ deletes a caller's data by default is a defect.
 
 Mandatory (ADR-0016 as amended): node CRUD, atomic graph mutation, and the four fenced primitives
 `Claim`, `Complete`, `Extend`, `Sweep`. A backend that cannot provide an atomic claim is not a
-backend; there is no fallback path and no `ErrCapability` escape for these.
+backend; there is no fallback path and no capability escape for these. The full mandatory set is
+the `Store` interface in `store.go`.
 
-Optional facets, discovered by type assertion and reported by `CapabilityReporter`: `Lister`,
-`DurableEventStream`, `ConditionalDeleter`, `BatchClaim`.
+Optional facets, discovered by type assertion and reported by `CapabilityReporter`:
 
-A backend **MUST NOT** emulate a primitive it lacks. It either declines with `ErrCapability` or the
-library uses a clearly-labelled degraded path the caller can detect via `Capabilities()`.
+| Facet | Capability bit | What declining it costs |
+|---|---|---|
+| `Lister` | `CapList` | `Manager.List` returns `ErrUnsupported`. |
+| `DurableEventStream` | `CapDurableEvents` | Events are in-process only; no resume across a restart. |
+| `Doorbell` | `CapDoorbell` | A blocking claim falls back to a timed poll. |
+| `Collector` | `CapCollect` | Terminal nodes are never garbage-collected. |
+
+The draft named `ConditionalDeleter` and `BatchClaim` as facets. Neither exists: conditional
+deletion turned out to be expressible through `RemoveNode`'s cascade policy, and batch claiming is
+mandatory rather than optional — `Claim` takes a `Max` and every backend implements it, so a facet
+for it would have had no non-implementer. `Doorbell` and `Collector` were discovered during
+implementation and took their place.
+
+A backend **MUST NOT** emulate a primitive it lacks. It declines with `ErrUnsupported`, which the
+caller can anticipate by asking `Capabilities()` rather than by attempting the call.
 
 **Memcached is rejected as a backend** (ADR-0017): no multi-key atomicity at any protocol version
 including the 1.6+ meta commands, no ordered structure for deadline sweeping, no durable CAS across
@@ -473,4 +503,4 @@ Each backend **MUST** publish what it actually guarantees. No backend may imply 
 |---|---|
 | in-memory | none — process lifetime only. Suitable when all workers share one process. |
 | Redis | async replication by default: a primary failover can lose ~1s of writes. `WAIT`/`WAITAOF` is available as an opt-in per-call cost. |
-| PostgreSQL | full WAL durability for nodes, edges, and events. The `leases` table is intentionally `UNLOGGED` — losing a revocable, deadline-bound grant on crash is correct behaviour. |
+| PostgreSQL | full WAL durability for nodes, edges, and events. |

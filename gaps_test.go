@@ -336,3 +336,65 @@ func TestSubscribeRejectsAnExpiredResumeCursor(t *testing.T) {
 		t.Fatalf("resuming from an evicted cursor gave %v, want ErrCursorExpired", err)
 	}
 }
+
+// TestPerScopeSweepIntervalIsHonoured pins down a per-scope setting that was
+// accepted, validated, persisted by every backend and echoed through both
+// adapters, and then read by nobody: the maintenance loop used the
+// Manager-wide construction-time default for every scope.
+//
+// The failure mode is the quiet kind. A scope configured to reclaim dead
+// workers every 200ms on a Manager whose default is a minute does exactly what
+// it was told to do in its configuration and nothing at all in practice, and
+// the only symptom is leases sitting expired for far longer than asked.
+func TestPerScopeSweepIntervalIsHonoured(t *testing.T) {
+	t.Parallel()
+
+	clk := dagstoretest.NewFakeClock()
+	st := memory.New(memory.WithClock(clk))
+	// A Manager-wide default far longer than the scope's own setting: if the
+	// scope's value is ignored, nothing is swept for a simulated hour.
+	m, err := dw.New(st,
+		dw.WithClock(clk),
+		dw.WithScopeDefaults(dw.ScopeConfig{SweepInterval: time.Hour}),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = m.Close(context.Background())
+		_ = st.Close(context.Background())
+	})
+	ctx := t.Context()
+
+	if err := m.Configure(ctx, "brisk", dw.ScopeConfig{
+		SweepInterval:       200 * time.Millisecond,
+		DefaultLeaseTimeout: time.Second,
+	}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	if err := m.AddNode(ctx, "brisk", "abandoned", nil); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	if _, err := m.TryClaim(ctx, "brisk"); err != nil {
+		t.Fatalf("TryClaim: %v", err)
+	}
+
+	// The worker dies. Past the lease deadline, and past several of the
+	// scope's own sweep intervals, but nowhere near the Manager's default.
+	clk.Advance(2 * time.Second)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		insp, err := m.Inspect(ctx, "brisk", "abandoned")
+		if err != nil {
+			t.Fatalf("Inspect: %v", err)
+		}
+		if insp.Phase != dw.PhaseClaimed {
+			return // reclaimed, which is the whole point
+		}
+		clk.Advance(200 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("a scope configured to sweep every 200ms was still holding an expired lease " +
+		"after simulated hours: its SweepInterval is being ignored")
+}

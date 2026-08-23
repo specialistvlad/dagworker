@@ -49,6 +49,16 @@ var (
 
 	// ErrLeaseExpired means the lease deadline has passed. Distinct from
 	// [ErrLeaseMismatch]: the epoch still matches, but the grant is stale.
+	//
+	// Nothing in this library returns it today. A lease deadline is enforced
+	// at reclaim time, not on the acknowledgement: a worker that finishes late,
+	// before anyone has taken the node away from it, has its result accepted
+	// (T-LATE-ACK-IS-ACCEPTED-UNTIL-RECLAIMED). Once the node has been
+	// reclaimed the epoch has moved and the same acknowledgement is rejected
+	// as [ErrLeaseMismatch], which is what actually protects the second
+	// attempt. The sentinel is kept because both adapters map it and a backend
+	// that does enforce the deadline directly has somewhere to report it; see
+	// ADR-0044.
 	ErrLeaseExpired = errors.New("dagworker: lease expired")
 
 	// ErrNoWork means a non-blocking claim found nothing ready. It is an

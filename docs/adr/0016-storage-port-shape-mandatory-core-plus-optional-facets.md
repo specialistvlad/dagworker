@@ -1,9 +1,10 @@
 # ADR-0016: Storage port shape: a mandatory core plus optional capability facets
 
-- **Status:** Accepted
+- **Status:** Accepted, amended by ADR-0044
 - **Date:** 2026-08-22
 - **Deciders:** Vladyslav Kazantsev (project owner)
 - **Amends:** —
+- **Amended by:** ADR-0044 §5 — the optional facets are `Lister`, `DurableEventStream`, `Doorbell` and `Collector`, not the `ConditionalDeleter`/`BatchClaim` pair named below, and declining one is `ErrUnsupported` rather than an `ErrCapability` sentinel.
 - **Backing research:** docs/research/06-memcached-and-storage-abstraction.md §B.2, §B.3, §B.4, §B.5
 
 ## Context

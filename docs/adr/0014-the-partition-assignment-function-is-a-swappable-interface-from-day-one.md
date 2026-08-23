@@ -1,9 +1,10 @@
 # ADR-0014: The partition assignment function is a swappable interface from day one
 
-- **Status:** Accepted
+- **Status:** Accepted, amended by ADR-0044
 - **Date:** 2026-08-22
 - **Deciders:** Vladyslav Kazantsev (project owner)
 - **Amends:** —
+- **Amended by:** ADR-0044 §2 — the `PartitionAssigner` interface described below was never written. What this ADR was protecting (no public signature mentions a partition) holds regardless.
 - **Backing research:** docs/research/07-work-distribution-across-instances.md §3.2, §3.3, §3.4,
   §7.1, §7.2, §7.3
 

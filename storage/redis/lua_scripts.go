@@ -267,6 +267,7 @@ local maxN = tonumber(ARGV[cursor]); cursor = cursor + 1
 local leaseMs = tonumber(ARGV[cursor]); cursor = cursor + 1
 local sweepBatch = tonumber(ARGV[cursor]); cursor = cursor + 1
 local maxInFlight = tonumber(ARGV[cursor]); cursor = cursor + 1
+local workerId = ARGV[cursor] or ''; cursor = cursor + 1
 
 local nowMsVal = nowMs()
 reclaimExpired(p, nowMsVal, sweepBatch)
@@ -306,7 +307,8 @@ while granted < maxN do
   local deadline = nowMsVal + leaseMs
   adjustBucket(p, oldPhase, oldStatus, -1)
   redis.call('HSET', kNode(p, bestId), 'phase', PHASE_CLAIMED, 'status', STATUS_INPROGRESS,
-    'epoch', epoch, 'attempt', attempt, 'updatedAt', nowMsVal, 'deadline', deadline)
+    'epoch', epoch, 'attempt', attempt, 'updatedAt', nowMsVal, 'deadline', deadline,
+    'worker', workerId)
   adjustBucket(p, PHASE_CLAIMED, STATUS_INPROGRESS, 1)
   redis.call('ZADD', kLeases(p), deadline, bestId)
 

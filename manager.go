@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -400,15 +401,30 @@ func validateEdges(edges []Edge) error {
 // by whoever next asks for work, and retention is off by default. This loop
 // exists so that a dead worker in an otherwise idle scope is noticed promptly
 // rather than at the next claim, which might be hours away.
+//
+// Each scope is swept on its own [ScopeConfig.SweepInterval], not on the
+// Manager's construction-time default. A per-scope setting that every backend
+// persists and every adapter echoes but nothing reads would be worse than no
+// setting at all: the scope does exactly what it was configured to do, and
+// nothing at all in practice. The loop's own tick is the shortest interval any
+// scope asks for, floored so a misconfigured scope cannot spin it.
 func (m *Manager) maintain(ctx context.Context) {
 	defer m.wg.Done()
 
-	interval := m.cfg.defaults.Resolved().SweepInterval
+	base := m.cfg.defaults.Resolved().SweepInterval
+	// The first tick is short rather than the Manager default: until the loop
+	// has listed the scopes it cannot know that one of them wants sweeping
+	// sooner than the default, and waiting out a long default to find out
+	// would make every short per-scope interval start late by up to that
+	// default. One extra wakeup at startup is the whole cost.
+	tick := minSweepTick
+	lastSwept := make(map[Scope]time.Time)
+
 	for {
 		select {
 		case <-m.closed:
 			return
-		case <-m.cfg.clock.After(interval):
+		case <-m.cfg.clock.After(tick):
 		}
 
 		scopes, err := m.store.Scopes(ctx)
@@ -418,17 +434,61 @@ func (m *Manager) maintain(ctx context.Context) {
 			}
 			continue
 		}
+
+		tick = base
+		live := make(map[Scope]struct{}, len(scopes))
 		for _, scope := range scopes {
 			if m.isClosed() {
 				return
 			}
-			// Each scope gets its own deadline. Without one, a single backend
-			// call that hangs stalls reclaim and retention for every other
-			// scope in the process, and does it silently: the loop is simply
-			// never seen again.
-			m.maintainScope(ctx, scope, interval)
+			live[scope] = struct{}{}
+			tick = min(tick, m.maintainScope(ctx, scope, lastSwept))
+		}
+		// A scope that has been removed must not keep a row in lastSwept
+		// forever; this loop outlives every scope it ever sees.
+		maps.DeleteFunc(lastSwept, func(s Scope, _ time.Time) bool {
+			_, ok := live[s]
+			return !ok
+		})
+		tick = max(tick, minSweepTick)
+	}
+}
+
+// minSweepTick floors how often the maintenance loop can wake, whatever a
+// scope asks for. A scope configured with a one-microsecond sweep interval is
+// a misconfiguration, and the loop's response to one should be "as often as is
+// sane", not "spin".
+const minSweepTick = 50 * time.Millisecond
+
+// maintainScope sweeps and collects one scope if its own interval has elapsed,
+// and returns how long until it is next due — which the caller folds into the
+// loop's next tick.
+func (m *Manager) maintainScope(ctx context.Context, scope Scope, lastSwept map[Scope]time.Time) time.Duration {
+	cfg, err := m.store.ScopeConfig(ctx, scope)
+	if err != nil {
+		// A scope that vanished between Scopes() and here is ordinary. Fall
+		// back to the Manager default rather than skipping the scope
+		// permanently.
+		cfg = m.cfg.defaults
+	}
+	interval := cfg.Resolved().SweepInterval
+
+	now := m.cfg.clock.Now()
+	if last, seen := lastSwept[scope]; seen {
+		if due := interval - now.Sub(last); due > 0 {
+			return due
 		}
 	}
+	lastSwept[scope] = now
+
+	// Each scope gets its own deadline. Without one, a single backend call that
+	// hangs stalls reclaim and retention for every other scope in the process,
+	// and does it silently: the loop is simply never seen again.
+	sctx, cancel := context.WithTimeout(ctx, maintenanceTimeout(interval))
+	defer cancel()
+	m.sweepScope(sctx, scope)
+	m.collectScope(sctx, scope, cfg)
+	return interval
 }
 
 // maintenanceTimeout bounds one scope's maintenance pass. It is derived from
@@ -436,13 +496,6 @@ func (m *Manager) maintain(ctx context.Context) {
 // rather than "the loop stopped".
 func maintenanceTimeout(interval time.Duration) time.Duration {
 	return min(max(interval*4, 5*time.Second), 2*time.Minute)
-}
-
-func (m *Manager) maintainScope(ctx context.Context, scope Scope, interval time.Duration) {
-	sctx, cancel := context.WithTimeout(ctx, maintenanceTimeout(interval))
-	defer cancel()
-	m.sweepScope(sctx, scope)
-	m.collectScope(sctx, scope)
 }
 
 func (m *Manager) sweepScope(ctx context.Context, scope Scope) {
@@ -460,13 +513,13 @@ func (m *Manager) sweepScope(ctx context.Context, scope Scope) {
 	}
 }
 
-func (m *Manager) collectScope(ctx context.Context, scope Scope) {
+// collectScope takes the scope's config from its caller rather than reading it
+// again: maintainScope has already paid for that round trip, and a second read
+// would double the maintenance loop's per-scope cost for an answer that cannot
+// have changed meaningfully in between.
+func (m *Manager) collectScope(ctx context.Context, scope Scope, cfg ScopeConfig) {
 	c, ok := m.store.(Collector)
 	if !ok || !m.caps.Has(CapCollect) {
-		return
-	}
-	cfg, err := m.store.ScopeConfig(ctx, scope)
-	if err != nil {
 		return
 	}
 	// Zero means disabled, not "immediately". A library that deletes a caller's

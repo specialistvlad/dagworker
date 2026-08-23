@@ -299,6 +299,7 @@ func (st *Store) Inspect(_ context.Context, name dw.Scope, id dw.NodeID) (dw.Ins
 		Deps:          r.deps,
 		Rank:          s.ord[h],
 		LeaseDeadline: unix(s.deadline[h]),
+		LeaseHolder:   heldBy(r.phase, r.worker),
 		LeaseEpoch:    r.epoch,
 		ReadyAt:       unix(s.readyAt[h]),
 	}
@@ -443,3 +444,14 @@ var (
 	_ dw.Collector          = (*Store)(nil)
 	_ dw.CapabilityReporter = (*Store)(nil)
 )
+
+// heldBy reports the lease holder only while the node is actually claimed.
+// Every backend leaves the worker name behind when a lease is reclaimed rather
+// than paying a write to clear a field nothing keys on, so the read side is
+// where "who holds it now" is decided.
+func heldBy(phase dw.Phase, worker string) string {
+	if phase != dw.PhaseClaimed {
+		return ""
+	}
+	return worker
+}

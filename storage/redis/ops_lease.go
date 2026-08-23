@@ -31,12 +31,12 @@ func (s *Store) Claim(ctx context.Context, req dw.ClaimRequest) (dw.ClaimResult,
 		max = 1
 	}
 
-	argv := make([]any, 0, 5+len(req.Kinds))
+	argv := make([]any, 0, 6+len(req.Kinds))
 	argv = append(argv, len(req.Kinds))
 	for _, k := range req.Kinds {
 		argv = append(argv, k)
 	}
-	argv = append(argv, max, durToMs(leaseFor), cfg.SweepBatchSize, cfg.MaxInFlight)
+	argv = append(argv, max, durToMs(leaseFor), cfg.SweepBatchSize, cfg.MaxInFlight, req.WorkerID)
 
 	header, effects, err := s.runScript(ctx, s.scripts.claim, req.Scope, argv...)
 	if err != nil {

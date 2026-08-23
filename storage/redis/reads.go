@@ -58,6 +58,7 @@ func (s *Store) Inspect(ctx context.Context, scope dw.Scope, id dw.NodeID) (dw.I
 		Phase:         dw.Phase(narrowU8(atoi64(n["phase"]))),
 		Rank:          atoi64(n["ord"]),
 		LeaseDeadline: msToTime(atoi64(n["deadline"])),
+		LeaseHolder:   heldBy(dw.Phase(narrowU8(atoi64(n["phase"]))), n["worker"]),
 		LeaseEpoch:    narrowU64(atoi64(n["epoch"])),
 		ReadyAt:       msToTime(atoi64(n["readyAt"])),
 	}
@@ -224,4 +225,15 @@ func (s *Store) CollectTerminal(ctx context.Context, scope dw.Scope, cutoff time
 			return deleted, false, nil
 		}
 	}
+}
+
+// heldBy reports the lease holder only while the node is actually claimed.
+// Every backend leaves the worker name behind when a lease is reclaimed rather
+// than paying a write to clear a field nothing keys on, so the read side is
+// where "who holds it now" is decided.
+func heldBy(phase dw.Phase, worker string) string {
+	if phase != dw.PhaseClaimed {
+		return ""
+	}
+	return worker
 }

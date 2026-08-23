@@ -348,6 +348,12 @@ type Inspection struct {
 	// LeaseDeadline is when the current lease expires. Zero if unclaimed.
 	LeaseDeadline time.Time
 
+	// LeaseHolder is the [ClaimRequest.WorkerID] of whoever holds the node's
+	// current lease, or "" if it is unclaimed or the claimant did not name
+	// itself. It is observability only: nothing in the protocol authenticates
+	// it or keys on it.
+	LeaseHolder string
+
 	// LeaseEpoch is the fencing epoch the node's current lease was granted at,
 	// which is what a holder must present to complete or extend it. Zero
 	// before the node's first claim. It is not [Node.Attempt]: see that
