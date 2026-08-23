@@ -3,6 +3,7 @@ package perf_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -107,12 +108,21 @@ func consumingIters(n int) int {
 	return max(1, min(measureIters, budget))
 }
 
-func sizes(t *testing.T) []int {
+// sizes chooses the sweep for one backend.
+//
+// A networked backend stops at 100,000 by default. Not because the guarantee is
+// weaker there -- TestMillionNodes checks a million on every backend -- but
+// because re-seeding a million rows once per operation per backend costs many
+// minutes of round trips to measure a ratio that 100,000 already establishes.
+// Set DAGWORKER_PERF_FULL=1 to sweep the whole range everywhere.
+func sizes(t *testing.T, b perf.Backend) []int {
 	t.Helper()
 	if testing.Short() {
 		return perf.SmallSizes
 	}
-	_ = t
+	if b.Networked && os.Getenv("DAGWORKER_PERF_FULL") == "" {
+		return perf.SmallSizes
+	}
 	return perf.Sizes
 }
 
@@ -131,7 +141,7 @@ func TestComplexity_Claim(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			sweep := sizes(t)
+			sweep := sizes(t, backend)
 			curve := make([]measurement, 0, len(sweep))
 			for _, n := range sweep {
 				st := backend.New(t)
@@ -163,7 +173,7 @@ func TestComplexity_GetNode(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			sweep := sizes(t)
+			sweep := sizes(t, backend)
 			curve := make([]measurement, 0, len(sweep))
 			for _, n := range sweep {
 				st := backend.New(t)
@@ -194,7 +204,7 @@ func TestComplexity_AddNodeCausal(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			sweep := sizes(t)
+			sweep := sizes(t, backend)
 			curve := make([]measurement, 0, len(sweep))
 			for _, n := range sweep {
 				st := backend.New(t)
@@ -227,7 +237,7 @@ func TestComplexity_CompleteFanOut(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			sweep := sizes(t)
+			sweep := sizes(t, backend)
 			curve := make([]measurement, 0, len(sweep))
 			for _, n := range sweep {
 				st := backend.New(t)
@@ -264,7 +274,7 @@ func TestComplexity_ScopeStats(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			sweep := sizes(t)
+			sweep := sizes(t, backend)
 			curve := make([]measurement, 0, len(sweep))
 			for _, n := range sweep {
 				st := backend.New(t)
@@ -332,3 +342,75 @@ func TestChainDrainsInLinearTime(t *testing.T) {
 }
 
 var _ = context.Background
+
+// TestMillionNodes is the headline claim, checked on every backend: a graph of
+// a million nodes, and per-operation costs that do not reflect its size.
+//
+// It seeds once and measures several operations against that one graph, rather
+// than letting each guard build its own. On a networked backend the seeding is
+// the expensive part -- two thousand round trips -- and paying it once per
+// backend instead of once per operation is the difference between a suite that
+// runs and one nobody waits for.
+func TestMillionNodes(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("seeds a million nodes")
+	}
+	const n = 1_000_000
+
+	for _, backend := range perf.Backends() {
+		t.Run(backend.Name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			st := backend.New(t)
+
+			seedStart := time.Now()
+			perf.SeedWide(t, st, "million", n)
+			t.Logf("seeded %d nodes in %v (%v per node)",
+				n, time.Since(seedStart), time.Since(seedStart)/n)
+
+			stats, err := st.ScopeStats(ctx, "million")
+			if err != nil {
+				t.Fatalf("ScopeStats: %v", err)
+			}
+			if stats.Total != n {
+				t.Fatalf("the scope holds %d nodes, want %d", stats.Total, n)
+			}
+
+			statsCost := timePerOp(t, 500, func(int) {
+				if _, err := st.ScopeStats(ctx, "million"); err != nil {
+					t.Fatalf("ScopeStats: %v", err)
+				}
+			})
+			getCost := timePerOp(t, 500, func(i int) {
+				if _, err := st.GetNode(ctx, "million", perf.NodeID((i*7919)%n)); err != nil {
+					t.Fatalf("GetNode: %v", err)
+				}
+			})
+
+			req := dw.ClaimRequest{Scope: "million", Max: 1, Timeout: time.Hour}
+			claimCost := timePerOp(t, 500, func(int) {
+				res, err := st.Claim(ctx, req)
+				if err != nil {
+					t.Fatalf("Claim: %v", err)
+				}
+				if len(res.Leases) == 0 {
+					t.Fatal("a million-node ready set produced no work")
+				}
+				if _, err := st.Complete(ctx, dw.CompleteRequest{Lease: res.Leases[0], Success: true}); err != nil {
+					t.Fatalf("Complete: %v", err)
+				}
+			})
+
+			t.Logf("at %d nodes: ScopeStats %v, GetNode %v, Claim+Complete %v",
+				n, statsCost, getCost, claimCost)
+
+			// ScopeStats is the sharpest signal here: it is a counter read, so
+			// any scan hiding behind it shows up as milliseconds rather than
+			// microseconds at this size.
+			if statsCost > 50*time.Millisecond {
+				t.Errorf("ScopeStats took %v on a million-node scope -- that is a scan, not a counter", statsCost)
+			}
+		})
+	}
+}
