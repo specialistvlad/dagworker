@@ -182,7 +182,27 @@ func TestStaleAckRejectedAsAborted(t *testing.T) {
 
 	// Push the store's own clock past the lease deadline: the node is now
 	// eligible for inline reclaim by the next claimant, per Store.Claim's
-	// contract ("should reclaim any expired lease they encounter").
+	// contract ("should reclaim any expired lease they encounter"). A short,
+	// real poll_timeout keeps this probe call from actually blocking: there
+	// is nothing ready for it to find yet, only the reclaim side effect this
+	// call triggers.
+	//
+	// The reclaimed node does not become ready in this same call: a timed-out
+	// attempt is recorded through the scope's ordinary retry policy, which
+	// schedules the next attempt behind a full-jitter backoff (ADR-0012)
+	// rather than making it claimable the instant it is reclaimed — the same
+	// backoff a genuine worker failure gets. This probe call is what makes
+	// that scheduling happen; it is expected to find no ready node itself.
+	h.clock.Advance(2 * time.Second)
+	if _, err := h.worker.ClaimNode(ctx, &pb.ClaimNodeRequest{
+		Scope:       "scope-b",
+		PollTimeout: durationpb.New(50 * time.Millisecond),
+	}); err != nil {
+		t.Fatalf("probe ClaimNode: %v", err)
+	}
+
+	// Clear the backoff window (bounded by the scope's default retry base
+	// delay, one second) so the rescheduled attempt is unconditionally ready.
 	h.clock.Advance(2 * time.Second)
 
 	second, err := h.worker.ClaimNode(ctx, &pb.ClaimNodeRequest{

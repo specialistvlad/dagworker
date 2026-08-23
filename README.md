@@ -137,6 +137,9 @@ that makes eviction indistinguishable from "never existed". A backend that can
 silently delete your graph should not be offered.
 See [ADR-0017](docs/adr/0017-memcached-rejected-as-storage-backend.md).
 
+All three pass the same suite, and the end-to-end suite runs every scenario
+against each of them -- including two instances competing for one graph.
+
 Every backend passes the same suite:
 
 ```go

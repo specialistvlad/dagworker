@@ -53,9 +53,18 @@ func claimOptionsFromWire(req claimRequest) []dagworker.ClaimOption {
 
 // handleClaim implements POST /v1/scopes/{scope}/nodes:claim: a Consul-style
 // blocking query (dossier 14 §2). It returns 200 with at least one lease, or
-// 204 with no body when the wait elapsed with nothing ready — by
-// construction, never 200 with an empty array, because the 200 branch below
-// is only reached after [dagworker.Manager.Claim] has already returned one.
+// 204 with no body when nothing was ready even after waiting — by
+// construction, never 200 with an empty array, since the 200 branch below is
+// only reached once leases is non-empty.
+//
+// The immediate attempt is a batch [dagworker.Manager.ClaimBatch] call, not
+// [dagworker.Manager.Claim]: Claim's own blocking loop checks ctx.Err() before
+// its first attempt, so handing it an already-expired context (an omitted or
+// zero "wait", clamped straight to a zero-duration deadline) would skip the
+// attempt entirely rather than performing the one immediate check every
+// blocking-query design promises. ClaimBatch has no such precondition, so it
+// is what actually guarantees "check once" means "check", not "maybe check
+// depending on a race with the deadline."
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	scope := dagworker.Scope(r.PathValue("scope"))
 
@@ -69,14 +78,51 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		s.writeProblem(w, r, err)
 		return
 	}
+	maxNodes := max(req.MaxNodes, 1)
+	claimOpts := claimOptionsFromWire(req)
+
+	leases, err := s.mgr.ClaimBatch(r.Context(), scope, maxNodes, claimOpts...)
+	if err != nil {
+		s.writeProblem(w, r, err)
+		return
+	}
+
+	if len(leases) == 0 && wait > 0 {
+		leases, err = s.blockForOne(r, scope, wait, maxNodes, claimOpts)
+		if err != nil {
+			s.writeProblem(w, r, err)
+			return
+		}
+	}
+
+	if len(leases) == 0 {
+		// Having no work is ordinary, never an error (adapter contract §2):
+		// the immediate check found nothing, and either wait was zero or the
+		// blocking wait elapsed with nothing either.
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	wire := make([]leaseWire, len(leases))
+	for i, l := range leases {
+		wire[i] = leaseToWire(l)
+	}
+	writeJSON(w, http.StatusOK, "application/json", claimResponse{Leases: wire})
+}
+
+// blockForOne waits up to wait for a single ready node via
+// [dagworker.Manager.Claim] — the library's own three-part wakeup protocol
+// (immediate attempt, doorbell, jittered poll) — and, if one turns up, tops
+// the batch up to maxNodes with a further non-blocking [Manager.ClaimBatch]
+// call. It returns a nil, non-error slice when the wait elapsed with nothing
+// found, which the caller turns into 204.
+func (s *Server) blockForOne(
+	r *http.Request, scope dagworker.Scope, wait time.Duration, maxNodes int, claimOpts []dagworker.ClaimOption,
+) ([]dagworker.Lease, error) {
 	// Server-side jitter, added to the server's own deadline rather than left
 	// to the client, so a fleet that reconnected in the same instant times out
 	// at visibly different moments instead of retrying in lockstep forever
 	// (dossier 14 §2.3).
 	wait += s.opts.jitter(wait / 16)
-
-	maxNodes := max(req.MaxNodes, 1)
-	claimOpts := claimOptionsFromWire(req)
 
 	cctx, cancel := context.WithTimeout(r.Context(), wait)
 	defer cancel()
@@ -94,40 +140,23 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	lease, err := s.mgr.Claim(cctx, scope, claimOpts...)
 	switch {
 	case err == nil:
-		s.respondClaimed(w, r, scope, lease, maxNodes, claimOpts)
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
-		// Having no work is ordinary, never an error (adapter contract §2):
-		// timeout-with-nothing-found and "the client hung up while we waited"
-		// both resolve the same way, with nothing left to tell anyone.
-		w.WriteHeader(http.StatusNoContent)
-	default:
-		s.writeProblem(w, r, err)
-	}
-}
-
-// respondClaimed writes the 200 response for a successful claim, topping the
-// batch up to maxNodes with an additional non-blocking [Manager.ClaimBatch]
-// call when the caller asked for more than one. The top-up is genuinely
-// best-effort: a failure there does not undo the lease already granted by the
-// blocking call above, so its error is logged and otherwise ignored rather
-// than turning a successful claim into a failed response.
-func (s *Server) respondClaimed(
-	w http.ResponseWriter, r *http.Request, scope dagworker.Scope,
-	first dagworker.Lease, maxNodes int, claimOpts []dagworker.ClaimOption,
-) {
-	leases := []dagworker.Lease{first}
-	if maxNodes > 1 {
-		extra, err := s.mgr.ClaimBatch(r.Context(), scope, maxNodes-1, claimOpts...)
-		if err != nil {
-			s.opts.logger.WarnContext(r.Context(), "dagworker/http: batch top-up after claim failed",
-				"scope", scope, "error", err)
-		} else {
-			leases = append(leases, extra...)
+		leases := []dagworker.Lease{lease}
+		if maxNodes > 1 {
+			// Genuinely best-effort: a failure here does not undo the lease
+			// already granted above, so it is logged and otherwise ignored
+			// rather than turning a successful claim into a failed response.
+			extra, topUpErr := s.mgr.ClaimBatch(r.Context(), scope, maxNodes-1, claimOpts...)
+			if topUpErr != nil {
+				s.opts.logger.WarnContext(r.Context(), "dagworker/http: batch top-up after claim failed",
+					"scope", scope, "error", topUpErr)
+			} else {
+				leases = append(leases, extra...)
+			}
 		}
+		return leases, nil
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+		return nil, nil
+	default:
+		return nil, err
 	}
-	wire := make([]leaseWire, len(leases))
-	for i, l := range leases {
-		wire[i] = leaseToWire(l)
-	}
-	writeJSON(w, http.StatusOK, "application/json", claimResponse{Leases: wire})
 }
