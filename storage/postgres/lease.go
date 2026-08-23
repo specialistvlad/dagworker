@@ -52,9 +52,7 @@ func (e *engine) claimOne(ctx context.Context, kinds []string, leaseFor time.Dur
 		}
 		return nil, dw.Effect{}, fmt.Errorf("postgres: claim: %w", err)
 	}
-	if err := e.moveBucket(ctx, dw.PhaseReady, dw.StatusNew, n.Phase, n.Status); err != nil {
-		return nil, dw.Effect{}, err
-	}
+	e.moveBucket(dw.PhaseReady, dw.StatusNew, n.Phase, n.Status)
 	ef, err := e.insertEvent(ctx, n.NodeID, n.Kind, dw.EventTransition, dw.StatusNew, n.Status, n.Reason, n.Message, n.Attempt, n.Seq)
 	if err != nil {
 		return nil, dw.Effect{}, err
@@ -73,6 +71,10 @@ func (e *engine) claimLoop(ctx context.Context, cfg dw.ScopeConfig, scopeName st
 		if err := e.tx.QueryRow(ctx, `SELECT stat_in_progress FROM dagw.scopes WHERE scope = $1`, scopeName).Scan(&inProgress); err != nil {
 			return dw.ClaimResult{}, fmt.Errorf("postgres: Claim: in-flight count: %w", err)
 		}
+		// Counters are accumulated and written once at the end of the
+		// transaction, so the stored value is missing anything this
+		// transaction has already done -- an inline reclaim, for instance.
+		inProgress += e.pendingStat("stat_in_progress")
 	}
 
 	for len(res.Leases) < want {
@@ -138,7 +140,7 @@ func (s *Store) Claim(ctx context.Context, req dw.ClaimRequest) (dw.ClaimResult,
 	}
 	res.Effects = append(append(reclaimEffects, promoted...), res.Effects...)
 
-	if err := eng.notifyIfDirty(ctx); err != nil {
+	if err := eng.finalize(ctx); err != nil {
 		return dw.ClaimResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -360,7 +362,7 @@ func (s *Store) Complete(ctx context.Context, req dw.CompleteRequest) (dw.Comple
 		return dw.CompleteResult{}, err
 	}
 
-	if err := eng.notifyIfDirty(ctx); err != nil {
+	if err := eng.finalize(ctx); err != nil {
 		return dw.CompleteResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -505,7 +507,7 @@ func (s *Store) Sweep(ctx context.Context, scope dw.Scope, limit int) (dw.SweepR
 	}
 	res.Effects = append(res.Effects, promoted...)
 
-	if err := eng.notifyIfDirty(ctx); err != nil {
+	if err := eng.finalize(ctx); err != nil {
 		return dw.SweepResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

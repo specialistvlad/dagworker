@@ -200,7 +200,7 @@ func (s *Store) AddNodes(ctx context.Context, scope dw.Scope, specs []dw.NodeSpe
 	}
 	effects = append(effects, more...)
 
-	if err := eng.notifyIfDirty(ctx); err != nil {
+	if err := eng.finalize(ctx); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -249,7 +249,7 @@ func beginGraphTx(ctx context.Context, s *Store, scope dw.Scope, op string) (pgx
 // finishGraphTx flushes notifications and commits: the identical tail of every
 // graph mutation.
 func finishGraphTx(ctx context.Context, tx pgx.Tx, eng *engine, op string, effects []dw.Effect) ([]dw.Effect, error) {
-	if err := eng.notifyIfDirty(ctx); err != nil {
+	if err := eng.finalize(ctx); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -533,7 +533,7 @@ func (s *Store) CancelScope(ctx context.Context, scope dw.Scope) ([]dw.Effect, e
 		effects = append(effects, more...)
 	}
 
-	if err := eng.notifyIfDirty(ctx); err != nil {
+	if err := eng.finalize(ctx); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -552,13 +552,8 @@ func (s *Store) CancelScope(ctx context.Context, scope dw.Scope) ([]dw.Effect, e
 // It does not touch edges: the caller detaches those first, because what should
 // happen to a successor depends on why the node is going away.
 func deleteNodeRow(ctx context.Context, tx pgx.Tx, eng *engine, scope dw.Scope, n nodeRow) error {
-	if err := eng.leaveBucket(ctx, n.Phase, n.Status); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE dagw.scopes SET stat_total = stat_total - 1 WHERE scope = $1`, string(scope)); err != nil {
-		return fmt.Errorf("postgres: delete node: stat_total: %w", err)
-	}
+	eng.leaveBucket(n.Phase, n.Status)
+	eng.addTotal(-1)
 	if _, err := tx.Exec(ctx, `DELETE FROM dagw.nodes WHERE id = $1`, n.ID); err != nil {
 		return fmt.Errorf("postgres: delete node: %w", err)
 	}
