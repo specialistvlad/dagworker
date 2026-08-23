@@ -78,7 +78,7 @@ logs: ## Tail the test databases' logs
 integration: up ## Run every suite against real PostgreSQL and Redis
 	@for m in $(MODULES); do \
 		echo "==> integration $$m"; \
-		(cd $$m && DAGWORKER_INTEGRATION=1 go test -count=1 -race -tags=integration ./...) || exit 1; \
+		(cd $$m && DAGWORKER_INTEGRATION=1 go test -count=1 -race -tags=integration -timeout 25m ./...) || exit 1; \
 	done
 
 .PHONY: cover
@@ -113,7 +113,7 @@ million: up reset-db ## Measure every backend at 1,000,000 nodes (slow: ~25 min)
 	@# pipeline exit with grep's status, so a failed measurement would report
 	@# success. The log is kept on failure so there is something to read.
 	@log=$$(mktemp -t dagworker-million); \
-	  (cd test/perf && DAGWORKER_INTEGRATION=1 go test -count=1 -tags=integration \
+	  (cd test/perf && DAGWORKER_INTEGRATION=1 DAGWORKER_MILLION=1 go test -count=1 -tags=integration \
 	      -timeout 60m -run TestMillionNodes -v ./...) > $$log 2>&1; \
 	  status=$$?; \
 	  grep -E 'seeded|at 1000000|--- (PASS|FAIL)' $$log || true; \
