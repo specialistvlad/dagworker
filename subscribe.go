@@ -1,0 +1,316 @@
+package dagworker
+
+import (
+	"context"
+	"fmt"
+	"sync"
+)
+
+// Subscription is a stream of [Event]s. Close it when finished, or cancel the
+// context passed to [Manager.Subscribe]; either releases it.
+type Subscription struct {
+	m    *Manager
+	id   int64
+	opts SubscribeOptions
+	pol  OverflowPolicy
+	ch   chan Event
+
+	mu      sync.Mutex
+	err     error
+	done    bool
+	gap     bool
+	dropped uint64
+	closeCh chan struct{}
+}
+
+// Events returns the channel. It is closed when the subscription ends; check
+// [Subscription.Err] afterwards to learn whether that was a clean shutdown or a
+// failure such as [ErrSubscriberLagged].
+func (s *Subscription) Events() <-chan Event { return s.ch }
+
+// Err returns why the subscription ended, or nil if it ended cleanly or is
+// still running.
+func (s *Subscription) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
+// Dropped returns how many events this subscription has missed under
+// [OverflowDropOldest]. It is a truthful counter, not an estimate: a consumer
+// that finds it non-zero has definitely missed transitions and should re-read
+// the state it cares about.
+func (s *Subscription) Dropped() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dropped
+}
+
+// Close ends the subscription. It is idempotent.
+func (s *Subscription) Close() error {
+	s.m.dropSub(s.id)
+	s.finish(nil)
+	return nil
+}
+
+// finish closes the subscription exactly once, recording why.
+func (s *Subscription) finish(err error) {
+	s.mu.Lock()
+	if s.done {
+		s.mu.Unlock()
+		return
+	}
+	s.done = true
+	if s.err == nil {
+		s.err = err
+	}
+	s.mu.Unlock()
+
+	close(s.closeCh)
+	close(s.ch)
+}
+
+func (s *Subscription) isDone() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.done
+}
+
+// offer delivers one event without ever blocking the caller. The caller is
+// whoever just completed a node, and making a scheduler wait on an observer is
+// how one slow consumer stalls everyone.
+func (s *Subscription) offer(ev Event) {
+	s.mu.Lock()
+	if s.done {
+		s.mu.Unlock()
+		return
+	}
+	if s.gap {
+		ev.Gap = true
+	}
+	s.mu.Unlock()
+
+	select {
+	case s.ch <- ev:
+		s.mu.Lock()
+		s.gap = false
+		s.mu.Unlock()
+		return
+	default:
+	}
+
+	if s.pol == OverflowCloseSlow {
+		s.m.dropSub(s.id)
+		s.finish(ErrSubscriberLagged)
+		return
+	}
+
+	// Drop the oldest and take its place. Both steps are non-blocking, so a
+	// consumer that drains concurrently can make one of them a no-op; that
+	// costs an event, which is exactly what this policy promises.
+	select {
+	case <-s.ch:
+	default:
+	}
+	s.mu.Lock()
+	s.dropped++
+	s.gap = true
+	ev.Gap = true
+	s.mu.Unlock()
+
+	select {
+	case s.ch <- ev:
+		s.mu.Lock()
+		s.gap = false
+		s.mu.Unlock()
+	default:
+	}
+}
+
+// Subscribe returns a stream of events.
+//
+// This is the observation feed, deliberately separate from claiming work.
+// Nothing about correctness depends on an event arriving: readiness is always
+// re-derivable from storage, so a missed or duplicated event costs latency, not
+// a wrong answer. Do not build a set of node IDs from [EventReady] and treat it
+// as authoritative.
+//
+// With Durable set, the stream comes from the backend's own replayable log and
+// can be resumed from a [Cursor]; a backend that cannot genuinely provide
+// at-least-once delivery returns [ErrUnsupported] rather than quietly giving
+// you something weaker.
+func (m *Manager) Subscribe(ctx context.Context, opts SubscribeOptions) (*Subscription, error) {
+	if m.isClosed() {
+		return nil, ErrClosed
+	}
+	if err := opts.validate(); err != nil {
+		return nil, err
+	}
+
+	size := opts.BufferSize
+	if size <= 0 {
+		size = m.cfg.subscriberBuffer
+	}
+	pol := m.cfg.overflow
+	if opts.Overflow != nil {
+		pol = *opts.Overflow
+	}
+
+	s := &Subscription{
+		m:       m,
+		opts:    opts,
+		pol:     pol,
+		ch:      make(chan Event, size),
+		closeCh: make(chan struct{}),
+	}
+
+	if opts.Durable || opts.From != 0 || opts.Replay {
+		if err := m.startDurable(ctx, s, opts); err != nil {
+			return nil, err
+		}
+		return s, nil
+	}
+
+	m.mu.Lock()
+	m.nextSub++
+	s.id = m.nextSub
+	m.subs[s.id] = s
+	m.mu.Unlock()
+
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		select {
+		case <-ctx.Done():
+			m.dropSub(s.id)
+			s.finish(ctx.Err())
+		case <-s.closeCh:
+		case <-m.closed:
+		}
+	}()
+	return s, nil
+}
+
+// startDurable backs a subscription with the store's replayable log instead of
+// the in-process fan-out, which is what makes resuming from a cursor possible.
+func (m *Manager) startDurable(ctx context.Context, s *Subscription, opts SubscribeOptions) error {
+	w, ok := m.store.(DurableEventStream)
+	if !ok || !m.caps.Has(CapDurableEvents) {
+		return fmt.Errorf("%w: durable subscriptions", ErrUnsupported)
+	}
+	src, err := w.Watch(ctx, WatchRequest{Scope: opts.Scope, From: opts.From, Replay: opts.Replay})
+	if err != nil {
+		return err
+	}
+
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		defer s.finish(ctx.Err())
+		for {
+			select {
+			case ev, open := <-src:
+				if !open {
+					return
+				}
+				if !opts.wants(ev) {
+					continue
+				}
+				s.offer(ev)
+				if s.isDone() {
+					return
+				}
+			case <-s.closeCh:
+				return
+			case <-m.closed:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return nil
+}
+
+func (m *Manager) dropSub(id int64) {
+	m.mu.Lock()
+	delete(m.subs, id)
+	m.mu.Unlock()
+}
+
+// publish fans a store operation's effects out to the in-process subscribers.
+//
+// It runs after the store write has committed and carries the sequence and
+// cursor the store assigned, so a subscriber never sees an event describing a
+// state that a read would not yet show it.
+func (m *Manager) publish(scope Scope, effects []Effect) {
+	if len(effects) == 0 {
+		return
+	}
+	m.mu.RLock()
+	if len(m.subs) == 0 {
+		m.mu.RUnlock()
+		return
+	}
+	subs := make([]*Subscription, 0, len(m.subs))
+	for _, s := range m.subs {
+		subs = append(subs, s)
+	}
+	m.mu.RUnlock()
+
+	for _, ef := range effects {
+		ev := Event{
+			Kind:     ef.Kind,
+			Scope:    scope,
+			NodeID:   ef.NodeID,
+			Seq:      ef.Seq,
+			Cursor:   ef.Cursor,
+			From:     ef.From,
+			To:       ef.To,
+			Reason:   ef.Reason,
+			Message:  ef.Message,
+			Attempt:  ef.Attempt,
+			NodeKind: ef.NodeKind,
+			At:       ef.At,
+		}
+		for _, s := range subs {
+			if s.opts.wants(ev) {
+				s.offer(ev)
+			}
+		}
+	}
+}
+
+// Handle is sugar over [Manager.Subscribe] for callers who would rather write a
+// function than a receive loop. fn runs on a goroutine the Manager owns and
+// must not block for long: it is subject to the same overflow policy as the
+// channel it stands in for, so a slow handler drops events.
+//
+// The returned stop function ends the subscription and waits for any in-flight
+// call to fn to return.
+func (m *Manager) Handle(ctx context.Context, opts SubscribeOptions, fn func(Event)) (stop func(), err error) {
+	if fn == nil {
+		return nil, invalidArg("handler", "must not be nil")
+	}
+	sub, err := m.Subscribe(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for ev := range sub.Events() {
+			fn(ev)
+		}
+	}()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			_ = sub.Close()
+			wg.Wait()
+		})
+	}, nil
+}

@@ -106,14 +106,15 @@ const (
 	// Choose it when silently missing a transition is worse than losing the
 	// subscription, since it forces the consumer to resynchronise explicitly.
 	OverflowCloseSlow
-
-	// OverflowBlock applies backpressure to this subscription's own delivery
-	// goroutine only. The producer still never blocks; the subscription simply
-	// stops draining its own buffer until the consumer catches up. Events
-	// beyond the buffer are still dropped once it fills, so this differs from
-	// OverflowDropOldest only in how long delivery waits first.
-	OverflowBlock
 )
+
+// There is deliberately no blocking policy. Blocking a subscriber's delivery
+// requires somewhere to put the events that arrive meanwhile: either an
+// unbounded buffer, which trades a dropped event for an out-of-memory crash, or
+// backpressure onto the caller who just completed a node — which makes one slow
+// observer able to stall the scheduler for everyone. A caller that must not
+// miss a transition should subscribe with Durable set and resume from a cursor,
+// which is the mechanism that actually provides that guarantee.
 
 // String implements [fmt.Stringer].
 func (p OverflowPolicy) String() string {
@@ -122,15 +123,13 @@ func (p OverflowPolicy) String() string {
 		return "drop_oldest"
 	case OverflowCloseSlow:
 		return "close_slow"
-	case OverflowBlock:
-		return "block"
 	default:
 		return fmt.Sprintf("overflow(%d)", uint8(p))
 	}
 }
 
 func (p OverflowPolicy) validate() error {
-	if p > OverflowBlock {
+	if p > OverflowCloseSlow {
 		return invalidArg("overflow policy", "unknown value %d", uint8(p))
 	}
 	return nil

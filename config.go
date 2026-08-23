@@ -206,6 +206,7 @@ type config struct {
 	defaults         ScopeConfig
 	subscriberBuffer int
 	overflow         OverflowPolicy
+	pollInterval     time.Duration
 	sweepDisabled    bool
 }
 
@@ -260,6 +261,14 @@ func WithSubscriberBuffer(n int) Option {
 // WithOverflowPolicy sets the default policy for subscribers that fall behind.
 func WithOverflowPolicy(p OverflowPolicy) Option {
 	return optionFunc(func(cfg *config) { cfg.overflow = p })
+}
+
+// WithPollInterval sets the upper bound on how long a blocking claim waits
+// before retrying. It is jittered on every wait, and it is a fallback: on a
+// backend with a doorbell, a worker normally wakes as soon as work appears and
+// never reaches this bound.
+func WithPollInterval(d time.Duration) Option {
+	return optionFunc(func(cfg *config) { cfg.pollInterval = d })
 }
 
 // WithoutBackgroundSweeper disables the periodic lease reclaimer. Reclaim still

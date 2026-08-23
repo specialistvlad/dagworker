@@ -352,11 +352,14 @@ write they describe, so a subscriber can detect that its own read is stale.
 The fan-out point **MUST NOT** block on any subscriber. Each subscription has a bounded channel and
 an `OverflowPolicy`:
 
-- `DropOldestAndMarkGap` (default) — drop the oldest buffered event, set a gap flag the subscriber
-  observes on its next receive;
-- `CloseSlow` — terminate the subscription with `ErrSubscriberLagged`;
-- `Block` — apply backpressure to *that subscriber's own delivery goroutine only*, never to the
-  producer.
+- `DropOldest` (default) — drop the oldest buffered event and set `Event.Gap` on the next one
+  delivered, so the subscriber is told, truthfully, that it missed something;
+- `CloseSlow` — terminate the subscription with `ErrSubscriberLagged`.
+
+There is deliberately **no** blocking policy. Blocking delivery needs somewhere to put the events
+that arrive meanwhile: an unbounded buffer trades a dropped event for an OOM, and backpressure onto
+the completing caller lets one slow observer stall the scheduler. A subscriber that must not miss a
+transition uses `Durable` and resumes from a `Cursor`.
 
 Subscriber code **MUST NOT** be invoked inline on the producer's goroutine.
 
