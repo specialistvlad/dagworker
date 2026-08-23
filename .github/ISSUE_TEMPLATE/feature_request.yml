@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a capability the library does not have
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Some things are deliberate non-goals — see the README's "What it
+        deliberately is not", and `docs/adr/` for decisions already taken.
+        Arguing against an existing ADR is welcome; please reference it.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that you currently cannot?
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you do instead today
+      description: And why that is not good enough.
+    validations:
+      required: true
+  - type: textarea
+    id: shape
+    attributes:
+      label: Shape of a solution
+      description: Optional. An API sketch, or a system that does it well.

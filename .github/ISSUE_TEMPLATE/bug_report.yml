@@ -1,0 +1,42 @@
+name: Bug report
+description: Something behaves differently from the documented contract
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: `docs/spec/01-contract.md` is normative. If the behaviour
+        you saw matches the contract, this may be a documentation issue or a
+        feature request instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: And what the contract says should have happened.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Smallest graph that reproduces it
+      description: |
+        Ideally a Go test. For anything involving leases or timing, please
+        include `Manager.Inspect` output for the stuck node — it answers most
+        of the first round of questions.
+      render: go
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options: [in-memory, Redis, PostgreSQL, other]
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Go version and dagworker version
+      placeholder: "go1.25.1, dagworker v0.2.0"
+    validations:
+      required: true

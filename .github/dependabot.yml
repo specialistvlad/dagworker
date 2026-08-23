@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # One entry per module: this repository is a multi-module workspace and
+  # Dependabot does not discover nested go.mod files on its own.
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: gomod
+    directory: /storage/postgres
+    schedule: { interval: weekly }
+  - package-ecosystem: gomod
+    directory: /storage/redis
+    schedule: { interval: weekly }
+  - package-ecosystem: gomod
+    directory: /test/perf
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
