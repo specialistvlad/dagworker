@@ -39,12 +39,12 @@ RETURNING `+nodeColumnsAliased("n"),
 // claimOne runs claimSQL and, on a grant, records the transition. It returns
 // a nil row with no error when nothing was ready — an ordinary outcome, not
 // a failure, exactly like the port's own doc comment on Claim requires.
-func (e *engine) claimOne(kinds []string, leaseFor time.Duration, workerID string) (*nodeRow, dw.Effect, error) {
+func (e *engine) claimOne(ctx context.Context, kinds []string, leaseFor time.Duration, workerID string) (*nodeRow, dw.Effect, error) {
 	var kindsArg []string
 	if len(kinds) > 0 {
 		kindsArg = kinds
 	}
-	row := e.tx.QueryRow(e.ctx, claimSQL, e.scope, kindsArg, workerID, leaseFor.Seconds())
+	row := e.tx.QueryRow(ctx, claimSQL, e.scope, kindsArg, workerID, leaseFor.Seconds())
 	n, err := scanNode(row)
 	if err != nil {
 		if isNoRows(err) {
@@ -52,14 +52,51 @@ func (e *engine) claimOne(kinds []string, leaseFor time.Duration, workerID strin
 		}
 		return nil, dw.Effect{}, fmt.Errorf("postgres: claim: %w", err)
 	}
-	if err := e.moveBucket(dw.PhaseReady, dw.StatusNew, n.Phase, n.Status); err != nil {
+	if err := e.moveBucket(ctx, dw.PhaseReady, dw.StatusNew, n.Phase, n.Status); err != nil {
 		return nil, dw.Effect{}, err
 	}
-	ef, err := e.insertEvent(n.NodeID, n.Kind, dw.EventTransition, dw.StatusNew, n.Status, n.Reason, n.Message, n.Attempt, n.Seq)
+	ef, err := e.insertEvent(ctx, n.NodeID, n.Kind, dw.EventTransition, dw.StatusNew, n.Status, n.Reason, n.Message, n.Attempt, n.Seq)
 	if err != nil {
 		return nil, dw.Effect{}, err
 	}
 	return &n, ef, nil
+}
+
+// claimLoop grants up to want leases, honouring MaxInFlight, stopping as
+// soon as claimOne finds nothing left ready. Split out of Claim so the
+// method itself reads as setup, work, teardown.
+func (e *engine) claimLoop(ctx context.Context, cfg dw.ScopeConfig, scopeName string, req dw.ClaimRequest, want int, leaseFor time.Duration) (dw.ClaimResult, error) {
+	var res dw.ClaimResult
+
+	var inProgress int64
+	if cfg.MaxInFlight > 0 {
+		if err := e.tx.QueryRow(ctx, `SELECT stat_in_progress FROM dagw.scopes WHERE scope = $1`, scopeName).Scan(&inProgress); err != nil {
+			return dw.ClaimResult{}, fmt.Errorf("postgres: Claim: in-flight count: %w", err)
+		}
+	}
+
+	for len(res.Leases) < want {
+		if cfg.MaxInFlight > 0 && inProgress >= int64(cfg.MaxInFlight) {
+			break
+		}
+		n, ef, err := e.claimOne(ctx, req.Kinds, leaseFor, req.WorkerID)
+		if err != nil {
+			return dw.ClaimResult{}, err
+		}
+		if n == nil {
+			break
+		}
+		inProgress++
+		res.Effects = append(res.Effects, ef)
+		res.Leases = append(res.Leases, dw.Lease{
+			Scope:    req.Scope,
+			NodeID:   dw.NodeID(n.NodeID),
+			Epoch:    n.Epoch,
+			Deadline: derefTime(n.Deadline),
+			Node:     n.snapshot(),
+		})
+	}
+	return res, nil
 }
 
 // Claim implements [dagworker.Store].
@@ -84,54 +121,24 @@ func (s *Store) Claim(ctx context.Context, req dw.ClaimRequest) (dw.ClaimResult,
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	eng := newEngine(ctx, tx, scopeName, cfg, s.jitter)
+	eng := newEngine(tx, scopeName, cfg, s.jitter)
 
-	var res dw.ClaimResult
-	reclaimEffects, _, _, err := eng.reclaimExpired(cfg.SweepBatchSize)
+	reclaimEffects, _, _, err := eng.reclaimExpired(ctx, cfg.SweepBatchSize)
 	if err != nil {
 		return dw.ClaimResult{}, err
 	}
-	res.Effects = append(res.Effects, reclaimEffects...)
-
-	promoted, err := eng.promoteScheduled()
+	promoted, err := eng.promoteScheduled(ctx)
 	if err != nil {
 		return dw.ClaimResult{}, err
 	}
-	res.Effects = append(res.Effects, promoted...)
 
-	want := max(req.Max, 1)
-	leaseFor := cfg.ClampLease(req.Timeout)
-
-	var inProgress int64
-	if cfg.MaxInFlight > 0 {
-		if err := tx.QueryRow(ctx, `SELECT stat_in_progress FROM dagw.scopes WHERE scope = $1`, scopeName).Scan(&inProgress); err != nil {
-			return dw.ClaimResult{}, fmt.Errorf("postgres: Claim: in-flight count: %w", err)
-		}
+	res, err := eng.claimLoop(ctx, cfg, scopeName, req, max(req.Max, 1), cfg.ClampLease(req.Timeout))
+	if err != nil {
+		return dw.ClaimResult{}, err
 	}
+	res.Effects = append(append(reclaimEffects, promoted...), res.Effects...)
 
-	for len(res.Leases) < want {
-		if cfg.MaxInFlight > 0 && inProgress >= int64(cfg.MaxInFlight) {
-			break
-		}
-		n, ef, err := eng.claimOne(req.Kinds, leaseFor, req.WorkerID)
-		if err != nil {
-			return dw.ClaimResult{}, err
-		}
-		if n == nil {
-			break
-		}
-		inProgress++
-		res.Effects = append(res.Effects, ef)
-		res.Leases = append(res.Leases, dw.Lease{
-			Scope:    req.Scope,
-			NodeID:   dw.NodeID(n.NodeID),
-			Epoch:    n.Epoch,
-			Deadline: derefTime(n.Deadline),
-			Node:     n.snapshot(),
-		})
-	}
-
-	if err := eng.notifyIfDirty(); err != nil {
+	if err := eng.notifyIfDirty(ctx); err != nil {
 		return dw.ClaimResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -145,8 +152,8 @@ func (s *Store) Claim(ctx context.Context, req dw.ClaimRequest) (dw.ClaimResult,
 // performs. Split out because memory's failAttempt likewise mutates these
 // fields before calling schedule, and the two together are what the single
 // EventTransition this produces describes.
-func (e *engine) setRetryFields(n *nodeRow, reason dw.Reason, message string) error {
-	_, err := e.tx.Exec(e.ctx, `UPDATE dagw.nodes SET reason = $2, message = $3, worker = '' WHERE id = $1`,
+func (e *engine) setRetryFields(ctx context.Context, n *nodeRow, reason dw.Reason, message string) error {
+	_, err := e.tx.Exec(ctx, `UPDATE dagw.nodes SET reason = $2, message = $3, worker = '' WHERE id = $1`,
 		n.ID, int16(reason), message)
 	if err != nil {
 		return fmt.Errorf("postgres: setRetryFields: %w", err)
@@ -160,26 +167,26 @@ func (e *engine) setRetryFields(n *nodeRow, reason dw.Reason, message string) er
 // attempt can fail (a worker's Nack, a reclaimed lease) shares, so the two
 // can never diverge in how they count attempts, compute backoff, or fan out
 // to successors. Direct port of memory's function of the same name.
-func (e *engine) failAttempt(n *nodeRow, reason dw.Reason, message string) ([]dw.Effect, error) {
+func (e *engine) failAttempt(ctx context.Context, n *nodeRow, reason dw.Reason, message string) ([]dw.Effect, error) {
 	maxAttempts, base, maxDelay := n.retryEffective(e.cfg)
 	if n.Attempt >= maxAttempts {
-		return e.terminate(n.ID, dw.StatusError, reason, message)
+		return e.terminate(ctx, n.ID, dw.StatusError, reason, message)
 	}
 
 	from := n.Status
 	delay := dw.Backoff(n.Attempt, base, maxDelay, e.jitter)
-	if err := e.setRetryFields(n, reason, message); err != nil {
+	if err := e.setRetryFields(ctx, n, reason, message); err != nil {
 		return nil, err
 	}
-	if err := e.schedule(n, delay.Seconds()); err != nil {
+	if err := e.schedule(ctx, n, delay.Seconds()); err != nil {
 		return nil, err
 	}
-	seq, err := e.bumpSeq(n.ID)
+	seq, err := e.bumpSeq(ctx, n.ID)
 	if err != nil {
 		return nil, err
 	}
 	n.Seq = seq
-	ef, err := e.insertEvent(n.NodeID, n.Kind, dw.EventTransition, from, n.Status, n.Reason, n.Message, n.Attempt, n.Seq)
+	ef, err := e.insertEvent(ctx, n.NodeID, n.Kind, dw.EventTransition, from, n.Status, n.Reason, n.Message, n.Attempt, n.Seq)
 	if err != nil {
 		return nil, err
 	}
@@ -191,11 +198,11 @@ func (e *engine) failAttempt(n *nodeRow, reason dw.Reason, message string) ([]dw
 // means a concurrent Sweep or inline Claim-side reclaim never blocks this
 // one: whichever gets to a row first wins it, and the other simply moves on
 // to the next — duplicate reclaiming is wasted work, never a wrong answer.
-func (e *engine) reclaimExpired(limit int) ([]dw.Effect, int, bool, error) {
+func (e *engine) reclaimExpired(ctx context.Context, limit int) ([]dw.Effect, int, bool, error) {
 	if limit <= 0 {
 		limit = 1
 	}
-	rows, err := e.tx.Query(e.ctx, `
+	rows, err := e.tx.Query(ctx, `
 SELECT id FROM dagw.nodes
 WHERE scope = $1 AND phase = $2 AND deadline < clock_timestamp()
 ORDER BY deadline
@@ -212,7 +219,7 @@ LIMIT $3`, e.scope, int16(dw.PhaseClaimed), limit)
 	var effects []dw.Effect
 	reclaimed := 0
 	for _, id := range ids {
-		n, err := e.loadForUpdate(id)
+		n, err := e.loadForUpdate(ctx, id)
 		if err != nil {
 			if isNoRows(err) {
 				continue
@@ -222,7 +229,7 @@ LIMIT $3`, e.scope, int16(dw.PhaseClaimed), limit)
 		if n.Phase != dw.PhaseClaimed {
 			continue
 		}
-		more, err := e.failAttempt(&n, dw.ReasonTimeout, "the worker did not acknowledge before the lease deadline")
+		more, err := e.failAttempt(ctx, &n, dw.ReasonTimeout, "the worker did not acknowledge before the lease deadline")
 		if err != nil {
 			return nil, 0, false, err
 		}
@@ -231,7 +238,7 @@ LIMIT $3`, e.scope, int16(dw.PhaseClaimed), limit)
 	}
 
 	var hasMore bool
-	err = e.tx.QueryRow(e.ctx,
+	err = e.tx.QueryRow(ctx,
 		`SELECT EXISTS (SELECT 1 FROM dagw.nodes WHERE scope = $1 AND phase = $2 AND deadline < clock_timestamp())`,
 		e.scope, int16(dw.PhaseClaimed)).Scan(&hasMore)
 	if err != nil {
@@ -244,8 +251,8 @@ LIMIT $3`, e.scope, int16(dw.PhaseClaimed), limit)
 // retry becomes visible without depending on a timer having fired. Runs on
 // both the claim and sweep paths, exactly like memory's function of the same
 // name.
-func (e *engine) promoteScheduled() ([]dw.Effect, error) {
-	rows, err := e.tx.Query(e.ctx, `
+func (e *engine) promoteScheduled(ctx context.Context) ([]dw.Effect, error) {
+	rows, err := e.tx.Query(ctx, `
 SELECT id FROM dagw.nodes
 WHERE scope = $1 AND phase = $2 AND ready_at <= clock_timestamp()
 ORDER BY ready_at
@@ -260,7 +267,7 @@ FOR UPDATE SKIP LOCKED`, e.scope, int16(dw.PhaseScheduled))
 
 	var effects []dw.Effect
 	for _, id := range ids {
-		n, err := e.loadForUpdate(id)
+		n, err := e.loadForUpdate(ctx, id)
 		if err != nil {
 			if isNoRows(err) {
 				continue
@@ -270,13 +277,31 @@ FOR UPDATE SKIP LOCKED`, e.scope, int16(dw.PhaseScheduled))
 		if n.Phase != dw.PhaseScheduled {
 			continue
 		}
-		ef, err := e.makeReady(&n)
+		ef, err := e.makeReady(ctx, &n)
 		if err != nil {
 			return nil, err
 		}
 		effects = append(effects, ef)
 	}
 	return effects, nil
+}
+
+// completeSuccess is Complete's Ack branch: store the result and drive the
+// node's own terminate cascade.
+func (e *engine) completeSuccess(ctx context.Context, n *nodeRow, result []byte) ([]dw.Effect, error) {
+	if _, err := e.tx.Exec(ctx, `UPDATE dagw.nodes SET result = $2, worker = '' WHERE id = $1`, n.ID, result); err != nil {
+		return nil, fmt.Errorf("postgres: Complete: store result: %w", err)
+	}
+	return e.terminate(ctx, n.ID, dw.StatusSuccess, dw.ReasonNone, "")
+}
+
+// completeSkip is Complete's ReasonSkipped branch: terminal on the first
+// report, since a retry would just reach the same conclusion.
+func (e *engine) completeSkip(ctx context.Context, n *nodeRow, message string) ([]dw.Effect, error) {
+	if _, err := e.tx.Exec(ctx, `UPDATE dagw.nodes SET worker = '' WHERE id = $1`, n.ID); err != nil {
+		return nil, fmt.Errorf("postgres: Complete: clear worker: %w", err)
+	}
+	return e.terminate(ctx, n.ID, dw.StatusError, dw.ReasonSkipped, message)
 }
 
 // Complete implements [dagworker.Store].
@@ -303,9 +328,9 @@ func (s *Store) Complete(ctx context.Context, req dw.CompleteRequest) (dw.Comple
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	eng := newEngine(ctx, tx, scopeName, cfg, s.jitter)
+	eng := newEngine(tx, scopeName, cfg, s.jitter)
 
-	n, err := eng.loadForUpdateByExternal(string(req.Lease.NodeID))
+	n, err := eng.loadForUpdateByExternal(ctx, string(req.Lease.NodeID))
 	if err != nil {
 		if isNoRows(err) {
 			return dw.CompleteResult{}, dw.ErrNotFound
@@ -328,44 +353,29 @@ func (s *Store) Complete(ctx context.Context, req dw.CompleteRequest) (dw.Comple
 		if len(req.Result) > cfg.PayloadCap {
 			return dw.CompleteResult{}, &dw.PayloadTooLargeError{Size: len(req.Result), Cap: cfg.PayloadCap}
 		}
-		if _, err := tx.Exec(ctx, `UPDATE dagw.nodes SET result = $2, worker = '' WHERE id = $1`, n.ID, req.Result); err != nil {
-			return dw.CompleteResult{}, fmt.Errorf("postgres: Complete: store result: %w", err)
-		}
-		out.Effects, err = eng.terminate(n.ID, dw.StatusSuccess, dw.ReasonNone, "")
-		if err != nil {
-			return dw.CompleteResult{}, err
-		}
-
+		out.Effects, err = eng.completeSuccess(ctx, &n, req.Result)
 	case req.Reason == dw.ReasonSkipped:
 		// Skipping is a decision, not a fault: the worker looked and
 		// concluded there was nothing to do. Retrying would just reach the
 		// same conclusion, so it is terminal on the first report — the only
 		// way ReasonSkipped enters a graph.
-		if _, err := tx.Exec(ctx, `UPDATE dagw.nodes SET worker = '' WHERE id = $1`, n.ID); err != nil {
-			return dw.CompleteResult{}, fmt.Errorf("postgres: Complete: clear worker: %w", err)
-		}
-		out.Effects, err = eng.terminate(n.ID, dw.StatusError, dw.ReasonSkipped, req.Message)
-		if err != nil {
-			return dw.CompleteResult{}, err
-		}
-
+		out.Effects, err = eng.completeSkip(ctx, &n, req.Message)
 	default:
 		reason := req.Reason
 		if reason == dw.ReasonNone {
 			reason = dw.ReasonWorkerError
 		}
-		effects, err := eng.failAttempt(&n, reason, req.Message)
-		if err != nil {
-			return dw.CompleteResult{}, err
-		}
-		out.Effects = effects
-		if n.Phase == dw.PhaseScheduled {
+		out.Effects, err = eng.failAttempt(ctx, &n, reason, req.Message)
+		if err == nil && n.Phase == dw.PhaseScheduled {
 			out.Retrying = true
 			out.NextAttemptAt = derefTime(n.ReadyAt)
 		}
 	}
+	if err != nil {
+		return dw.CompleteResult{}, err
+	}
 
-	if err := eng.notifyIfDirty(); err != nil {
+	if err := eng.notifyIfDirty(ctx); err != nil {
 		return dw.CompleteResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -453,20 +463,20 @@ func (s *Store) Sweep(ctx context.Context, scope dw.Scope, limit int) (dw.SweepR
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	eng := newEngine(ctx, tx, scopeName, cfg, s.jitter)
+	eng := newEngine(tx, scopeName, cfg, s.jitter)
 
 	var res dw.SweepResult
-	res.Effects, res.Reclaimed, res.More, err = eng.reclaimExpired(limit)
+	res.Effects, res.Reclaimed, res.More, err = eng.reclaimExpired(ctx, limit)
 	if err != nil {
 		return dw.SweepResult{}, err
 	}
-	promoted, err := eng.promoteScheduled()
+	promoted, err := eng.promoteScheduled(ctx)
 	if err != nil {
 		return dw.SweepResult{}, err
 	}
 	res.Effects = append(res.Effects, promoted...)
 
-	if err := eng.notifyIfDirty(); err != nil {
+	if err := eng.notifyIfDirty(ctx); err != nil {
 		return dw.SweepResult{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

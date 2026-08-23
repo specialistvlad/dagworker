@@ -1,0 +1,22 @@
+# buf.gen.yaml (v2) — generates the committed Go package for this module.
+#
+# Plugins are `local`, not `remote`: this module has no dependency on network
+# access to the Buf Schema Registry to regenerate, which matters for a CI
+# runner or a contributor's laptop with no BSR credentials. `make generate`
+# (see README.md) installs protoc-gen-go and protoc-gen-go-grpc with plain
+# `go install` first, which is all either plugin needs.
+#
+# Managed mode is off: every .proto file already declares an explicit
+# go_package pointing at this module's gen/ tree, which is the one buf would
+# compute anyway — leaving managed mode on would just be a second, harder to
+# audit source of truth for the same string.
+version: v2
+plugins:
+  - local: protoc-gen-go
+    out: gen
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: gen
+    opt: paths=source_relative
+inputs:
+  - directory: proto

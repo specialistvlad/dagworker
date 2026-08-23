@@ -58,7 +58,7 @@ type Harness struct {
 // machine between the claim and the assertion that the lease is still held.
 const (
 	realLease = 400 * time.Millisecond
-	realSlack = 250 * time.Millisecond
+	realSlack = 400 * time.Millisecond
 	fakeLease = 30 * time.Second
 )
 
@@ -79,10 +79,16 @@ func (h Harness) begin(t *testing.T) *suite {
 	// A one-nanosecond window means a reclaimed node is claimable again
 	// immediately, so a test can observe the reclaim without also having to
 	// wait out a delay it does not care about. Tests about backoff set their own.
-	if err := st.SetScopeConfig(s.ctx, s.scope, dw.ScopeConfig{
-		RetryBaseDelay: time.Nanosecond,
-		RetryMaxDelay:  time.Nanosecond,
-	}); err != nil {
+	//
+	// MinLeaseTimeout must be set explicitly, and this is not cosmetic. A store
+	// clamps every requested lease into the scope's bounds, and an unset
+	// MinLeaseTimeout resolves to the library default of one second -- which
+	// silently inflates the 400ms lease the real-clock path asks for, so
+	// passLease's wait ends while the lease is still very much alive and every
+	// timeout test fails for a reason that has nothing to do with the backend.
+	// A backend driving a fake clock never noticed, because its lease is 30s
+	// and never hits the floor.
+	if err := st.SetScopeConfig(s.ctx, s.scope, baseConfig()); err != nil {
 		t.Fatalf("dagstoretest: SetScopeConfig: %v", err)
 	}
 	return s
@@ -108,6 +114,98 @@ func (s *suite) passLease() {
 		return
 	}
 	time.Sleep(realLease + realSlack)
+}
+
+// tick moves time forward by a little: enough for the suite's deliberately
+// tiny retry backoff to elapse, and no more.
+func (s *suite) tick() {
+	s.t.Helper()
+	if s.fake() {
+		s.advance(time.Second)
+		return
+	}
+	time.Sleep(40 * time.Millisecond)
+}
+
+// reclaimExpired drives the store past the current lease deadline and past the
+// retry backoff that reclaiming schedules, leaving the node claimable again.
+//
+// The backoff step is not incidental. A reclaimed node with attempts remaining
+// does not become claimable at the instant its lease expires -- it waits out a
+// retry delay first. A test that claims immediately after the deadline is
+// asserting something the contract does not promise, and it only appeared to
+// hold on a backend whose configured backoff had silently rounded to zero.
+func (s *suite) reclaimExpired() {
+	s.t.Helper()
+	s.passLease()
+	// Either the sweeper or the claim path may do the reclaiming; running the
+	// sweeper here makes the surrounding test independent of which.
+	if _, err := s.st.Sweep(s.ctx, s.scope, 1000); err != nil {
+		s.t.Fatalf("Sweep: %v", err)
+	}
+	s.tick()
+}
+
+// baseConfig is the scope policy every test starts from. Two of its fields are
+// load-bearing for the suite itself rather than for any one test:
+//
+//   - MinLeaseTimeout must be well below the lease a real-clock backend is
+//     given, or the store clamps the request up to the library's one-second
+//     floor and every timeout test waits for an expiry that has not happened.
+//   - The retry delays are as short as a backend can faithfully store. A
+//     sub-millisecond value is not portable: a backend keeping durations in
+//     milliseconds rounds it to zero, zero is how ScopeConfig spells "unset",
+//     and the library default of one second comes back instead -- so the
+//     "negligible" backoff becomes the longest thing in the test.
+func baseConfig() dw.ScopeConfig {
+	return dw.ScopeConfig{
+		MinLeaseTimeout: time.Millisecond,
+		RetryBaseDelay:  time.Millisecond,
+		RetryMaxDelay:   time.Millisecond,
+	}
+}
+
+// configure applies a scope policy on top of the suite's baseline.
+//
+// It exists because SetScopeConfig replaces the whole struct: a test that sets
+// only MaxAttempts would silently discard the baseline and get the library
+// defaults back, including the one-second lease floor. That failure is
+// invisible on a backend driving a fake clock, whose lease never approaches the
+// floor, and deterministic on every backend that owns its own clock -- which is
+// precisely the kind of asymmetry a shared suite exists to prevent.
+func (s *suite) configure(cfg dw.ScopeConfig) {
+	s.t.Helper()
+	merged := baseConfig()
+	if cfg.DefaultLeaseTimeout != 0 {
+		merged.DefaultLeaseTimeout = cfg.DefaultLeaseTimeout
+	}
+	if cfg.MinLeaseTimeout != 0 {
+		merged.MinLeaseTimeout = cfg.MinLeaseTimeout
+	}
+	if cfg.MaxLeaseTimeout != 0 {
+		merged.MaxLeaseTimeout = cfg.MaxLeaseTimeout
+	}
+	if cfg.MaxAttempts != 0 {
+		merged.MaxAttempts = cfg.MaxAttempts
+	}
+	if cfg.RetryBaseDelay != 0 {
+		merged.RetryBaseDelay = cfg.RetryBaseDelay
+	}
+	if cfg.RetryMaxDelay != 0 {
+		merged.RetryMaxDelay = cfg.RetryMaxDelay
+	}
+	if cfg.PayloadCap != 0 {
+		merged.PayloadCap = cfg.PayloadCap
+	}
+	if cfg.MaxBatchSize != 0 {
+		merged.MaxBatchSize = cfg.MaxBatchSize
+	}
+	if cfg.MaxInFlight != 0 {
+		merged.MaxInFlight = cfg.MaxInFlight
+	}
+	if err := s.st.SetScopeConfig(s.ctx, s.scope, merged); err != nil {
+		s.t.Fatalf("SetScopeConfig(%+v): %v", merged, err)
+	}
 }
 
 // ---------------------------------------------------------------- helpers

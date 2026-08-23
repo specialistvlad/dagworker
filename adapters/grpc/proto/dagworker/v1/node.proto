@@ -1,0 +1,242 @@
+// Copyright (c) dagworker authors.
+// SPDX-License-Identifier: MIT
+//
+// dagworker/v1/node.proto — the resource shapes shared by WorkerService and
+// ControlService: a node, its status vocabulary, and the lease a claim hands
+// out. See docs/research/13-grpc-worker-protocol.md for the design lineage.
+
+syntax = "proto3";
+
+package dagworker.v1;
+
+option go_package = "github.com/specialistvlad/dagworker/adapters/grpc/gen/dagworker/v1;dagworkerv1";
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// NodeStatus is the minimal public status of a node — exactly the four values
+// dagworker.Status permits, never more (see ADR-0001). Internal scheduling
+// detail such as "claimed but not yet heartbeated" is never sent as its own
+// value; a node's Phase is exposed separately, only through Inspection, and
+// carries no wire-compatibility promise.
+enum NodeStatus {
+  NODE_STATUS_UNSPECIFIED = 0;
+  NODE_STATUS_NEW = 1;
+  NODE_STATUS_IN_PROGRESS = 2;
+  NODE_STATUS_SUCCESS = 3;
+  NODE_STATUS_ERROR = 4;
+  // Headroom in the single-byte varint tag range for a status that turns out
+  // to be needed later without forcing every client to re-learn the enum's
+  // low numbers.
+  reserved 5 to 15;
+}
+
+// Reason explains a node's most recent significant outcome. It mirrors
+// dagworker.Reason; free text belongs in the sibling `message` field, never
+// in a new enum value.
+enum Reason {
+  REASON_UNSPECIFIED = 0;
+  REASON_NONE = 1;
+  REASON_WORKER_ERROR = 2;
+  REASON_TIMEOUT = 3;
+  REASON_UPSTREAM_FAILED = 4;
+  REASON_SKIPPED = 5;
+  REASON_CANCELLED = 6;
+  REASON_REMOVED = 7;
+  reserved 8 to 15;
+}
+
+// TriggerRule decides when a node becomes claimable given its predecessors'
+// outcomes. Mirrors dagworker.TriggerRule.
+enum TriggerRule {
+  TRIGGER_RULE_UNSPECIFIED = 0;
+  TRIGGER_RULE_ALL_SUCCESS = 1;
+  TRIGGER_RULE_ALL_DONE = 2;
+  TRIGGER_RULE_NONE_FAILED = 3;
+  TRIGGER_RULE_NONE_FAILED_MIN_ONE_SUCCESS = 4;
+  TRIGGER_RULE_ALWAYS = 5;
+  reserved 6 to 15;
+}
+
+// CascadePolicy governs what RemoveNode does to a node's successors. Mirrors
+// dagworker.CascadePolicy.
+enum CascadePolicy {
+  CASCADE_POLICY_UNSPECIFIED = 0;
+  CASCADE_POLICY_REJECT = 1;
+  CASCADE_POLICY_DETACH = 2;
+  CASCADE_POLICY_FAIL = 3;
+}
+
+// Phase is internal scheduling detail exposed read-only through Inspect for
+// debugging. It carries no stability promise across releases and never
+// appears on the Watch stream — mirrors dagworker.Phase.
+enum Phase {
+  PHASE_UNSPECIFIED = 0;
+  PHASE_BLOCKED = 1;
+  PHASE_SCHEDULED = 2;
+  PHASE_READY = 3;
+  PHASE_CLAIMED = 4;
+  PHASE_DONE = 5;
+}
+
+// RetryPolicy overrides the scope's retry defaults for one node, field by
+// field: a zero field inherits rather than disabling. Mirrors
+// dagworker.RetryPolicy.
+message RetryPolicy {
+  // MaxAttempts is the total number of attempts including the first. Zero
+  // inherits the scope's setting; one means no retry.
+  uint32 max_attempts = 1;
+  // BaseDelay and MaxDelay bound the full-jitter backoff. Zero inherits.
+  google.protobuf.Duration base_delay = 2;
+  google.protobuf.Duration max_delay = 3;
+}
+
+// Node is a snapshot of one work item. Mirrors dagworker.Node field-for-field.
+message Node {
+  string scope = 1;
+  string id = 2;
+  // Kind partitions the ready set within a scope; a worker may claim by kind.
+  string kind = 3;
+  NodeStatus status = 4;
+  // Reason and message describe the most recent significant outcome; see
+  // the Reason enum doc for exactly what they mean at each status.
+  Reason reason = 5;
+  string message = 6;
+  // Attempt is the number of times the node has been claimed. It doubles as
+  // the lease epoch: the fencing token and the retry counter are one integer.
+  uint32 attempt = 7;
+  // Priority orders the ready set; higher is claimed first.
+  int32 priority = 8;
+  TriggerRule trigger = 9;
+  RetryPolicy retry = 10;
+  // Payload is opaque to the server; it round-trips unexamined.
+  bytes payload = 11;
+  // Labels carry caller metadata for Watch filtering. Not an indexed claim
+  // predicate — use kind for that.
+  map<string, string> labels = 12;
+  // Seq is the per-node monotonic sequence of the write that produced this
+  // snapshot; compare it to tell whether a later read is newer.
+  uint64 seq = 13;
+  google.protobuf.Timestamp created_at = 14;
+  google.protobuf.Timestamp updated_at = 15;
+  reserved 16 to 20;
+}
+
+// NewNode describes a node to create via AddNodes. Mirrors dagworker.NodeSpec.
+message NewNode {
+  string id = 1;
+  string kind = 2;
+  bytes payload = 3;
+  map<string, string> labels = 4;
+  int32 priority = 5;
+  TriggerRule trigger = 6;
+  RetryPolicy retry = 7;
+  // Deps are predecessors, which must already exist in the same scope or
+  // appear earlier in the same AddNodes batch — a forward reference across
+  // separate calls cannot be cycle-checked and is rejected.
+  repeated string deps = 8;
+}
+
+// Edge is a directed dependency: to_node_id must not run until from_node_id
+// resolves. Both endpoints are implicitly in the request's scope; an edge
+// never crosses a scope boundary.
+message Edge {
+  string from_node_id = 1;
+  string to_node_id = 2;
+}
+
+// TaskToken is the plaintext the server encodes into Lease.task_token. It is
+// opaque to every client — round-trip it unexamined — but documented here
+// because it is what makes ExtendLease/CompleteNode/FailNode/SkipNode fenced
+// without a server-side session: epoch is the same fencing generation
+// dagworker.Lease carries, and a stale one is refused with ABORTED
+// (lease-superseded) rather than silently accepted.
+message TaskToken {
+  string scope = 1;
+  string node_id = 2;
+  uint64 epoch = 3;
+}
+
+// Lease is the artifact ClaimNode hands out. task_token is the only value the
+// server trusts on the later worker calls; fencing_token exposes the same
+// generation counter in the clear for a client that wants to log or compare
+// it without decoding the opaque token.
+message Lease {
+  bytes task_token = 1;
+  uint64 fencing_token = 2;
+  // Node is inlined so ClaimNode is a single round trip.
+  Node node = 3;
+  // LeaseExpiresAt is an absolute deadline, independent of this RPC's own
+  // deadline: it lives in the server's storage and outlives the call, the
+  // connection, and the server process that issued it.
+  google.protobuf.Timestamp lease_expires_at = 4;
+}
+
+// ScopeConfig is a scope's stored policy. Mirrors dagworker.ScopeConfig; a
+// zero field means "use the conservative library fallback" except where noted.
+message ScopeConfig {
+  google.protobuf.Duration default_lease_timeout = 1;
+  google.protobuf.Duration min_lease_timeout = 2;
+  google.protobuf.Duration max_lease_timeout = 3;
+  uint32 max_attempts = 4;
+  google.protobuf.Duration retry_base_delay = 5;
+  google.protobuf.Duration retry_max_delay = 6;
+  // TerminalRetention is how long a terminal node is kept before garbage
+  // collection. Zero means never collect.
+  google.protobuf.Duration terminal_retention = 7;
+  // MaxSubscriberLag caps how far behind a durable subscriber may fall.
+  // Zero means unbounded.
+  google.protobuf.Duration max_subscriber_lag = 8;
+  // MaxInFlight caps concurrently claimed nodes in the scope. Zero means
+  // unlimited.
+  uint32 max_in_flight = 9;
+  int32 payload_cap = 10;
+  int32 max_batch_size = 11;
+  int32 sweep_batch_size = 12;
+  google.protobuf.Duration sweep_interval = 13;
+  uint32 partition_count = 14;
+}
+
+// ScopeStats is an O(1) summary of a scope. Mirrors dagworker.ScopeStats.
+message ScopeStats {
+  uint64 total = 1;
+  uint64 blocked = 2;
+  uint64 scheduled = 3;
+  uint64 ready = 4;
+  uint64 in_progress = 5;
+  uint64 succeeded = 6;
+  uint64 failed = 7;
+  bool sealed = 8;
+  bool complete = 9;
+  // Cursor is the scope's current event-log position; a Watch that wants only
+  // what happens from now on starts here.
+  uint64 cursor = 10;
+}
+
+// DepCounts is the incremental predecessor tally a node's trigger rule is
+// evaluated against. Mirrors dagworker.DepCounts.
+message DepCounts {
+  uint32 unsatisfied = 1;
+  uint32 succeeded = 2;
+  uint32 skipped = 3;
+  uint32 failed = 4;
+}
+
+// Inspection exposes internal scheduling state for debugging: which
+// dependencies a node still waits on, its topological rank, its lease
+// deadline. It carries no compatibility promise across releases. Mirrors
+// dagworker.Inspection.
+message Inspection {
+  Node node = 1;
+  Phase phase = 2;
+  DepCounts deps = 3;
+  // Waiting lists the predecessors that are not yet terminal.
+  repeated string waiting = 4;
+  // Successors lists the node's direct out-edges.
+  repeated string successors = 5;
+  int64 rank = 6;
+  // LeaseDeadline is unset if the node is not currently claimed.
+  google.protobuf.Timestamp lease_deadline = 7;
+  // ReadyAt is unset if the node is not waiting on a retry backoff.
+  google.protobuf.Timestamp ready_at = 8;
+}

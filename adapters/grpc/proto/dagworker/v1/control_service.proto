@@ -1,0 +1,176 @@
+// Copyright (c) dagworker authors.
+// SPDX-License-Identifier: MIT
+//
+// dagworker/v1/control_service.proto — DAG mutation, inspection, and the
+// Watch stream. This surface is never granted to a worker's credential (see
+// worker_service.proto); a compromised worker should not be able to mutate
+// the graph it consumes from even if application-layer authorization has a
+// bug.
+
+syntax = "proto3";
+
+package dagworker.v1;
+
+option go_package = "github.com/specialistvlad/dagworker/adapters/grpc/gen/dagworker/v1;dagworkerv1";
+
+import "dagworker/v1/node.proto";
+import "dagworker/v1/watch.proto";
+
+// ControlService is the RPC surface an operator or scheduler drives: build
+// the graph, inspect it, and receive its event stream.
+service ControlService {
+  // AddNodes creates nodes and their declared dependencies atomically: every
+  // spec in the batch lands, or none does. Re-adding a node whose definition
+  // is byte-identical to an existing one is a no-op.
+  rpc AddNodes(AddNodesRequest) returns (AddNodesResponse);
+
+  // AddEdges records dependencies atomically. An edge that would close a
+  // cycle is rejected (FAILED_PRECONDITION); one into an already-terminal
+  // node is rejected the same way.
+  rpc AddEdges(AddEdgesRequest) returns (AddEdgesResponse);
+
+  // RemoveEdges drops dependencies atomically. A successor that loses its
+  // last unsatisfied dependency may become claimable at once.
+  rpc RemoveEdges(RemoveEdgesRequest) returns (RemoveEdgesResponse);
+
+  // RemoveNode deletes a node. One with successors is refused unless
+  // `cascade` says what to do with them; a claimed node is refused — cancel
+  // it first.
+  rpc RemoveNode(RemoveNodeRequest) returns (RemoveNodeResponse);
+
+  // GetNode returns a snapshot of one node.
+  rpc GetNode(GetNodeRequest) returns (GetNodeResponse);
+
+  // Inspect returns internal scheduling state: which dependencies a node
+  // still waits on, its topological rank, its lease deadline. It answers
+  // "why is this stuck" and carries no compatibility promise across releases.
+  rpc Inspect(InspectRequest) returns (InspectResponse);
+
+  // Cancel terminates nodes and everything downstream that can no longer
+  // run. Cancelling a claimed node revokes its lease, so the worker's later
+  // completion is refused rather than resurrecting it.
+  rpc Cancel(CancelRequest) returns (CancelResponse);
+
+  // CancelScope terminates every unfinished node in the scope.
+  rpc CancelScope(CancelScopeRequest) returns (CancelScopeResponse);
+
+  // Seal declares that no more nodes will be added to the scope. It is
+  // irreversible and is what makes scope completion decidable.
+  rpc Seal(SealRequest) returns (SealResponse);
+
+  // ScopeStats returns the scope's O(1) counters.
+  rpc ScopeStats(ScopeStatsRequest) returns (ScopeStatsResponse);
+
+  // Configure stores a scope's policy, visible to every server sharing the
+  // backend.
+  rpc Configure(ConfigureRequest) returns (ConfigureResponse);
+
+  // ListNodes pages through a scope's nodes with a keyset cursor — never an
+  // offset, which would make paging linear in the pages skipped.
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+
+  // Watch streams status transitions plus scope-wide work-available wake
+  // signals, bidirectionally, so one connection can multiplex several
+  // independent watches and cancel any one of them without tearing the whole
+  // stream down. See watch.proto.
+  rpc Watch(stream WatchRequest) returns (stream WatchResponse);
+}
+
+message AddNodesRequest {
+  string scope = 1;
+  repeated NewNode nodes = 2;
+}
+
+message AddNodesResponse {}
+
+message AddEdgesRequest {
+  string scope = 1;
+  repeated Edge edges = 2;
+}
+
+message AddEdgesResponse {}
+
+message RemoveEdgesRequest {
+  string scope = 1;
+  repeated Edge edges = 2;
+}
+
+message RemoveEdgesResponse {}
+
+message RemoveNodeRequest {
+  string scope = 1;
+  string node_id = 2;
+  CascadePolicy cascade = 3;
+}
+
+message RemoveNodeResponse {}
+
+message GetNodeRequest {
+  string scope = 1;
+  string node_id = 2;
+}
+
+message GetNodeResponse {
+  Node node = 1;
+}
+
+message InspectRequest {
+  string scope = 1;
+  string node_id = 2;
+}
+
+message InspectResponse {
+  Inspection inspection = 1;
+}
+
+message CancelRequest {
+  string scope = 1;
+  repeated string node_ids = 2;
+}
+
+message CancelResponse {}
+
+message CancelScopeRequest {
+  string scope = 1;
+}
+
+message CancelScopeResponse {}
+
+message SealRequest {
+  string scope = 1;
+}
+
+message SealResponse {}
+
+message ScopeStatsRequest {
+  string scope = 1;
+}
+
+message ScopeStatsResponse {
+  ScopeStats stats = 1;
+}
+
+message ConfigureRequest {
+  string scope = 1;
+  ScopeConfig config = 2;
+}
+
+message ConfigureResponse {}
+
+message ListNodesRequest {
+  string scope = 1;
+  // Statuses filters by status. Empty means all.
+  repeated NodeStatus statuses = 2;
+  // Kinds filters by node kind. Empty means all.
+  repeated string kinds = 3;
+  // Cursor continues a previous page; empty starts at the beginning. Opaque —
+  // clients must not parse it.
+  string cursor = 4;
+  int32 limit = 5;
+}
+
+message ListNodesResponse {
+  repeated Node nodes = 1;
+  // NextCursor is empty when the listing is exhausted.
+  string next_cursor = 2;
+}

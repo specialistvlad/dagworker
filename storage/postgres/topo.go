@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"sort"
 
 	"github.com/jackc/pgx/v5"
@@ -34,8 +35,8 @@ type topoResult struct {
 }
 
 // ranksOf reads the current rank of every id in ids.
-func (e *engine) ranksOf(ids []int64) (map[int64]int64, error) {
-	rows, err := e.tx.Query(e.ctx, `SELECT id, rank FROM dagw.nodes WHERE id = ANY($1)`, ids)
+func (e *engine) ranksOf(ctx context.Context, ids []int64) (map[int64]int64, error) {
+	rows, err := e.tx.Query(ctx, `SELECT id, rank FROM dagw.nodes WHERE id = ANY($1)`, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -52,8 +53,8 @@ func (e *engine) ranksOf(ids []int64) (map[int64]int64, error) {
 }
 
 // successorRanks returns the (id, rank) of every direct successor of id.
-func (e *engine) successorRanks(id int64) ([]idRank, error) {
-	rows, err := e.tx.Query(e.ctx, `
+func (e *engine) successorRanks(ctx context.Context, id int64) ([]idRank, error) {
+	rows, err := e.tx.Query(ctx, `
 SELECT c.id, c.rank
 FROM dagw.edges edg JOIN dagw.nodes c ON c.scope = edg.scope AND c.id = edg.to_id
 WHERE edg.scope = $1 AND edg.from_id = $2`, e.scope, id)
@@ -64,8 +65,8 @@ WHERE edg.scope = $1 AND edg.from_id = $2`, e.scope, id)
 }
 
 // predecessorRanks returns the (id, rank) of every direct predecessor of id.
-func (e *engine) predecessorRanks(id int64) ([]idRank, error) {
-	rows, err := e.tx.Query(e.ctx, `
+func (e *engine) predecessorRanks(ctx context.Context, id int64) ([]idRank, error) {
+	rows, err := e.tx.Query(ctx, `
 SELECT p.id, p.rank
 FROM dagw.edges edg JOIN dagw.nodes p ON p.scope = edg.scope AND p.id = edg.from_id
 WHERE edg.scope = $1 AND edg.to_id = $2`, e.scope, id)
@@ -90,8 +91,8 @@ func scanIDRanks(rows pgx.Rows) ([]idRank, error) {
 
 // addEdgeOrder restores the topological invariant for a proposed edge
 // x -> y, or reports the cycle it would create. It mutates rank only.
-func (e *engine) addEdgeOrder(x, y int64) (topoResult, error) {
-	ranks, err := e.ranksOf([]int64{x, y})
+func (e *engine) addEdgeOrder(ctx context.Context, x, y int64) (topoResult, error) {
+	ranks, err := e.ranksOf(ctx, []int64{x, y})
 	if err != nil {
 		return topoResult{}, err
 	}
@@ -101,64 +102,82 @@ func (e *engine) addEdgeOrder(x, y int64) (topoResult, error) {
 	}
 	ub, lb := rx, ry
 
-	// Forward search from y, bounded above by ub, looking for x by id — not
-	// by rank equality — since x's rank is exactly ub and therefore outside
-	// the "< ub" frontier the search otherwise walks.
-	visitedF := map[int64]bool{y: true}
-	deltaF := []int64{y}
+	cyclePath, deltaF, err := e.forwardSearch(ctx, x, y, ub)
+	if err != nil {
+		return topoResult{}, err
+	}
+	if cyclePath != nil {
+		return topoResult{cyclePath: cyclePath}, nil
+	}
+
+	deltaB, err := e.backwardSearch(ctx, x, lb)
+	if err != nil {
+		return topoResult{}, err
+	}
+
+	if err := e.reorder(ctx, deltaB, deltaF); err != nil {
+		return topoResult{}, err
+	}
+	return topoResult{}, nil
+}
+
+// forwardSearch walks successors from y, bounded above by ub (x's rank),
+// looking for x by id — not by rank equality, since x's own rank is exactly
+// ub and therefore outside the "< ub" frontier the search otherwise walks.
+// Reaching x means y already reaches x, so the caller's proposed edge x -> y
+// would close a cycle; the returned path runs from y to x inclusive.
+func (e *engine) forwardSearch(ctx context.Context, x, y, ub int64) (cyclePath []int64, deltaF []int64, err error) {
+	visited := map[int64]bool{y: true}
+	deltaF = []int64{y}
 	parent := map[int64]int64{}
 	stack := []int64{y}
-	var cyclePath []int64
 
-	for len(stack) > 0 && cyclePath == nil {
+	for len(stack) > 0 {
 		n := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		succs, err := e.successorRanks(n)
+		succs, err := e.successorRanks(ctx, n)
 		if err != nil {
-			return topoResult{}, err
+			return nil, nil, err
 		}
 		for _, s := range succs {
 			if s.id == x {
 				parent[s.id] = n
-				cyclePath = tracePath(parent, y, x)
-				break
+				return tracePath(parent, y, x), deltaF, nil
 			}
-			if !visitedF[s.id] && s.rank < ub {
-				visitedF[s.id] = true
+			if !visited[s.id] && s.rank < ub {
+				visited[s.id] = true
 				parent[s.id] = n
 				deltaF = append(deltaF, s.id)
 				stack = append(stack, s.id)
 			}
 		}
 	}
-	if cyclePath != nil {
-		return topoResult{cyclePath: cyclePath}, nil
-	}
+	return nil, deltaF, nil
+}
 
-	// Backward search from x, bounded below by lb.
-	visitedB := map[int64]bool{x: true}
+// backwardSearch walks predecessors from x, bounded below by lb (y's rank
+// before the search began), collecting the region that must be renumbered
+// ahead of deltaF.
+func (e *engine) backwardSearch(ctx context.Context, x, lb int64) ([]int64, error) {
+	visited := map[int64]bool{x: true}
 	deltaB := []int64{x}
-	stack = []int64{x}
+	stack := []int64{x}
 	for len(stack) > 0 {
 		n := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		preds, err := e.predecessorRanks(n)
+		preds, err := e.predecessorRanks(ctx, n)
 		if err != nil {
-			return topoResult{}, err
+			return nil, err
 		}
 		for _, p := range preds {
-			if !visitedB[p.id] && p.rank > lb {
-				visitedB[p.id] = true
+			if !visited[p.id] && p.rank > lb {
+				visited[p.id] = true
 				deltaB = append(deltaB, p.id)
 				stack = append(stack, p.id)
 			}
 		}
 	}
-
-	if err := e.reorder(deltaB, deltaF); err != nil {
-		return topoResult{}, err
-	}
-	return topoResult{}, nil
+	return deltaB, nil
 }
 
 // reorder reassigns the rank values already occupied by deltaB and deltaF so
@@ -166,11 +185,11 @@ func (e *engine) addEdgeOrder(x, y int64) (topoResult, error) {
 // relative order within each region — identical to memory's reorder. Because
 // the two regions are disjoint and the pooled value set is unchanged, no
 // node outside them is affected and no new rank value has to be minted.
-func (e *engine) reorder(deltaB, deltaF []int64) error {
+func (e *engine) reorder(ctx context.Context, deltaB, deltaF []int64) error {
 	all := make([]int64, 0, len(deltaB)+len(deltaF))
 	all = append(all, deltaB...)
 	all = append(all, deltaF...)
-	ranks, err := e.ranksOf(all)
+	ranks, err := e.ranksOf(ctx, all)
 	if err != nil {
 		return err
 	}
@@ -191,7 +210,7 @@ func (e *engine) reorder(deltaB, deltaF []int64) error {
 	i := 0
 	assign := func(ids []int64) error {
 		for _, id := range ids {
-			if _, err := e.tx.Exec(e.ctx, `UPDATE dagw.nodes SET rank = $2 WHERE id = $1`, id, pool[i]); err != nil {
+			if _, err := e.tx.Exec(ctx, `UPDATE dagw.nodes SET rank = $2 WHERE id = $1`, id, pool[i]); err != nil {
 				return err
 			}
 			i++

@@ -149,9 +149,7 @@ func graphTests() []conformanceTest {
 		}},
 
 		{"T-NODE-PAYLOAD-CAP", func(s *suite) {
-			if err := s.st.SetScopeConfig(s.ctx, s.scope, dw.ScopeConfig{PayloadCap: 8}); err != nil {
-				s.t.Fatalf("SetScopeConfig: %v", err)
-			}
+			s.configure(dw.ScopeConfig{PayloadCap: 8})
 			err := s.addErr(dw.NodeSpec{ID: "a", Payload: bytes.Repeat([]byte("x"), 9)})
 			s.wantErr("AddNodes over the payload cap", err, dw.ErrPayloadTooLarge)
 			var tooLarge *dw.PayloadTooLargeError
@@ -189,9 +187,7 @@ func graphTests() []conformanceTest {
 		{"T-EDGE-FAILED-AT-INSERT", func(s *suite) {
 			// The mirror case: a node inserted behind an already-failed
 			// dependency is born terminal, not blocked forever.
-			if err := s.st.SetScopeConfig(s.ctx, s.scope, dw.ScopeConfig{MaxAttempts: 1}); err != nil {
-				s.t.Fatalf("SetScopeConfig: %v", err)
-			}
+			s.configure(dw.ScopeConfig{MaxAttempts: 1})
 			s.add(spec("a"))
 			s.nack(s.claim())
 			s.statusIs("a", dw.StatusError)

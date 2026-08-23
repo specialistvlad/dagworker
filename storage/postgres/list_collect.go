@@ -125,12 +125,12 @@ LIMIT $4`, scopeName, int16(dw.PhaseDone), cutoff, limit)
 		return 0, false, fmt.Errorf("postgres: CollectTerminal: select: %w", err)
 	}
 
-	eng := newEngine(ctx, tx, scopeName, dw.ScopeConfig{}, s.jitter)
+	eng := newEngine(tx, scopeName, dw.ScopeConfig{}, s.jitter)
 	for _, c := range cands {
 		if _, err := tx.Exec(ctx, `DELETE FROM dagw.edges WHERE scope = $1 AND to_id = $2`, scopeName, c.id); err != nil {
 			return 0, false, fmt.Errorf("postgres: CollectTerminal: detach: %w", err)
 		}
-		if err := eng.leaveBucket(c.phase, c.status); err != nil {
+		if err := eng.leaveBucket(ctx, c.phase, c.status); err != nil {
 			return 0, false, err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM dagw.nodes WHERE id = $1`, c.id); err != nil {

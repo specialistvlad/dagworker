@@ -39,13 +39,11 @@ func (s *suite) claimByID(id dw.NodeID) dw.Lease {
 // node gets its own kind so the test can drive them individually.
 func (s *suite) withRule(rule dw.TriggerRule) {
 	s.t.Helper()
-	if err := s.st.SetScopeConfig(s.ctx, s.scope, dw.ScopeConfig{
+	s.configure(dw.ScopeConfig{
 		MaxAttempts:    1,
-		RetryBaseDelay: time.Nanosecond,
-		RetryMaxDelay:  time.Nanosecond,
-	}); err != nil {
-		s.t.Fatalf("SetScopeConfig: %v", err)
-	}
+		RetryBaseDelay: time.Millisecond,
+		RetryMaxDelay:  time.Millisecond,
+	})
 	s.add(
 		specK("p1"),
 		specK("p2"),
@@ -137,9 +135,7 @@ func triggerTests() []conformanceTest {
 		{"T-UPSTREAM-FAILED-CASCADE", func(s *suite) {
 			// The consequence of a failure propagates the whole way down, not
 			// one level, or a deep graph would leave nodes blocked forever.
-			if err := s.st.SetScopeConfig(s.ctx, s.scope, dw.ScopeConfig{MaxAttempts: 1}); err != nil {
-				s.t.Fatalf("SetScopeConfig: %v", err)
-			}
+			s.configure(dw.ScopeConfig{MaxAttempts: 1})
 			s.add(spec("a"), spec("b", "a"), spec("c", "b"), spec("d", "c"))
 			s.nack(s.claim())
 			for _, id := range []dw.NodeID{"b", "c", "d"} {
@@ -252,9 +248,7 @@ func leaseTests() []conformanceTest {
 		}},
 
 		{"T-CLAIM-MAX-INFLIGHT", func(s *suite) {
-			if err := s.st.SetScopeConfig(s.ctx, s.scope, dw.ScopeConfig{MaxInFlight: 2}); err != nil {
-				s.t.Fatalf("SetScopeConfig: %v", err)
-			}
+			s.configure(dw.ScopeConfig{MaxInFlight: 2})
 			s.add(spec("a"), spec("b"), spec("c"))
 			s.claim()
 			s.claim()
@@ -316,7 +310,7 @@ func leaseTests() []conformanceTest {
 			// than dead must not be able to write after being superseded.
 			s.add(spec("a"))
 			stale := s.claim()
-			s.passLease()
+			s.reclaimExpired()
 			fresh, ok := s.tryClaim()
 			if !ok {
 				s.t.Fatal("the expired lease was not reclaimed")
@@ -340,11 +334,9 @@ func leaseTests() []conformanceTest {
 		}},
 
 		{"T-NACK-RETRY", func(s *suite) {
-			if err := s.st.SetScopeConfig(s.ctx, s.scope, dw.ScopeConfig{
+			s.configure(dw.ScopeConfig{
 				MaxAttempts: 3, RetryBaseDelay: time.Millisecond, RetryMaxDelay: 2 * time.Millisecond,
-			}); err != nil {
-				s.t.Fatalf("SetScopeConfig: %v", err)
-			}
+			})
 			s.add(spec("a"))
 			res := s.nack(s.claim())
 			if !res.Retrying {
@@ -353,7 +345,7 @@ func leaseTests() []conformanceTest {
 			s.statusIs("a", dw.StatusNew)
 			s.reasonIs("a", dw.ReasonWorkerError) // the last attempt's reason survives on a retrying node
 
-			s.passLease() // clears any backoff
+			s.tick() // clear the retry backoff
 			second := s.claim()
 			if second.Epoch != 2 {
 				s.t.Fatalf("retry claimed at epoch %d, want 2", second.Epoch)
@@ -363,14 +355,12 @@ func leaseTests() []conformanceTest {
 		}},
 
 		{"T-NACK-EXHAUSTED", func(s *suite) {
-			if err := s.st.SetScopeConfig(s.ctx, s.scope, dw.ScopeConfig{
+			s.configure(dw.ScopeConfig{
 				MaxAttempts: 2, RetryBaseDelay: time.Millisecond, RetryMaxDelay: time.Millisecond,
-			}); err != nil {
-				s.t.Fatalf("SetScopeConfig: %v", err)
-			}
+			})
 			s.add(spec("a"))
 			s.nack(s.claim())
-			s.passLease()
+			s.tick()
 			res := s.nack(s.claim())
 			if res.Retrying {
 				s.t.Fatal("the final attempt reported Retrying")
@@ -380,9 +370,7 @@ func leaseTests() []conformanceTest {
 		}},
 
 		{"T-TIMEOUT-RECLAIM", func(s *suite) {
-			if err := s.st.SetScopeConfig(s.ctx, s.scope, dw.ScopeConfig{MaxAttempts: 1}); err != nil {
-				s.t.Fatalf("SetScopeConfig: %v", err)
-			}
+			s.configure(dw.ScopeConfig{MaxAttempts: 1})
 			s.add(spec("a"))
 			s.claim()
 			s.statusIs("a", dw.StatusInProgress)
@@ -399,11 +387,9 @@ func leaseTests() []conformanceTest {
 		}},
 
 		{"T-TIMEOUT-RETRIES", func(s *suite) {
-			if err := s.st.SetScopeConfig(s.ctx, s.scope, dw.ScopeConfig{
-				MaxAttempts: 3, RetryBaseDelay: time.Nanosecond, RetryMaxDelay: time.Nanosecond,
-			}); err != nil {
-				s.t.Fatalf("SetScopeConfig: %v", err)
-			}
+			s.configure(dw.ScopeConfig{
+				MaxAttempts: 3, RetryBaseDelay: time.Millisecond, RetryMaxDelay: time.Millisecond,
+			})
 			s.add(spec("a"))
 			s.claim()
 			s.passLease()
@@ -414,21 +400,36 @@ func leaseTests() []conformanceTest {
 			// rather than failing it.
 			s.statusIs("a", dw.StatusNew)
 			s.reasonIs("a", dw.ReasonTimeout)
+			s.tick()
 			if l := s.claim(); l.Epoch != 2 {
 				s.t.Fatalf("re-claim after timeout has epoch %d, want 2", l.Epoch)
 			}
 		}},
 
 		{"T-CLAIM-RECLAIMS-INLINE", func(s *suite) {
-			// A dead worker's node must come back without waiting for a
-			// background sweeper: whoever asks for work also reclaims.
+			// A dead worker's node must come back without a background sweeper
+			// ever running: whoever asks for work also reclaims what it finds
+			// expired. This test never calls Sweep, which is the whole point.
 			s.add(spec("a"))
-			s.claim()
+			first := s.claim()
 			s.passLease()
-			if l, ok := s.tryClaim(); !ok {
-				s.t.Fatal("an expired lease was not reclaimed by the claim path")
-			} else if l.Epoch < 2 {
-				s.t.Fatalf("reclaimed lease has epoch %d, want at least 2", l.Epoch)
+
+			l, ok := s.tryClaim()
+			if !ok {
+				// Whether the reclaimed node is offered by the very call that
+				// reclaimed it, or only after its retry backoff, is not
+				// specified -- it depends on the backend's time granularity,
+				// and both are correct. What is specified is that no sweeper
+				// was needed. So allow one backoff and ask again.
+				s.tick()
+				l, ok = s.tryClaim()
+			}
+			if !ok {
+				s.t.Fatal("an expired lease was never reclaimed by the claim path")
+			}
+			if l.Epoch <= first.Epoch {
+				s.t.Fatalf("reclaimed lease has epoch %d, want it above the expired %d",
+					l.Epoch, first.Epoch)
 			}
 		}},
 
@@ -466,7 +467,7 @@ func leaseTests() []conformanceTest {
 		{"T-EXTEND-FENCED", func(s *suite) {
 			s.add(spec("a"))
 			stale := s.claim()
-			s.passLease()
+			s.reclaimExpired()
 			if _, ok := s.tryClaim(); !ok {
 				s.t.Fatal("the expired lease was not reclaimed")
 			}

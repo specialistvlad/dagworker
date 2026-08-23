@@ -1,0 +1,99 @@
+// Copyright (c) dagworker authors.
+// SPDX-License-Identifier: MIT
+//
+// dagworker/v1/watch.proto — the event stream, modeled field-for-field on
+// etcd's Watch RPC: a client-assigned watch_id multiplexes several
+// independent watches on one bidirectional stream, a start_revision resumes
+// after a known cursor, and a compacted_revision signal replaces silently
+// missed history with an explicit "resync" instruction. See
+// docs/research/13-grpc-worker-protocol.md §6.
+
+syntax = "proto3";
+
+package dagworker.v1;
+
+option go_package = "github.com/specialistvlad/dagworker/adapters/grpc/gen/dagworker/v1;dagworkerv1";
+
+import "dagworker/v1/node.proto";
+
+// WatchEventKind distinguishes the two things a watch can report. They carry
+// deliberately different guarantees — see WatchEvent.
+enum WatchEventKind {
+  WATCH_EVENT_KIND_UNSPECIFIED = 0;
+  // WATCH_EVENT_KIND_TRANSITION reports that a node's status changed; `node`
+  // is populated.
+  WATCH_EVENT_KIND_TRANSITION = 1;
+  // WATCH_EVENT_KIND_CREATED reports that a node came into existence.
+  WATCH_EVENT_KIND_CREATED = 2;
+  // WATCH_EVENT_KIND_WORK_AVAILABLE is a scope-wide wake signal; `node` is
+  // unset. It is coalescing and best-effort by design: a claim always
+  // re-derives eligibility from the server, never from accumulated watch
+  // events, so a dropped WORK_AVAILABLE costs latency, never correctness.
+  WATCH_EVENT_KIND_WORK_AVAILABLE = 3;
+}
+
+// WatchEvent is one notification.
+message WatchEvent {
+  // Revision is this event's position in the scope's log; a reconnecting
+  // client resumes a watch from here.
+  uint64 revision = 1;
+  WatchEventKind kind = 2;
+  // Node is set iff kind is TRANSITION or CREATED.
+  Node node = 3;
+  NodeStatus previous_status = 4;
+  // Gap is set when the server's delivery mechanism dropped at least one
+  // event before this one because a subscriber fell behind a bounded buffer.
+  // A client that must not miss transitions should treat this as a signal to
+  // re-read the affected node's current state.
+  bool gap = 5;
+}
+
+// WatchCreateRequest opens one watch on this stream.
+message WatchCreateRequest {
+  // WatchID is client-assigned and unique on this stream; it is echoed on
+  // every response so one connection can multiplex several independent
+  // watches.
+  int64 watch_id = 1;
+  string scope = 2;
+  // NodeIDFilter narrows delivery to one node's transitions. Empty watches
+  // every node in scope.
+  string node_id_filter = 3;
+  // StartRevision resumes after a known cursor: 0 means "start now"; a
+  // positive value delivers events strictly after it. Requires a backend
+  // that reports the durable-events capability; see compacted_revision below
+  // for what happens when the requested point has already aged out.
+  uint64 start_revision = 4;
+  // Replay starts from the oldest retained event instead of from now.
+  // Ignored when start_revision is set.
+  bool replay = 5;
+}
+
+// WatchCancelRequest ends one watch on this stream without tearing down the
+// connection or any other multiplexed watch.
+message WatchCancelRequest {
+  int64 watch_id = 1;
+}
+
+message WatchRequest {
+  oneof request {
+    WatchCreateRequest create = 1;
+    WatchCancelRequest cancel = 2;
+  }
+}
+
+message WatchResponse {
+  int64 watch_id = 1;
+  // Created is true on the first response after a successful
+  // WatchCreateRequest, before any events.
+  bool created = 2;
+  // Canceled is true when this watch ended, whether by client request or by
+  // the server (see cancel_reason and compacted_revision).
+  bool canceled = 3;
+  string cancel_reason = 4;
+  // CompactedRevision is set iff canceled because start_revision was already
+  // older than retained history — the client cannot resume from where it
+  // left off and must fall back to a full resync (read current state, then
+  // watch again from the fresh revision that read returned).
+  uint64 compacted_revision = 5;
+  repeated WatchEvent events = 6;
+}

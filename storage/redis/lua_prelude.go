@@ -500,6 +500,14 @@ local function jitterMs(window)
   return math.floor(math.random() * window)
 end
 
+-- orDefault mirrors ScopeConfig.Resolved: a zero or missing value means "unset,
+-- take the library default". Lua's 'or' cannot express this, because zero is
+-- truthy, so every place a config value is read must go through here.
+local function orDefault(v, def)
+  if v == nil or v == 0 then return def end
+  return v
+end
+
 -- failAttempt is the single path for every way an attempt can fail — a
 -- worker's Nack and a reclaimed lease alike — mirroring
 -- storage/memory/lease.go's function of the same name so the two can never
@@ -511,10 +519,14 @@ local function failAttempt(p, id, reason, msg, nowMsVal)
   local kind, attempt = n[1], tonumber(n[2])
   local rma, rbd, rmd = tonumber(n[3]), tonumber(n[4]), tonumber(n[5])
 
+  -- Careful: 'x or DEFAULT' is wrong here. Zero is truthy in Lua, so a stored
+  -- 0 -- which is how ScopeConfig spells "unset, use the library default" --
+  -- would be taken literally. A maxAttempts of 0 then makes every first
+  -- failure terminal, silently disabling retries on this backend only.
   local cfg = redis.call('HMGET', kCfg(p), 'maxAttempts', 'retryBaseMs', 'retryMaxMs')
-  local cfgMaxAttempts = tonumber(cfg[1]) or DEFAULT_MAX_ATTEMPTS
-  local cfgBase = tonumber(cfg[2]) or DEFAULT_RETRY_BASE_MS
-  local cfgMax = tonumber(cfg[3]) or DEFAULT_RETRY_MAX_MS
+  local cfgMaxAttempts = orDefault(tonumber(cfg[1]), DEFAULT_MAX_ATTEMPTS)
+  local cfgBase = orDefault(tonumber(cfg[2]), DEFAULT_RETRY_BASE_MS)
+  local cfgMax = orDefault(tonumber(cfg[3]), DEFAULT_RETRY_MAX_MS)
 
   local maxAttempts = cfgMaxAttempts
   if rma and rma > 0 then maxAttempts = rma end
