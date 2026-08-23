@@ -285,9 +285,10 @@ Every node carries an integer topological rank `ord`. For a proposed edge `u →
   `*CycleError` (which unwraps to `ErrCycle` and carries the path). Otherwise renumber the affected
   region and accept.
 
-v1 ships the single-node rank bump; full Pearce–Kelly affected-region renumbering is the documented
-upgrade (ADR-0004). The library **MUST** export a `topo_fastpath_hit_ratio` metric from day one so
-the decision to escalate is driven by measurement, not guesswork.
+v1 ships **full Pearce–Kelly**: two bounded depth-first searches bounding the affected region,
+then a merge that reassigns the union of that region's existing rank values in sorted order
+(ADR-0004 as amended by ADR-0041). The library **MUST** export a `topo_fastpath_hit_ratio` metric
+as an observability signal.
 
 `AddEdge` into a terminal node returns `ErrAlreadyTerminal`. There is no `WithReopen` in v1.
 
@@ -327,13 +328,20 @@ EventReady       a node became claimable. Advisory doorbell. Coalescing. Never l
 
 ### 7.2 Ordering and resume
 
-Every state write assigns a per-node monotonic `Seq`. Events for one node are totally ordered by
-`Seq`. **There is no cross-node ordering guarantee** and none **MUST** be implied; a scope-wide
-total order would serialize every writer in the scope through one counter.
+Two counters, because one cannot do both jobs (ADR-0041):
 
-`Seq` doubles as the resume cursor. `Subscribe(From: seq)` replays from just after `seq`. If `seq`
-predates retained history, the subscription fails with `ErrCursorExpired` and the documented
-recovery — identical on every backend — is: read current state, then resubscribe from now.
+- **`Seq`** is per node, bumped on every write to that node. Events for one node are totally
+  ordered by `Seq`, and a snapshot's `Seq` detects a stale read. There is **no** cross-node
+  ordering guarantee from `Seq`.
+- **`Cursor`** is per scope, a position in that scope's event log. Events within a scope arrive in
+  `Cursor` order, and `Cursor` is what a subscription resumes from. A *global* cross-scope counter
+  is forbidden: it would serialize every writer in the backend. A per-scope counter is free,
+  because writes within a scope are already serialized by the atomicity §12 requires.
+
+`Subscribe(From: cursor)` replays from just after `cursor`. If it predates retained history the
+subscription fails with `ErrCursorExpired`, and the documented recovery — identical on every
+backend — is: read current state, then resubscribe from now. Resuming requires a single scope;
+`Scope == "" && From != 0` is rejected.
 
 Events are emitted **after** the storage write commits, never before, and carry the `Seq` of the
 write they describe, so a subscriber can detect that its own read is stale.

@@ -22,6 +22,7 @@ type Effect struct {
 	Attempt  uint32
 	NodeKind string
 	Seq      Seq
+	Cursor   Cursor
 	At       time.Time
 }
 
@@ -350,10 +351,11 @@ type Lister interface {
 // that can offer only fire-and-forget delivery must not implement it, so that
 // SubscribeOptions.Durable fails loudly rather than degrading in silence.
 type DurableEventStream interface {
-	// Watch streams events for a scope from just after the given sequence. An
-	// empty scope watches every scope. A cursor older than retained history
-	// returns ErrCursorExpired.
-	Watch(ctx context.Context, scope Scope, from Seq) (<-chan Event, error)
+	// Watch streams a scope's events from just after the given log position. A
+	// zero cursor starts from now. A cursor older than retained history returns
+	// ErrCursorExpired. An empty scope watches every scope, in which case from
+	// must be zero because cursors are per scope.
+	Watch(ctx context.Context, scope Scope, from Cursor) (<-chan Event, error)
 }
 
 // Doorbell is the optional "work may be available" signal that lets a blocking

@@ -17,13 +17,23 @@ type Scope string
 type NodeID string
 
 // Seq is a per-node monotonic sequence number, assigned atomically with every
-// state write. It orders events for one node, detects stale reads, and serves
-// as the resume cursor for a subscription.
+// state write to that node. It orders events for one node and detects stale
+// reads: a snapshot with a lower Seq than one you already saw is older.
 //
-// There is no cross-node ordering guarantee and none should be inferred: a
-// scope-wide total order would serialize every writer in the scope through a
-// single counter.
+// There is no cross-node ordering guarantee from Seq and none should be
+// inferred. Two nodes' sequences are unrelated numbers.
 type Seq uint64
+
+// Cursor is a scope-wide monotonic position in the scope's event log. It is
+// what a subscription resumes from, because a per-node sequence cannot order a
+// stream that spans nodes.
+//
+// The split mirrors etcd, which likewise needs both a per-key ModRevision for
+// staleness and a store-wide Revision for watch resumption: one number cannot
+// do both jobs. The counter is per scope, not global, so scopes never contend
+// with each other for it — within a scope, writes are already serialized by the
+// atomicity the storage port requires, so the counter costs nothing extra.
+type Cursor uint64
 
 // Limits on identifier sizes. These are checked on every write path, cheaply,
 // so an oversized key can never reach a backend and fail there with a less

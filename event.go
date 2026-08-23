@@ -49,8 +49,13 @@ type Event struct {
 	NodeID NodeID
 
 	// Seq is the per-node sequence of the write. Events for one node arrive in
-	// Seq order. There is no ordering guarantee between nodes.
+	// Seq order. There is no ordering guarantee between nodes from Seq alone.
 	Seq Seq
+
+	// Cursor is this event's position in the scope's log. Events within a scope
+	// arrive in Cursor order, and Cursor is what a reconnecting subscriber
+	// resumes from.
+	Cursor Cursor
 
 	// From and To are the status transition. For [EventReady] both are
 	// [StatusNew] and the fields carry no information.
@@ -132,11 +137,14 @@ type SubscribeOptions struct {
 	// means all.
 	NodeKinds []string
 
-	// From resumes just after this sequence. Zero starts from now. If the
+	// From resumes just after this log position. Zero starts from now. If the
 	// cursor predates retained history the subscription fails with
 	// [ErrCursorExpired]; recover by reading current state and resubscribing
 	// from now.
-	From Seq
+	//
+	// Resuming is only meaningful for a single scope: cursors are per scope, so
+	// a subscription with an empty Scope and a non-zero From is rejected.
+	From Cursor
 
 	// BufferSize overrides the Manager's default channel depth. Zero uses it.
 	BufferSize int
@@ -165,6 +173,9 @@ func (o SubscribeOptions) validate() error {
 		if err := validateKind(nk); err != nil {
 			return err
 		}
+	}
+	if o.Scope == "" && o.From != 0 {
+		return invalidArg("from", "resuming requires a single scope, because cursors are per scope")
 	}
 	if o.BufferSize < 0 {
 		return invalidArg("buffer size", "must not be negative")
