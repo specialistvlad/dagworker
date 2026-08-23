@@ -1,9 +1,10 @@
 # ADR-0011: A retry is a new attempt on the same node; epoch and attempt are one field
 
-- **Status:** Accepted
+- **Status:** Accepted, amended by ADR-0043
 - **Date:** 2026-08-22
 - **Deciders:** Vladyslav Kazantsev (project owner)
 - **Amends:** —
+- **Amended by:** ADR-0043 — the fencing epoch and the attempt count are two fields. Everything below about *what a retry is* still holds; the claim that the two counters are one integer does not, and was a latent correctness hole for any node identifier that is deleted and reused.
 - **Backing research:** docs/research/12-dag-semantics-and-state-machine.md §3.4; docs/research/03-leases-heartbeats-timeouts.md §3.4 (Kleppmann)
 
 ## Context

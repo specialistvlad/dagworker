@@ -226,8 +226,15 @@ type Node struct {
 	Reason  Reason
 	Message string
 
-	// Attempt is the number of times the node has been claimed. It is also the
-	// lease epoch: the fencing token and the retry counter are one integer.
+	// Attempt is the number of times the node has been claimed, and the number
+	// the retry policy's MaxAttempts is compared against. It counts this
+	// node's own attempts, so it restarts at zero for an identifier that was
+	// deleted and added again.
+	//
+	// It is deliberately not the fencing epoch, which must never go backwards
+	// for a recycled identifier and so cannot restart with it (ADR-0011, as
+	// amended by ADR-0043). A holder's epoch is in its [Lease]; the epoch a
+	// node's current lease was granted at is [Inspection.LeaseEpoch].
 	Attempt uint32
 
 	// Priority orders the ready set; higher is claimed first, ties broken FIFO
@@ -340,6 +347,12 @@ type Inspection struct {
 
 	// LeaseDeadline is when the current lease expires. Zero if unclaimed.
 	LeaseDeadline time.Time
+
+	// LeaseEpoch is the fencing epoch the node's current lease was granted at,
+	// which is what a holder must present to complete or extend it. Zero
+	// before the node's first claim. It is not [Node.Attempt]: see that
+	// field's doc for why the two diverge.
+	LeaseEpoch uint64
 
 	// ReadyAt is when a scheduled retry becomes claimable. Zero if not waiting
 	// on a backoff.

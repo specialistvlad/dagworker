@@ -171,6 +171,7 @@ func (s *Store) Inspect(ctx context.Context, scope dw.Scope, id dw.NodeID) (dw.I
 		Deps:          n.Deps,
 		Rank:          n.Rank,
 		LeaseDeadline: derefTime(n.Deadline),
+		LeaseEpoch:    n.Epoch,
 		ReadyAt:       derefTime(n.ReadyAt),
 	}
 

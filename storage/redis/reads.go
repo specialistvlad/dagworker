@@ -58,6 +58,7 @@ func (s *Store) Inspect(ctx context.Context, scope dw.Scope, id dw.NodeID) (dw.I
 		Phase:         dw.Phase(narrowU8(atoi64(n["phase"]))),
 		Rank:          atoi64(n["ord"]),
 		LeaseDeadline: msToTime(atoi64(n["deadline"])),
+		LeaseEpoch:    narrowU64(atoi64(n["epoch"])),
 		ReadyAt:       msToTime(atoi64(n["readyAt"])),
 	}
 	insp.Deps = dw.DepCounts{

@@ -368,6 +368,47 @@ func leaseTests() []conformanceTest {
 			}
 		}},
 
+		{"T-INSPECT-LEASE-EPOCH", func(s *suite) {
+			// Inspect must report the epoch a live lease was granted at, and
+			// it must be the epoch, not the attempt count. The two used to be
+			// one field; once a recycled identifier makes them diverge, an
+			// operator (or an adapter answering "is this lease still valid?")
+			// reading the attempt count gets the wrong answer.
+			s.add(spec("recycled"))
+			first := s.claim()
+			if insp, err := s.st.Inspect(s.ctx, s.scope, "recycled"); err != nil {
+				s.t.Fatalf("Inspect: %v", err)
+			} else if insp.LeaseEpoch != first.Epoch {
+				s.t.Fatalf("Inspect reported lease epoch %d, the lease says %d", insp.LeaseEpoch, first.Epoch)
+			}
+
+			if _, err := s.st.Cancel(s.ctx, s.scope, []dw.NodeID{"recycled"}); err != nil {
+				s.t.Fatalf("Cancel: %v", err)
+			}
+			if _, err := s.st.RemoveNode(s.ctx, s.scope, "recycled", dw.CascadeReject); err != nil {
+				s.t.Fatalf("RemoveNode: %v", err)
+			}
+			s.add(spec("recycled"))
+			second := s.claim()
+
+			insp, err := s.st.Inspect(s.ctx, s.scope, "recycled")
+			if err != nil {
+				s.t.Fatalf("Inspect: %v", err)
+			}
+			if insp.LeaseEpoch != second.Epoch {
+				s.t.Fatalf("Inspect reported lease epoch %d, the lease says %d", insp.LeaseEpoch, second.Epoch)
+			}
+			// The attempt count restarts for what is, to the caller, a new
+			// node; the epoch does not. Reading one for the other is exactly
+			// the mistake this test exists to catch.
+			if insp.Node.Attempt != 1 {
+				s.t.Fatalf("a recycled identifier is on attempt %d, want its first", insp.Node.Attempt)
+			}
+			if uint64(insp.Node.Attempt) == insp.LeaseEpoch {
+				s.t.Fatalf("attempt and epoch are still the same field (both %d)", insp.LeaseEpoch)
+			}
+		}},
+
 		{"T-FENCE-DOUBLE-ACK", func(s *suite) {
 			s.add(spec("a"))
 			l := s.claim()

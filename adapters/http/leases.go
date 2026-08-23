@@ -13,9 +13,14 @@ import (
 // handleGetLease implements GET /v1/scopes/{scope}/leases/{lease}: inspecting
 // a held lease. The core library keeps no separate lease record to read back
 // (doc.go), so this reconstructs the answer from [dagworker.Manager.Inspect]:
-// a lease is "active" exactly when the node is still claimed and its current
-// attempt counter — which is the epoch, by construction (node.go) — still
-// matches the epoch this token names.
+// a lease is "active" exactly when the node is still claimed and the epoch its
+// current lease was granted at still matches the epoch this token names.
+//
+// That comparison is against [dagworker.Inspection.LeaseEpoch] and not against
+// the node's attempt count. The two were one field until ADR-0043 separated
+// them, and they still agree for a node that has never been deleted -- which
+// is exactly what makes reading the wrong one a bug that passes every test
+// until an identifier is recycled.
 func (s *Server) handleGetLease(w http.ResponseWriter, r *http.Request) {
 	scope := dagworker.Scope(r.PathValue("scope"))
 	token := r.PathValue("lease")
@@ -31,7 +36,7 @@ func (s *Server) handleGetLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	active := insp.Phase == dagworker.PhaseClaimed && uint64(insp.Node.Attempt) == epoch
+	active := insp.Phase == dagworker.PhaseClaimed && insp.LeaseEpoch == epoch
 	resp := leaseInspectResponse{
 		LeaseID:      token,
 		Node:         resourceName(scope, node),

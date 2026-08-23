@@ -299,6 +299,7 @@ func (st *Store) Inspect(_ context.Context, name dw.Scope, id dw.NodeID) (dw.Ins
 		Deps:          r.deps,
 		Rank:          s.ord[h],
 		LeaseDeadline: unix(s.deadline[h]),
+		LeaseEpoch:    r.epoch,
 		ReadyAt:       unix(s.readyAt[h]),
 	}
 	for _, e := range s.pred[h] {
