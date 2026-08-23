@@ -26,17 +26,29 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
+          # No go.sum at the repository root -- the core module has no
+          # dependencies -- so setup-go's default lookup finds nothing and warns
+          # on every job. The seven that exist are one level down.
+          cache-dependency-path: "**/go.sum"
       - name: go.mod is tidy
         run: make tidy-check
-      # v7 or later: v6 refuses a golangci-lint v2 version string outright.
-      - uses: golangci/golangci-lint-action@v7
+      # install-only, then `make lint`. The action's own run mode invokes
+      # golangci-lint once, in one directory -- which linted the root module
+      # and silently skipped the other seven, every run since this job was
+      # written. `make lint` loops MODULES, so CI checks what a developer
+      # checks, and adding a module cannot leave CI behind.
+      # v7 or later is required at all: v6 refuses a golangci-lint v2 version
+      # string outright.
+      - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.11.3
-          args: --timeout=5m
+          version: v2.13.1
+          install-only: true
+      - name: lint every module
+        run: make lint
 
   test:
     name: test (go ${{ matrix.go }})
@@ -48,34 +60,46 @@ jobs:
         # before users do.
         go: ["1.25", "stable"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
+          # No go.sum at the repository root -- the core module has no
+          # dependencies -- so setup-go's default lookup finds nothing and warns
+          # on every job. The seven that exist are one level down.
+          cache-dependency-path: "**/go.sum"
       - run: make test
 
   race:
     name: race
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
+          # No go.sum at the repository root -- the core module has no
+          # dependencies -- so setup-go's default lookup finds nothing and warns
+          # on every job. The seven that exist are one level down.
+          cache-dependency-path: "**/go.sum"
       - run: make race
 
   coverage:
     name: coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
+          # No go.sum at the repository root -- the core module has no
+          # dependencies -- so setup-go's default lookup finds nothing and warns
+          # on every job. The seven that exist are one level down.
+          cache-dependency-path: "**/go.sum"
       # Measured without -race: the race detector changes which statements run
       # and would make the number mean something slightly different each run.
       - run: make cover
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.out
@@ -84,10 +108,14 @@ jobs:
     name: integration
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
+          # No go.sum at the repository root -- the core module has no
+          # dependencies -- so setup-go's default lookup finds nothing and warns
+          # on every job. The seven that exist are one level down.
+          cache-dependency-path: "**/go.sum"
       # Compose rather than service containers: the same file developers run
       # locally, on the same non-default ports, so a failure here reproduces
       # with one command.
@@ -97,10 +125,14 @@ jobs:
     name: complexity
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
+          # No go.sum at the repository root -- the core module has no
+          # dependencies -- so setup-go's default lookup finds nothing and warns
+          # on every job. The seven that exist are one level down.
+          cache-dependency-path: "**/go.sum"
       # A ratio gate, not an absolute one: it survives a noisy shared runner
       # because it compares this machine against itself.
       - run: make complexity
@@ -109,10 +141,14 @@ jobs:
     name: govulncheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
+          # No go.sum at the repository root -- the core module has no
+          # dependencies -- so setup-go's default lookup finds nothing and warns
+          # on every job. The seven that exist are one level down.
+          cache-dependency-path: "**/go.sum"
       - run: make vuln
 
   bench:
@@ -123,12 +159,16 @@ jobs:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
+          # No go.sum at the repository root -- the core module has no
+          # dependencies -- so setup-go's default lookup finds nothing and warns
+          # on every job. The seven that exist are one level down.
+          cache-dependency-path: "**/go.sum"
       - run: make bench | tee bench.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: benchmarks
           path: bench.txt

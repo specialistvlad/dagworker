@@ -1,31 +1,39 @@
 version: 2
+
+# One PR per ecosystem per week, not one per module per dependency.
+#
+# The first run of the previous configuration opened fourteen pull requests in
+# ninety minutes: nine gomod entries each raising a separate PR per dependency,
+# several of them the same bump in different modules, and two of them proposing
+# different versions of pgx for the same module. Reviewing that is worse than
+# not having it -- the signal is one decision ("take these upgrades"), and it
+# arrived split fourteen ways with no way to test the combination.
+#
+# `directories` (plural) plus a catch-all group collapses each ecosystem into a
+# single pull request spanning every module, which is also the only form that
+# can be tested: this is a workspace, and a bump to a shared dependency has to
+# land in every module at once or `go.work` resolves two versions of it.
 updates:
-  # One entry per module: this repository is a multi-module workspace and
-  # Dependabot does not discover nested go.mod files on its own.
   - package-ecosystem: gomod
-    directory: /
+    directories:
+      - /
+      - /storage/postgres
+      - /storage/redis
+      - /adapters/grpc
+      - /adapters/http
+      - /cmd/dagworkerd
+      - /test/perf
+      - /test/e2e
+      # Stdlib-only today, and listed anyway so that stops being true silently.
+      - /docs/site
     schedule: { interval: weekly }
-  - package-ecosystem: gomod
-    directory: /storage/postgres
-    schedule: { interval: weekly }
-  - package-ecosystem: gomod
-    directory: /storage/redis
-    schedule: { interval: weekly }
-  - package-ecosystem: gomod
-    directory: /adapters/grpc
-    schedule: { interval: weekly }
-  - package-ecosystem: gomod
-    directory: /adapters/http
-    schedule: { interval: weekly }
-  - package-ecosystem: gomod
-    directory: /cmd/dagworkerd
-    schedule: { interval: weekly }
-  - package-ecosystem: gomod
-    directory: /test/perf
-    schedule: { interval: weekly }
-  - package-ecosystem: gomod
-    directory: /test/e2e
-    schedule: { interval: weekly }
+    groups:
+      go-modules:
+        patterns: ["*"]
+
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
+    groups:
+      github-actions:
+        patterns: ["*"]
