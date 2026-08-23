@@ -22,7 +22,11 @@ entry will say so.
 - `test/e2e`: the whole stack under test against all three backends, including
   two instances competing for one graph with no coordinator, and an instance
   killed mid-job whose work the survivor recovers.
-- `test/perf`: complexity guards and benchmarks, verified at 1,000,000 nodes.
+- `test/perf`: complexity guards and benchmarks, verified at 1,000,000 nodes on
+  all three backends. At that size: `Claim`+`Complete` is 1.7 µs in memory,
+  797 µs on Redis and 3.6 ms on PostgreSQL, and none of them grows with the
+  graph — the CI gate is a ratio across a thousandfold size increase, not an
+  absolute threshold a noisy runner would break.
 - gRPC adapter (`adapters/grpc`): Temporal-shaped unary long-poll dispatch, an
   etcd-shaped Watch stream with a resume cursor, committed generated code, buf
   lint and breaking-change configuration, and a reference client that owns the

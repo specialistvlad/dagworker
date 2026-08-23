@@ -197,14 +197,20 @@ in neither.
 
 ## Performance
 
-Measured on the in-memory backend, Apple M-series, Go 1.26:
+Measured at **1,000,000 nodes** on every backend. Apple M-series, Go 1.26,
+databases in containers on the same laptop:
 
-| Operation | n=1e6 | allocations |
-|---|---|---|
-| `Claim` | 1.2 µs | 530 B, 3 allocs |
-| `GetNode` | 481 ns | 24 B, 1 alloc |
-| `Claim` + `Complete` | 984 ns | 1183 B, 8 allocs |
-| 1M-node chain | 390 MiB | 409 bytes per node |
+| | in-memory | Redis | PostgreSQL |
+|---|---|---|---|
+| `ScopeStats` | 31 ns | 177 µs | 167 µs |
+| `GetNode` | 443 ns | 196 µs | 185 µs |
+| `Claim` + `Complete` | 1.7 µs | 797 µs | 3.6 ms |
+| seed 1M nodes | 0.9 s | 34 s | 21 min |
+
+One round trip to a container here is ~185 µs, which is why the two networked
+backends bottom out where they do: nothing single-shot beats a round trip.
+PostgreSQL's seeding cost is roughly six un-pipelined round trips per node —
+a constant factor, and `pgx.Batch` pipelining is the known fix.
 
 The number that matters is not any of those — it is that they do not change
 with the size of the graph. CI asserts the *ratio* of per-operation cost between
