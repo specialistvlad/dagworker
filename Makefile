@@ -53,8 +53,16 @@ up: ## Start PostgreSQL and Redis on their non-default test ports
 
 .PHONY: reset-db
 reset-db: ## Empty the test databases without restarting them
-	@docker exec -i dagworker-test-postgres-1 psql -U dagworker -d dagworker -X \
-		-c "TRUNCATE dagw.events, dagw.edges, dagw.nodes, dagw.scopes CASCADE" >/dev/null
+	@# Tolerates a database no test has touched yet: the schema is created by
+	@# the backend's own migrations on first use, so on a fresh container --
+	@# every CI run -- there is nothing to truncate and TRUNCATE would fail
+	@# the target before any test had a chance to run.
+	@docker exec -i dagworker-test-postgres-1 psql -U dagworker -d dagworker -X -c "\
+		DO \$$\$$ BEGIN \
+		  IF EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = 'dagw') THEN \
+		    TRUNCATE dagw.events, dagw.edges, dagw.nodes, dagw.scopes CASCADE; \
+		  END IF; \
+		END \$$\$$;" >/dev/null
 	@docker exec -i dagworker-test-redis-1 redis-cli FLUSHALL >/dev/null
 	@echo "test databases emptied"
 
