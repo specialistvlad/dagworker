@@ -1,0 +1,999 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dagworker — Normative Contract · dagworker</title>
+<meta name="description" content="The normative contract: transition table, guarantees, and complexity bounds.">
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/reference/contract/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a class="active" href="/dagworker/reference/contract/" aria-current="page">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#dagworker-normative-contract">dagworker — Normative Contract</a></li>
+<ul>
+<li><a href="#1-vocabulary">1. Vocabulary</a></li>
+<ul>
+<li><a href="#1-1-identifier-rules">1.1 Identifier rules</a></li>
+</ul>
+<li><a href="#2-state-model">2. State model</a></li>
+<ul>
+<li><a href="#2-1-public-status-exactly-four-values-frozen-at-v1-0">2.1 Public Status — exactly four values, frozen at v1.0</a></li>
+<li><a href="#2-2-reason-why-closed-set">2.2 Reason — why, closed set</a></li>
+<li><a href="#2-3-internal-phase-five-values-debug-only-no-stability-promise">2.3 Internal Phase — five values, debug-only, no stability promise</a></li>
+<li><a href="#2-4-transition-table">2.4 Transition table</a></li>
+</ul>
+<li><a href="#3-guarantees">3. Guarantees</a></li>
+<li><a href="#4-the-lease-protocol">4. The lease protocol</a></li>
+<ul>
+<li><a href="#4-1-clock-authority">4.1 Clock authority</a></li>
+<li><a href="#4-2-claim">4.2 Claim</a></li>
+<li><a href="#4-3-complete-ack-nack">4.3 Complete (Ack / Nack)</a></li>
+<li><a href="#4-4-extend">4.4 Extend</a></li>
+<li><a href="#4-5-sweep">4.5 Sweep</a></li>
+<li><a href="#4-6-trust-model">4.6 Trust model</a></li>
+</ul>
+<li><a href="#5-trigger-rules">5. Trigger rules</a></li>
+<li><a href="#6-dynamic-mutation">6. Dynamic mutation</a></li>
+<ul>
+<li><a href="#6-1-insert">6.1 Insert</a></li>
+<li><a href="#6-2-cycle-rejection">6.2 Cycle rejection</a></li>
+<li><a href="#6-3-removal">6.3 Removal</a></li>
+<li><a href="#6-4-completion">6.4 Completion</a></li>
+</ul>
+<li><a href="#7-events">7. Events</a></li>
+<ul>
+<li><a href="#7-1-kinds">7.1 Kinds</a></li>
+<li><a href="#7-2-ordering-and-resume">7.2 Ordering and resume</a></li>
+<li><a href="#7-3-backpressure">7.3 Backpressure</a></li>
+</ul>
+<li><a href="#8-work-distribution">8. Work distribution</a></li>
+<li><a href="#9-lifecycle">9. Lifecycle</a></li>
+<li><a href="#10-complexity-contract">10. Complexity contract</a></li>
+<li><a href="#11-configuration">11. Configuration</a></li>
+<li><a href="#12-storage-port-obligations">12. Storage port obligations</a></li>
+<ul>
+<li><a href="#12-1-conformance">12.1 Conformance</a></li>
+</ul>
+<li><a href="#13-durability-disclosure">13. Durability disclosure</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="dagworker-normative-contract">dagworker — Normative Contract<a class="anchor" href="#dagworker-normative-contract" aria-label="Link to this section">#</a></h1>
+<p><strong>Status:</strong> normative. <strong>Version:</strong> targets v1.0. <strong>Date:</strong> 2026-08-22.</p>
+<p>This document is the implementation contract. The ADRs in <code>../adr/</code> record <em>why</em> each rule exists;
+the research dossiers in <code>../research/</code> record the evidence. Where this document and an ADR
+disagree, this document wins and the ADR is amended.</p>
+<p>Key words <strong>MUST</strong>, <strong>MUST NOT</strong>, <strong>SHOULD</strong>, <strong>SHOULD NOT</strong>, <strong>MAY</strong> are to be interpreted as in
+<a href="https://www.rfc-editor.org/rfc/rfc2119" rel="noopener noreferrer">RFC 2119</a> / <a href="https://www.rfc-editor.org/rfc/rfc8174" rel="noopener noreferrer">RFC 8174</a>.</p>
+<hr>
+<h2 id="1-vocabulary">1. Vocabulary<a class="anchor" href="#1-vocabulary" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Term</th><th>Definition</th></tr></thead>
+<tbody>
+<tr><td><strong>Node</strong></td><td>One unit of work. Identified by <code>(Scope, NodeID)</code>. Carries an opaque payload.</td></tr>
+<tr><td><strong>Edge</strong></td><td>A directed dependency <code>from → to</code>, meaning <code>to</code> MUST NOT run until <code>from</code> resolves.</td></tr>
+<tr><td><strong>Scope</strong></td><td>A namespace. The unit of isolation, configuration, completion, retention, and key prefixing.</td></tr>
+<tr><td><strong>Kind</strong></td><td>A ready-set partition key within a scope. A worker MAY claim by kind.</td></tr>
+<tr><td><strong>Instance</strong></td><td>One <code>*Manager</code> in one process, attached to one <code>Store</code>.</td></tr>
+<tr><td><strong>Worker</strong></td><td>Code <em>outside</em> this library that claims a node, does the work, and acks.</td></tr>
+<tr><td><strong>Lease</strong></td><td>A time-bounded, fenced grant of exclusive right to complete a node.</td></tr>
+<tr><td><strong>Lease epoch</strong></td><td>A monotonic <code>uint64</code> per node. The fencing token. Also the attempt number.</td></tr>
+<tr><td><strong>Doorbell</strong></td><td>A best-effort "work is available" signal. Never load-bearing.</td></tr>
+<tr><td><strong>Seal</strong></td><td>A caller assertion that no further nodes will be added to a scope.</td></tr>
+</tbody></table></div>
+<h3 id="1-1-identifier-rules">1.1 Identifier rules<a class="anchor" href="#1-1-identifier-rules" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><code>Scope</code> <strong>MUST</strong> be non-empty, valid UTF-8, and <strong>MUST NOT</strong> exceed 255 bytes.</li>
+<li><code>NodeID</code> <strong>MUST</strong> be non-empty, valid UTF-8, and <strong>MUST NOT</strong> exceed 255 bytes. Unique per scope.</li>
+<li><code>Kind</code> <strong>MAY</strong> be empty (the default partition). <strong>MUST NOT</strong> exceed 64 bytes.</li>
+<li>Scopes are created implicitly on first write. There is no <code>CreateScope</code>.</li>
+<li>Violations return <code>ErrInvalidIdentifier</code> wrapping the offending field name.</li>
+</ul>
+<hr>
+<h2 id="2-state-model">2. State model<a class="anchor" href="#2-state-model" aria-label="Link to this section">#</a></h2>
+<h3 id="2-1-public-status-exactly-four-values-frozen-at-v1-0">2.1 Public <code>Status</code> — exactly four values, frozen at v1.0<a class="anchor" href="#2-1-public-status-exactly-four-values-frozen-at-v1-0" aria-label="Link to this section">#</a></h3>
+<pre><code>StatusNew         node exists and has not completed an attempt successfully
+StatusInProgress  a worker holds a valid lease
+StatusSuccess     terminal, succeeded
+StatusError       terminal, did not succeed</code></pre>
+<p>Implementations <strong>MUST NOT</strong> add a fifth value. <code>Status.Terminal()</code> is <code>Success || Error</code>.</p>
+<h3 id="2-2-reason-why-closed-set">2.2 <code>Reason</code> — why, closed set<a class="anchor" href="#2-2-reason-why-closed-set" aria-label="Link to this section">#</a></h3>
+<pre><code>ReasonNone            no significant outcome yet
+ReasonWorkerError     the worker acked failure (Nack)
+ReasonTimeout         the lease deadline elapsed with no ack
+ReasonUpstreamFailed  a predecessor failed and the trigger rule can no longer be satisfied
+ReasonSkipped         the trigger rule is provably unsatisfiable for a non-failure reason
+ReasonCancelled       Cancel or CancelScope
+ReasonRemoved         a predecessor was removed under CascadeFail</code></pre>
+<p><code>Reason</code> is populated as follows and this is normative:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Status</th><th>Attempt</th><th><code>Reason</code> means</th></tr></thead>
+<tbody>
+<tr><td><code>New</code></td><td>0</td><td><code>ReasonNone</code></td></tr>
+<tr><td><code>New</code></td><td>&gt; 0</td><td>why the <strong>most recent attempt</strong> failed (node is awaiting retry)</td></tr>
+<tr><td><code>InProgress</code></td><td>≥ 1</td><td>why the <strong>previous</strong> attempt failed, or <code>ReasonNone</code> on the first attempt</td></tr>
+<tr><td><code>Success</code></td><td>≥ 1</td><td><code>ReasonNone</code></td></tr>
+<tr><td><code>Error</code></td><td>≥ 0</td><td>why the node is <strong>terminally</strong> failed</td></tr>
+</tbody></table></div>
+<p><code>Node</code> carries <code>Reason</code> and <code>Message</code> as flat fields, never a pointer. At 1,000,000 nodes a pointer
+per node is a pointer the GC must scan; see ADR-0028.</p>
+<h3 id="2-3-internal-phase-five-values-debug-only-no-stability-promise">2.3 Internal <code>Phase</code> — five values, debug-only, no stability promise<a class="anchor" href="#2-3-internal-phase-five-values-debug-only-no-stability-promise" aria-label="Link to this section">#</a></h3>
+<pre><code>PhaseBlocked    ≥1 unsatisfied predecessor           → Status New
+PhaseScheduled  deps satisfied, retry backoff pending → Status New
+PhaseReady      claimable now                         → Status New
+PhaseClaimed    a worker holds a valid lease          → Status InProgress
+PhaseDone       terminal                              → Status Success | Error</code></pre>
+<p><code>Phase</code> <strong>MUST NOT</strong> appear on the event stream, in the gRPC/HTTP wire format, or in any type a
+caller is expected to persist. It is reachable only via <code>Manager.Inspect</code>. It exists because
+dynamic edge insertion flips a node <code>Ready ↔ Blocked</code> with no actor involved, and a subscriber must
+never see that as a status regression (ADR-0002).</p>
+<blockquote>
+<p><strong>Deviation from the design synthesis (§4):</strong> the synthesis proposed a nine-value <code>Phase</code>
+(<code>Succeeded</code>/<code>Failed</code>/<code>TimedOut</code>/<code>UpstreamFailed</code>/<code>Skipped</code>/<code>Cancelled</code>) that duplicates <code>Reason</code>
+one-for-one. Collapsed to <code>PhaseDone</code>; the terminal detail lives in <code>Reason</code> only, so there is
+exactly one representation of "why" and no way for the two to disagree.</p>
+</blockquote>
+<h3 id="2-4-transition-table">2.4 Transition table<a class="anchor" href="#2-4-transition-table" aria-label="Link to this section">#</a></h3>
+<p><code>Engine</code> = internal scheduler. <code>Caller</code> = host via the public API. <code>Worker</code> = external, via
+<code>Ack</code>/<code>Nack</code>/<code>Extend</code>. <code>Sweeper</code> = the fenced reclaim path.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>From</th><th>To</th><th>Actor</th><th>Trigger</th><th>Fenced?</th></tr></thead>
+<tbody>
+<tr><td>T1</td><td>—</td><td><code>New/Blocked</code></td><td>Caller</td><td><code>AddNode</code> with ≥1 unsatisfied dep</td><td>no</td></tr>
+<tr><td>T2</td><td>—</td><td><code>New/Ready</code></td><td>Caller</td><td><code>AddNode</code> with no unsatisfied dep</td><td>no</td></tr>
+<tr><td>T3</td><td>—</td><td><code>Error/UpstreamFailed</code></td><td>Engine</td><td><code>AddNode</code> whose dep is already <code>Error</code> and rule unsatisfiable</td><td>no</td></tr>
+<tr><td>T4</td><td><code>New/Blocked</code></td><td><code>New/Ready</code></td><td>Engine</td><td>last unsatisfied predecessor resolves</td><td>no (idempotent per-edge guard)</td></tr>
+<tr><td>T5</td><td><code>New/Blocked</code></td><td><code>New/Blocked</code></td><td>Caller</td><td><code>AddEdge</code> into a blocked node</td><td>no</td></tr>
+<tr><td>T6</td><td><code>New/Ready</code></td><td><code>New/Blocked</code></td><td>Caller</td><td><code>AddEdge</code> adding an unresolved dep to a ready node</td><td><strong>atomic with the edge insert</strong></td></tr>
+<tr><td>T7</td><td><code>New/Ready</code></td><td><code>InProgress/Claimed</code></td><td>Worker (via <code>Claim</code>)</td><td>claim granted</td><td><strong>yes — epoch++</strong></td></tr>
+<tr><td>T8</td><td><code>InProgress/Claimed</code></td><td><code>Success/Done</code></td><td>Worker</td><td><code>Ack</code></td><td><strong>yes — CAS on epoch</strong></td></tr>
+<tr><td>T9</td><td><code>InProgress/Claimed</code></td><td><code>Error/Done</code> (<code>WorkerError</code>)</td><td>Worker</td><td><code>Nack</code>, attempts exhausted</td><td><strong>yes — CAS on epoch</strong></td></tr>
+<tr><td>T9b</td><td><code>InProgress/Claimed</code></td><td><code>Error/Done</code> (<code>Skipped</code>)</td><td>Worker</td><td><code>Nack</code> with <code>ReasonSkipped</code> — terminal on first report, never retried</td><td><strong>yes — CAS on epoch</strong></td></tr>
+<tr><td>T10</td><td><code>InProgress/Claimed</code></td><td><code>New/Scheduled</code></td><td>Engine</td><td><code>Nack</code>, attempts remain</td><td><strong>yes — CAS on epoch</strong></td></tr>
+<tr><td>T11</td><td><code>InProgress/Claimed</code></td><td><code>Error/Done</code> (<code>Timeout</code>)</td><td>Sweeper</td><td>deadline elapsed, attempts exhausted</td><td><strong>yes — CAS on epoch</strong></td></tr>
+<tr><td>T12</td><td><code>InProgress/Claimed</code></td><td><code>New/Scheduled</code></td><td>Sweeper</td><td>deadline elapsed, attempts remain</td><td><strong>yes — CAS on epoch</strong></td></tr>
+<tr><td>T13</td><td><code>New/Scheduled</code></td><td><code>New/Ready</code></td><td>Engine</td><td>backoff elapsed</td><td>no</td></tr>
+<tr><td>T14</td><td><code>New/*</code></td><td><code>Error/Done</code> (<code>UpstreamFailed</code>)</td><td>Engine</td><td>predecessor failed, rule unsatisfiable</td><td>no</td></tr>
+<tr><td>T15</td><td><code>New/*</code></td><td><code>Error/Done</code> (<code>Skipped</code>)</td><td>Engine</td><td>rule provably unsatisfiable, no failure</td><td>no</td></tr>
+<tr><td>T16</td><td><code>New/*</code> or <code>InProgress/Claimed</code></td><td><code>Error/Done</code> (<code>Cancelled</code>)</td><td>Caller</td><td><code>Cancel</code> / <code>CancelScope</code></td><td><strong>yes if InProgress</strong></td></tr>
+<tr><td>T17</td><td><code>New/*</code></td><td><code>Error/Done</code> (<code>Removed</code>)</td><td>Caller</td><td>predecessor removed under <code>CascadeFail</code></td><td>no</td></tr>
+<tr><td>T18</td><td>terminal</td><td>— (deleted)</td><td>GC</td><td>retention TTL elapsed <strong>and</strong> subscriber low-water mark passed</td><td>no</td></tr>
+</tbody></table></div>
+<p><strong>Invariants.</strong></p>
+<ul>
+<li><strong>I1.</strong> Nothing leaves <code>Success</code> except T18. <code>AddEdge</code> <strong>MUST NOT</strong> re-block a terminal node;
+it returns <code>ErrAlreadyTerminal</code>.</li>
+<li><strong>I2.</strong> Every row that changes <code>Status</code> writes <code>Status</code>, <code>Reason</code>, <code>Message</code>, and <code>Seq</code> in the
+same storage operation. A reader <strong>MUST NOT</strong> be able to observe a torn transition.</li>
+<li><strong>I3.</strong> T7, T8, T9, T10, T11, T12, and T16-when-<code>InProgress</code> are the fenced rows. Every one is a
+compare-and-swap on <code>lease_epoch</code>. A mismatch returns <code>ErrLeaseMismatch</code> and <strong>MUST NOT</strong> be
+reported as retryable.</li>
+<li><strong>I4.</strong> T6 is atomic with the edge insert. Popping a node out of the ready-set and incrementing
+its unsatisfied-predecessor count <strong>MUST</strong> be indivisible from recording the edge, or a worker
+claims it in the gap.</li>
+<li><strong>I5.</strong> <code>Attempt</code> increases by exactly one on each T7 and never decreases.</li>
+</ul>
+<hr>
+<h2 id="3-guarantees">3. Guarantees<a class="anchor" href="#3-guarantees" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Guarantee</th><th>Enforced by</th></tr></thead>
+<tbody>
+<tr><td><strong>G1</strong></td><td>At most one worker holds a valid lease on a node at any instant.</td><td>atomic claim (§4.2)</td></tr>
+<tr><td><strong>G2</strong></td><td>A mutation presenting a stale lease epoch is rejected.</td><td>fencing CAS (I3)</td></tr>
+<tr><td><strong>G3</strong></td><td>A node becomes claimable only when its trigger rule is satisfied.</td><td>§5</td></tr>
+<tr><td><strong>G4</strong></td><td>The graph is acyclic at every observable instant.</td><td>insert-time rejection (§6)</td></tr>
+<tr><td><strong>G5</strong></td><td>Work delivery is <strong>at-least-once</strong>; the accepted effect is <strong>at-most-once per epoch</strong>.</td><td>G1 + G2</td></tr>
+<tr><td><strong>G6</strong></td><td>Events for one node are totally ordered by <code>Seq</code> and gap-free within a subscription.</td><td>§7</td></tr>
+<tr><td><strong>G7</strong></td><td><code>EventReady</code> is advisory. Dropping every one changes latency, never outcome.</td><td>§7.3</td></tr>
+<tr><td><strong>G8</strong></td><td>Claim, Complete, Extend, and Sweep are each <strong>one</strong> atomic storage operation.</td><td>§4</td></tr>
+<tr><td><strong>G9</strong></td><td>An edge never crosses a scope boundary.</td><td><code>ErrCrossScopeEdge</code></td></tr>
+<tr><td><strong>G10</strong></td><td><code>Close</code> returns only after every goroutine the <code>Manager</code> started has exited.</td><td>§9</td></tr>
+</tbody></table></div>
+<p><strong>Exactly-once delivery is not offered and MUST NOT be claimed</strong> in documentation, README, or
+marketing copy. The honest phrasing, which every public artifact <strong>MUST</strong> use, is: <em>at-least-once
+delivery with at-most-once accepted effect per lease epoch.</em></p>
+<hr>
+<h2 id="4-the-lease-protocol">4. The lease protocol<a class="anchor" href="#4-the-lease-protocol" aria-label="Link to this section">#</a></h2>
+<h3 id="4-1-clock-authority">4.1 Clock authority<a class="anchor" href="#4-1-clock-authority" aria-label="Link to this section">#</a></h3>
+<p>Every deadline comparison <strong>MUST</strong> read the clock of the storage backend that owns the node:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Backend</th><th>Clock source</th></tr></thead>
+<tbody>
+<tr><td>in-memory</td><td>the injected <code>Clock</code> (a monotonic <code>time.Now()</code> in production)</td></tr>
+<tr><td>Redis</td><td><code>redis.call('TIME')</code> <strong>inside</strong> the Lua function</td></tr>
+<tr><td>PostgreSQL</td><td><code>clock_timestamp()</code> <strong>inside</strong> the statement</td></tr>
+</tbody></table></div>
+<p>A client-computed wall-clock deadline <strong>MUST NOT</strong> be sent to storage. Using <code>now()</code> in PostgreSQL
+is a defect — it is transaction-start time, not statement time — and CI <strong>MUST</strong> fail on any
+occurrence of <code>now()</code> in <code>storage/postgres/**/*.sql</code> (ADR-0008).</p>
+<h3 id="4-2-claim">4.2 Claim<a class="anchor" href="#4-2-claim" aria-label="Link to this section">#</a></h3>
+<p>One atomic operation <strong>MUST</strong> do all of:</p>
+<ol>
+<li>select an eligible node from the <code>(scope, kind)</code> ready-set, honouring priority then FIFO;</li>
+<li>set <code>Status = InProgress</code>, <code>Phase = Claimed</code>;</li>
+<li>increment <code>lease_epoch</code> and set <code>Attempt = lease_epoch</code>;</li>
+<li>set <code>deadline = &lt;storage clock now&gt; + leaseTimeout</code>;</li>
+<li>insert the node into the deadline index;</li>
+<li>increment <code>Seq</code>.</li>
+</ol>
+<p><code>leaseTimeout</code> resolves as <code>min(max(requested, ScopeConfig.MinLeaseTimeout), ScopeConfig.MaxLeaseTimeout)</code>,
+where <code>requested</code> defaults to <code>ScopeConfig.DefaultLeaseTimeout</code>. A caller <strong>MAY</strong> override it per
+claim; the ceiling exists so a misconfigured caller cannot strand a node indefinitely.</p>
+<h3 id="4-3-complete-ack-nack">4.3 Complete (Ack / Nack)<a class="anchor" href="#4-3-complete-ack-nack" aria-label="Link to this section">#</a></h3>
+<p>One atomic operation, gated on <code>lease_epoch = presented AND Status = InProgress</code>, that <strong>MUST</strong>:</p>
+<ol>
+<li>write the terminal status (or <code>New/Scheduled</code> for a retry), <code>Reason</code>, <code>Message</code>, <code>Seq</code>;</li>
+<li>remove the node from the deadline index;</li>
+<li>for <strong>each direct successor</strong>, mark this edge satisfied and re-evaluate the successor's trigger
+rule; a successor that becomes satisfied is pushed to its ready-set <strong>in the same operation</strong>;</li>
+<li>decrement the scope's non-terminal counter if the node became terminal;</li>
+<li>return the list of successors that became ready, so the engine emits <code>EventReady</code> without a
+second round trip.</li>
+</ol>
+<p>Zero rows / keys affected means the epoch was stale: return <code>ErrLeaseMismatch</code>. The library
+<strong>MUST NOT</strong> retry a fenced mismatch and <strong>MUST NOT</strong> report it to the worker as transient.</p>
+<h3 id="4-4-extend">4.4 Extend<a class="anchor" href="#4-4-extend" aria-label="Link to this section">#</a></h3>
+<p><code>Extend(token, d)</code> is a distinct operation from <code>Ack</code>/<code>Nack</code> (ADR-0010). It CAS's on the epoch,
+sets <code>deadline = &lt;storage clock now&gt; + d</code> subject to the same clamp as §4.2, moves the deadline
+index entry, and returns the new deadline. It <strong>MUST NOT</strong> change <code>Status</code>, <code>Attempt</code>, or <code>Seq</code>.</p>
+<h3 id="4-5-sweep">4.5 Sweep<a class="anchor" href="#4-5-sweep" aria-label="Link to this section">#</a></h3>
+<p>Reclaim <strong>MUST</strong> be correct with zero coordination between instances. Duplicate sweeping is
+wasteful, never wrong, because every write the sweeper performs is fenced on the epoch it observed.</p>
+<p>Reclaim runs in two places and both use the identical fenced primitive:</p>
+<ul>
+<li><strong>inline</strong> on the claim path — whoever asks for work also reclaims expired leases it encounters;</li>
+<li><strong>background</strong>, on a ticker, bounded by <code>ScopeConfig.SweepBatchSize</code>.</li>
+</ul>
+<p>A node whose lease expired transitions to T11 (attempts exhausted) or T12 (retry). Sweeping
+<strong>MUST</strong> be <code>O(m log n)</code> for a batch of <code>m</code>, driven by an index ordered on <code>deadline</code> — never a
+scan of all in-progress nodes.</p>
+<h3 id="4-6-trust-model">4.6 Trust model<a class="anchor" href="#4-6-trust-model" aria-label="Link to this section">#</a></h3>
+<p>Workers are <strong>cooperative</strong>: operated by the same team as the library instances (ADR-0035). The
+fencing token is a plain <code>uint64</code>. A malicious worker can forge a higher epoch and steal a node it
+does not hold, or replay an old ack. It cannot corrupt graph structure, cross a scope boundary, or
+exceed the payload cap. This limitation <strong>MUST</strong> be documented in the README and in the <code>Claim</code>
+doc comment. <code>ClaimToken</code> is an opaque type at the storage port so HMAC signing can be added inside
+a backend later without a wire break.</p>
+<hr>
+<h2 id="5-trigger-rules">5. Trigger rules<a class="anchor" href="#5-trigger-rules" aria-label="Link to this section">#</a></h2>
+<p>Five rules ship in v1 (ADR-0030). Each <strong>MUST</strong> be evaluable incrementally as predecessors resolve —
+no rule may require a scan of all predecessors on every event.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Rule</th><th>Becomes ready when</th><th>Unsatisfiable when</th></tr></thead>
+<tbody>
+<tr><td><code>AllSuccess</code> (default)</td><td>every predecessor is <code>Success</code></td><td>any predecessor is <code>Error</code></td></tr>
+<tr><td><code>AllDone</code></td><td>every predecessor is terminal</td><td>never</td></tr>
+<tr><td><code>NoneFailed</code></td><td>every predecessor is terminal and none is <code>Error</code></td><td>any predecessor is <code>Error</code></td></tr>
+<tr><td><code>NoneFailedMinOneSuccess</code></td><td>every predecessor terminal, none <code>Error</code>, ≥1 <code>Success</code></td><td>any predecessor <code>Error</code></td></tr>
+<tr><td><code>Always</code></td><td>every predecessor is terminal</td><td>never</td></tr>
+</tbody></table></div>
+<p>Incremental evaluation state per node: <code>unsatisfied</code> (count of predecessors not yet terminal),
+<code>failed</code> (count of <code>Error</code> predecessors), <code>succeeded</code> (count of <code>Success</code> predecessors). All three
+are maintained by the same atomic fan-out in §4.3. A node with zero predecessors is ready under
+every rule.</p>
+<p>The <code>one_success</code> / <code>one_failed</code> early-fire family is <strong>deferred</strong>: it requires a node to become
+claimable while predecessors are still <code>InProgress</code>, which the transition table does not model.</p>
+<hr>
+<h2 id="6-dynamic-mutation">6. Dynamic mutation<a class="anchor" href="#6-dynamic-mutation" aria-label="Link to this section">#</a></h2>
+<h3 id="6-1-insert">6.1 Insert<a class="anchor" href="#6-1-insert" aria-label="Link to this section">#</a></h3>
+<p><code>AddNode</code> is idempotent (ADR-0025). Same <code>NodeID</code> with a byte-identical spec is a no-op returning
+success. Same <code>NodeID</code> with a different spec returns <code>ErrIDConflict</code>. "Spec" is payload, kind,
+labels, priority, trigger rule, and retry policy — not status, not attempt, not <code>Seq</code>.</p>
+<p>For each declared predecessor at insert time:</p>
+<ul>
+<li>predecessor is <code>Success</code> → edge is born satisfied; no <code>unsatisfied</code> increment;</li>
+<li>predecessor is <code>Error</code> → the successor's rule is evaluated immediately and <strong>MAY</strong> yield T3;</li>
+<li>predecessor is non-terminal → <code>unsatisfied++</code>;</li>
+<li>predecessor does not exist → <code>ErrNotFound</code>. Forward references are <strong>not</strong> supported; use
+<code>AddNodes</code> to insert a batch atomically.</li>
+</ul>
+<p><code>AddNodes</code> is atomic per call within one scope: every node and edge lands, or none does.
+Batch size is capped by <code>ScopeConfig.MaxBatchSize</code>.</p>
+<h3 id="6-2-cycle-rejection">6.2 Cycle rejection<a class="anchor" href="#6-2-cycle-rejection" aria-label="Link to this section">#</a></h3>
+<p>Every node carries an integer topological rank <code>ord</code>. For a proposed edge <code>u → v</code>:</p>
+<ul>
+<li><code>ord(u) &lt; ord(v)</code> → <strong>accept in O(1)</strong>. This is the common, causally-ordered case.</li>
+<li>otherwise → run a bounded search over the affected region. If <code>v</code> reaches <code>u</code>, reject with
+<code>*CycleError</code> (which unwraps to <code>ErrCycle</code> and carries the path). Otherwise renumber the affected
+region and accept.</li>
+</ul>
+<p>v1 ships <strong>full Pearce–Kelly</strong>: two bounded depth-first searches bounding the affected region,
+then a merge that reassigns the union of that region's existing rank values in sorted order
+(ADR-0004 as amended by ADR-0041). The library <strong>MUST</strong> export a <code>topo_fastpath_hit_ratio</code> metric
+as an observability signal.</p>
+<p><code>AddEdge</code> into a terminal node returns <code>ErrAlreadyTerminal</code>. There is no <code>WithReopen</code> in v1.</p>
+<h3 id="6-3-removal">6.3 Removal<a class="anchor" href="#6-3-removal" aria-label="Link to this section">#</a></h3>
+<p><code>RemoveEdge(from, to)</code> drops the dependency. If the edge was unsatisfied, <code>unsatisfied--</code> and the
+successor's rule is re-evaluated; it <strong>MAY</strong> become ready immediately.</p>
+<p><code>RemoveNode(id)</code>:</p>
+<ul>
+<li>node is <code>InProgress</code> → <code>ErrNodeInFlight</code>. Cancel it first.</li>
+<li>node has no successors → hard delete, plus its incident edges.</li>
+<li>node has successors and no cascade policy → <code>ErrHasSuccessors</code>.</li>
+<li><code>CascadeDetach</code> → drop incident edges (as <code>RemoveEdge</code> each), then delete. Successors <strong>MAY</strong>
+become ready.</li>
+<li><code>CascadeFail</code> → every successor transitions T17 to <code>Error/Removed</code>, recursively, then delete.</li>
+</ul>
+<p>Silent cascading failure is not the default (ADR-0036).</p>
+<h3 id="6-4-completion">6.4 Completion<a class="anchor" href="#6-4-completion" aria-label="Link to this section">#</a></h3>
+<p>A scope is complete iff <code>Sealed &amp;&amp; nonTerminalCount == 0</code>. <code>nonTerminalCount</code> is maintained
+atomically by every transition into and out of a terminal status; <code>IsComplete</code> is an <strong>O(1)</strong> read
+and <strong>MUST NOT</strong> scan. <code>Seal</code> is caller-driven and irreversible; <code>AddNode</code> into a sealed scope
+returns <code>ErrScopeSealed</code>.</p>
+<hr>
+<h2 id="7-events">7. Events<a class="anchor" href="#7-events" aria-label="Link to this section">#</a></h2>
+<h3 id="7-1-kinds">7.1 Kinds<a class="anchor" href="#7-1-kinds" aria-label="Link to this section">#</a></h3>
+<pre><code>EventTransition  a node's public Status changed. Durable tier where the backend supports it.
+EventReady       a node became claimable. Advisory doorbell. Coalescing. Never load-bearing.</code></pre>
+<h3 id="7-2-ordering-and-resume">7.2 Ordering and resume<a class="anchor" href="#7-2-ordering-and-resume" aria-label="Link to this section">#</a></h3>
+<p>Two counters, because one cannot do both jobs (ADR-0041):</p>
+<ul>
+<li><strong><code>Seq</code></strong> is per node, bumped on every write to that node. Events for one node are totally
+ordered by <code>Seq</code>, and a snapshot's <code>Seq</code> detects a stale read. There is <strong>no</strong> cross-node
+ordering guarantee from <code>Seq</code>.</li>
+<li><strong><code>Cursor</code></strong> is a position in a scope's event log. Events within a scope arrive in <code>Cursor</code>
+order, and <code>Cursor</code> is what a subscription resumes from. Cursors <strong>MUST</strong> be strictly increasing
+within a scope; they <strong>MAY</strong> be allocated from a store-wide sequence and so need not be
+contiguous, which lets a backend avoid a second hot row on its write path (ADR-0042 §4).</li>
+</ul>
+<p><code>Subscribe(From: cursor)</code> replays from just after <code>cursor</code>. If it predates retained history the
+subscription fails with <code>ErrCursorExpired</code>, and the documented recovery — identical on every
+backend — is: read current state, then resubscribe from now. Resuming requires a single scope;
+<code>Scope == "" &amp;&amp; From != 0</code> is rejected.</p>
+<p>Events are emitted <strong>after</strong> the storage write commits, never before, and carry the <code>Seq</code> of the
+write they describe, so a subscriber can detect that its own read is stale.</p>
+<h3 id="7-3-backpressure">7.3 Backpressure<a class="anchor" href="#7-3-backpressure" aria-label="Link to this section">#</a></h3>
+<p>The fan-out point <strong>MUST NOT</strong> block on any subscriber. Each subscription has a bounded channel and
+an <code>OverflowPolicy</code>:</p>
+<ul>
+<li><code>DropOldest</code> (default) — drop the oldest buffered event and set <code>Event.Gap</code> on the next one
+delivered, so the subscriber is told, truthfully, that it missed something;</li>
+<li><code>CloseSlow</code> — terminate the subscription with <code>ErrSubscriberLagged</code>.</li>
+</ul>
+<p>There is deliberately <strong>no</strong> blocking policy. Blocking delivery needs somewhere to put the events
+that arrive meanwhile: an unbounded buffer trades a dropped event for an OOM, and backpressure onto
+the completing caller lets one slow observer stall the scheduler. A subscriber that must not miss a
+transition uses <code>Durable</code> and resumes from a <code>Cursor</code>.</p>
+<p>Subscriber code <strong>MUST NOT</strong> be invoked inline on the producer's goroutine.</p>
+<hr>
+<h2 id="8-work-distribution">8. Work distribution<a class="anchor" href="#8-work-distribution" aria-label="Link to this section">#</a></h2>
+<p>v1 is <strong>pure pull-based competition</strong> (ADR-0013): every instance races on the storage's native
+atomic claim. No membership table, no partition ownership, no leader.</p>
+<p>The internal <code>PartitionAssigner</code> interface exists from the first commit with the trivial <code>P=1</code>
+implementation, so the v0.5 upgrade — jump consistent hash for node→partition, HRW for
+partition→instance — is an internal refactor and <strong>MUST NOT</strong> change any public signature
+(ADR-0014).</p>
+<p>Leader election is permitted <strong>only</strong> for low-frequency maintenance (sweep-shard rebalancing),
+never for dispatch (ADR-0015).</p>
+<hr>
+<h2 id="9-lifecycle">9. Lifecycle<a class="anchor" href="#9-lifecycle" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>Every blocking method takes <code>ctx context.Context</code> as its first parameter.</li>
+<li>No exported type stores a <code>context.Context</code>.</li>
+<li><code>New(store, opts...)</code> starts no goroutine that outlives <code>Close</code>.</li>
+<li><code>Close(ctx)</code> stops accepting new work, drains, and returns only when every goroutine the
+<code>Manager</code> started has exited (G10). A <code>goleak</code> assertion <strong>MUST</strong> cover this on every backend.</li>
+<li><code>Close</code> is idempotent. Calls after <code>Close</code> return <code>ErrClosed</code>.</li>
+</ul>
+<hr>
+<h2 id="10-complexity-contract">10. Complexity contract<a class="anchor" href="#10-complexity-contract" aria-label="Link to this section">#</a></h2>
+<p><code>n</code> = nodes in scope, <code>R</code> = ready-set size, <code>d</code> = out-degree, <code>k</code> = declared deps, <code>m</code> = batch size.
+<strong>No operation may be O(n).</strong> CI enforces these as <em>ratio</em> guards across N ∈ {1e3, 1e4, 1e5, 1e6}
+in the same run, never absolute nanosecond thresholds (ADR-0040).</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Operation</th><th>Bound</th></tr></thead>
+<tbody>
+<tr><td><code>AddNode</code> (k deps)</td><td>O(k) expected, O(1) amortized rank maintenance in causal order</td></tr>
+<tr><td><code>AddNodes</code> (m nodes)</td><td>O(Σk)</td></tr>
+<tr><td><code>AddEdge</code></td><td>O(1) expected accept; O(affected region) worst case</td></tr>
+<tr><td><code>RemoveEdge</code></td><td>O(1) expected</td></tr>
+<tr><td><code>GetNode</code></td><td>O(1) expected</td></tr>
+<tr><td><code>Claim</code></td><td>O(log R)</td></tr>
+<tr><td><code>Ack</code> / <code>Nack</code></td><td>O(d)</td></tr>
+<tr><td><code>Extend</code></td><td>O(log n)</td></tr>
+<tr><td><code>Sweep</code> (batch m)</td><td>O(m log n)</td></tr>
+<tr><td><code>IsComplete</code></td><td>O(1)</td></tr>
+<tr><td><code>ListNodes</code> (page p)</td><td>O(log n + p), keyset only — <code>OFFSET</code> is forbidden</td></tr>
+</tbody></table></div>
+<hr>
+<h2 id="11-configuration">11. Configuration<a class="anchor" href="#11-configuration" aria-label="Link to this section">#</a></h2>
+<p>There are <strong>no opinionated global defaults</strong> for retention, concurrency, or partitioning
+(ADR-0034). <code>ScopeConfig</code> is first-class, stored per scope in the backend so every instance agrees,
+and every field has a conservative fallback so the zero value is usable.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Field</th><th>Fallback</th><th>Why this fallback</th></tr></thead>
+<tbody>
+<tr><td><code>DefaultLeaseTimeout</code></td><td>30s</td><td>long enough for ordinary work, short enough that a dead worker is noticed</td></tr>
+<tr><td><code>MinLeaseTimeout</code></td><td>1s</td><td>below this, reclaim storms dominate</td></tr>
+<tr><td><code>MaxLeaseTimeout</code></td><td>24h</td><td>a hard ceiling so a bad caller cannot strand a node forever</td></tr>
+<tr><td><code>MaxAttempts</code></td><td>3</td><td>one retry for transient faults, two for bad luck; not a retry loop</td></tr>
+<tr><td><code>RetryBaseDelay</code> / <code>RetryMaxDelay</code></td><td>1s / 5m</td><td>full-jitter bounds</td></tr>
+<tr><td><code>TerminalRetention</code></td><td>0 (never GC)</td><td>conservative: never delete data the caller did not ask to delete</td></tr>
+<tr><td><code>MaxSubscriberLag</code></td><td>0 (unbounded)</td><td>conservative: never advance past a subscriber silently</td></tr>
+<tr><td><code>MaxInFlight</code></td><td>0 (unlimited)</td><td>the host owns its own concurrency</td></tr>
+<tr><td><code>PayloadCap</code></td><td>256 KiB</td><td>comfortably under every backend's practical row/value ceiling</td></tr>
+<tr><td><code>MaxBatchSize</code></td><td>1000</td><td>fits one Postgres transaction and one bounded Lua script</td></tr>
+<tr><td><code>SweepBatchSize</code></td><td>100</td><td>bounds the Lua script's stall and the SQL statement's lock footprint</td></tr>
+<tr><td><code>PartitionCount</code></td><td>1</td><td>v1 is pull-based; &gt;1 is the v0.5 upgrade</td></tr>
+</tbody></table></div>
+<p><code>TerminalRetention = 0</code> and <code>MaxSubscriberLag = 0</code> mean <em>disabled</em>, not <em>immediate</em>. A library that
+deletes a caller's data by default is a defect.</p>
+<hr>
+<h2 id="12-storage-port-obligations">12. Storage port obligations<a class="anchor" href="#12-storage-port-obligations" aria-label="Link to this section">#</a></h2>
+<p>Mandatory (ADR-0016 as amended): node CRUD, atomic graph mutation, and the four fenced primitives
+<code>Claim</code>, <code>Complete</code>, <code>Extend</code>, <code>Sweep</code>. A backend that cannot provide an atomic claim is not a
+backend; there is no fallback path and no <code>ErrCapability</code> escape for these.</p>
+<p>Optional facets, discovered by type assertion and reported by <code>CapabilityReporter</code>: <code>Lister</code>,
+<code>DurableEventStream</code>, <code>ConditionalDeleter</code>, <code>BatchClaim</code>.</p>
+<p>A backend <strong>MUST NOT</strong> emulate a primitive it lacks. It either declines with <code>ErrCapability</code> or the
+library uses a clearly-labelled degraded path the caller can detect via <code>Capabilities()</code>.</p>
+<p><strong>Memcached is rejected as a backend</strong> (ADR-0017): no multi-key atomicity at any protocol version
+including the 1.6+ meta commands, no ordered structure for deadline sweeping, no durable CAS across
+restart or eviction, and an LRU that makes eviction indistinguishable from "never existed". The
+three backends are in-memory, Redis, and PostgreSQL.</p>
+<h3 id="12-1-conformance">12.1 Conformance<a class="anchor" href="#12-1-conformance" aria-label="Link to this section">#</a></h3>
+<p>Every backend <strong>MUST</strong> pass <code>dagstoretest.RunConformance(t, harness)</code> (ADR-0018). Capability
+sub-suites <code>Skip</code> when the facet is absent; they <strong>MUST NOT</strong> silently pass. Test IDs are stable
+identifiers referenced from backend documentation, e.g. <code>T-CLAIM-ATOMIC</code>, <code>T-FENCE-STALE-ACK</code>,
+<code>T-EDGE-BATCH-ATOMIC</code>, <code>T-SWEEP-ORDERED</code>, <code>T-CLOCK-SERVER-SIDE</code>.</p>
+<hr>
+<h2 id="13-durability-disclosure">13. Durability disclosure<a class="anchor" href="#13-durability-disclosure" aria-label="Link to this section">#</a></h2>
+<p>Each backend <strong>MUST</strong> publish what it actually guarantees. No backend may imply more.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Backend</th><th>Durability</th></tr></thead>
+<tbody>
+<tr><td>in-memory</td><td>none — process lifetime only. Suitable when all workers share one process.</td></tr>
+<tr><td>Redis</td><td>async replication by default: a primary failover can lose ~1s of writes. <code>WAIT</code>/<code>WAITAOF</code> is available as an opt-in per-call cost.</td></tr>
+<tr><td>PostgreSQL</td><td>full WAL durability for nodes, edges, and events. The <code>leases</code> table is intentionally <code>UNLOGGED</code> — losing a revocable, deadline-bound grant on crash is correct behaviour.</td></tr>
+</tbody></table></div>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/spec/01-contract.md" rel="noopener noreferrer">View source: docs/spec/01-contract.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

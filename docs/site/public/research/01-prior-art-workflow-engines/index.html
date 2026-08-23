@@ -1,0 +1,1658 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prior Art in Workflow / DAG / Job Orchestration Engines · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/research/01-prior-art-workflow-engines/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#prior-art-in-workflow-dag-job-orchestration-engines">Prior Art in Workflow / DAG / Job Orchestration Engines</a></li>
+<ul>
+<li><a href="#1-temporal-and-its-predecessor-cadence">1. Temporal and its predecessor Cadence</a></li>
+<ul>
+<li><a href="#1-1-lineage">1.1 Lineage</a></li>
+<li><a href="#1-2-event-sourcing-and-the-determinism-constraint">1.2 Event sourcing and the determinism constraint</a></li>
+<li><a href="#1-3-task-queues-matching-and-how-double-dispatch-is-avoided">1.3 Task queues, matching, and how double-dispatch is avoided</a></li>
+<li><a href="#1-4-sticky-execution-a-cache-not-a-correctness-mechanism">1.4 Sticky execution — a cache, not a correctness mechanism</a></li>
+<li><a href="#1-5-heartbeats-timeouts-and-long-running-activity-liveness">1.5 Heartbeats, timeouts, and long-running activity liveness</a></li>
+<li><a href="#1-6-what-temporal-got-wrong-hard-limits">1.6 What Temporal got wrong / hard limits</a></li>
+</ul>
+<li><a href="#2-netflix-conductor">2. Netflix Conductor</a></li>
+<li><a href="#3-apache-airflow">3. Apache Airflow</a></li>
+<ul>
+<li><a href="#3-1-dagrun-taskinstance-state-machines-and-the-scheduler-loop">3.1 DagRun / TaskInstance state machines and the scheduler loop</a></li>
+<li><a href="#3-2-scheduler-ha-via-database-row-locking-no-consensus-system">3.2 Scheduler HA via database row locking — no consensus system</a></li>
+<li><a href="#3-3-where-the-locking-design-bit-them">3.3 Where the locking design bit them</a></li>
+<li><a href="#3-4-dynamic-task-mapping-aip-42-the-closest-analog-to-a-dynamic-dag">3.4 Dynamic task mapping (AIP-42) — the closest analog to a dynamic DAG</a></li>
+</ul>
+<li><a href="#4-prefect-2-3">4. Prefect 2 / 3</a></li>
+<li><a href="#5-dagster">5. Dagster</a></li>
+<li><a href="#6-argo-workflows">6. Argo Workflows</a></li>
+<li><a href="#7-luigi">7. Luigi</a></li>
+<li><a href="#8-nextflow">8. Nextflow</a></li>
+<li><a href="#9-htcondor-dagman">9. HTCondor DAGMan</a></li>
+<li><a href="#10-celery-canvas">10. Celery + Canvas</a></li>
+<li><a href="#11-sidekiq-and-faktory">11. Sidekiq and Faktory</a></li>
+<ul>
+<li><a href="#11-1-sidekiq-the-just-redis-baseline-and-its-exact-failure-mode">11.1 Sidekiq — the "just Redis" baseline, and its exact failure mode</a></li>
+<li><a href="#11-2-faktory-the-language-agnostic-protocol-first-version-of-the-same-idea">11.2 Faktory — the language-agnostic, protocol-first version of the same idea</a></li>
+</ul>
+<li><a href="#12-go-native-job-queues">12. Go-native job queues</a></li>
+<ul>
+<li><a href="#12-1-river-postgresql">12.1 River (PostgreSQL)</a></li>
+<li><a href="#12-2-asynq-redis">12.2 Asynq (Redis)</a></li>
+<li><a href="#12-3-machinery-and-gocelery-celery-s-shape-ported-and-largely-abandoned">12.3 Machinery and gocelery — Celery's shape, ported, and largely abandoned</a></li>
+<li><a href="#12-4-temporal-go-sdk">12.4 Temporal Go SDK</a></li>
+</ul>
+<li><a href="#13-kubernetes-job-cronjob-controller-reconciliation">13. Kubernetes Job / CronJob controller reconciliation</a></li>
+<ul>
+<li><a href="#13-1-level-triggered-reconciliation-not-edge-triggered-event-handling">13.1 Level-triggered reconciliation, not edge-triggered event handling</a></li>
+<li><a href="#13-2-job-controller-exactly-once-effective-dispatch-via-finalizers-not-locks">13.2 Job controller: exactly-once-effective dispatch via finalizers, not locks</a></li>
+<li><a href="#13-3-cronjob-controller-idempotent-scheduling-not-a-timer-thread">13.3 CronJob controller: idempotent scheduling, not a timer thread</a></li>
+<li><a href="#13-4-leader-election-as-a-lease-object-the-other-valid-answer-to-avoid-double-dispatch">13.4 Leader election as a Lease object — the other valid answer to "avoid double-dispatch"</a></li>
+</ul>
+<li><a href="#14-nomad-and-mesos-two-very-different-answers-to-who-gets-the-work">14. Nomad and Mesos: two very different answers to "who gets the work"</a></li>
+<ul>
+<li><a href="#14-1-mesos-two-level-offer-based-framework-decides">14.1 Mesos — two-level, offer-based, framework decides</a></li>
+<li><a href="#14-2-nomad-single-scheduler-optimistic-concurrency-plan-apply">14.2 Nomad — single scheduler, optimistic concurrency, plan-apply</a></li>
+</ul>
+<li><a href="#15-cross-cutting-work-distribution-across-multiple-instances">15. Cross-cutting: work distribution across multiple instances</a></li>
+<li><a href="#16-distributed-locking-correctness-what-a-lease-is-actually-allowed-to-assume">16. Distributed-locking correctness: what a lease is actually allowed to assume</a></li>
+<li><a href="#17-comparison-table-node-task-state-machines">17. Comparison table — node/task state machines</a></li>
+<li><a href="#18-comparison-table-leasing-work-claiming-mechanisms">18. Comparison table — leasing / work-claiming mechanisms</a></li>
+<li><a href="#recommendations-for-dag-worker-go">Recommendations for dag-worker-go</a></li>
+<li><a href="#open-questions">Open questions</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="prior-art-in-workflow-dag-job-orchestration-engines">Prior Art in Workflow / DAG / Job Orchestration Engines<a class="anchor" href="#prior-art-in-workflow-dag-job-orchestration-engines" aria-label="Link to this section">#</a></h1>
+<p>Research dossier for <code>dag-worker-go</code>. Scope: extract concrete state machines, leasing
+mechanisms, timeout handling, anti-double-dispatch techniques, and event/notification
+designs from the systems named in the brief, plus what each got wrong in production. All
+claims are sourced inline; where sources disagree a position is taken.</p>
+<hr>
+<h2 id="1-temporal-and-its-predecessor-cadence">1. Temporal and its predecessor Cadence<a class="anchor" href="#1-temporal-and-its-predecessor-cadence" aria-label="Link to this section">#</a></h2>
+<h3 id="1-1-lineage">1.1 Lineage<a class="anchor" href="#1-1-lineage" aria-label="Link to this section">#</a></h3>
+<p>Cadence was created at Uber by Maxim Fateev and Samar Abbas as an open-sourced,
+distributed, durable orchestration engine for long-running business logic
+<a href="https://cadenceworkflow.io/" rel="noopener noreferrer">cadenceworkflow.io</a>. In 2018 Fateev and Abbas left Uber and
+founded Temporal, forking Cadence in a <strong>non-backwards-compatible</strong> way: Uber had run
+Cadence for four years without breaking changes and had accumulated technical debt the
+founders wanted to shed, so the fork spent roughly a year in private development before its
+production release
+<a href="https://temporal.io/blog/building-resilient-workflows-from-azure-to-cadence-to-temporal" rel="noopener noreferrer">temporal.io/blog</a>,
+<a href="https://research.contrary.com/company/temporal-technologies" rel="noopener noreferrer">Contrary Research</a>. Concrete
+changes in the fork: Thrift → Protocol Buffers, HTTP/Thrift RPC → gRPC, native TLS, and
+SDKs beyond Java/Go (TypeScript, PHP, Python)
+<a href="https://temporal.io/temporal-versus/cadence" rel="noopener noreferrer">temporal.io/temporal-versus/cadence</a>. The two
+projects remain API-similar but diverged enough that most of the original Cadence team and
+its user base migrated to Temporal — the canonical "why we moved off X" case for this
+research, except the "X" and its successor were built by the same two people.</p>
+<h3 id="1-2-event-sourcing-and-the-determinism-constraint">1.2 Event sourcing and the determinism constraint<a class="anchor" href="#1-2-event-sourcing-and-the-determinism-constraint" aria-label="Link to this section">#</a></h3>
+<p>A Temporal <strong>Workflow Execution</strong> is not a process with in-memory state that gets
+checkpointed — it is an append-only <strong>Event History</strong>. State changes are persisted as
+events <em>before</em> being applied, so no state is lost on a server crash
+<a href="https://docs.temporal.io/workflows" rel="noopener noreferrer">Temporal docs</a>. Recovery does not restore a snapshot:
+the Worker re-runs the workflow function from the top and replays the Event History
+step-by-step, using the recorded events to short-circuit any operation that already
+happened (rather than re-executing side effects). This only works if the workflow function
+is <strong>deterministic</strong>: on replay it must reproduce the exact same sequence of Commands as
+the original run. During replay, the SDK diffs the freshly-generated Commands against the
+stored History; a mismatch (e.g. non-deterministic branching, a changed loop count, direct
+system-clock reads) makes replay fail outright
+<a href="https://docs.temporal.io/encyclopedia/event-history/event-history-go" rel="noopener noreferrer">Event History walkthrough, Go SDK</a>.
+This is the central design bet of Temporal: <strong>the durable log is the source of truth, and
+the workflow function is a pure projection over it.</strong> Any dag-worker-go analog that lets
+hosts run arbitrary node-processing code does not need this constraint (activities in
+Temporal terms are exempt from determinism — only the orchestrating "decider" code is
+constrained), but the event-log-as-truth pattern is directly reusable for the DAG's own
+status transitions.</p>
+<h3 id="1-3-task-queues-matching-and-how-double-dispatch-is-avoided">1.3 Task queues, matching, and how double-dispatch is avoided<a class="anchor" href="#1-3-task-queues-matching-and-how-double-dispatch-is-avoided" aria-label="Link to this section">#</a></h3>
+<p>Work handoff to external workers happens through <strong>Task Queues</strong>. A Task Queue is a
+lightweight, dynamically-created queue name that any number of Workers can long-poll; a
+dedicated <strong>Matching Service</strong> owns queue state and pairs incoming poll requests with
+incoming tasks, doing a <strong>sync match</strong> (deliver directly to a waiting poller, no persistence
+round-trip) whenever possible and falling back to an <strong>async match</strong> (persist the task,
+wait for the next poller) otherwise
+<a href="https://github.com/temporalio/temporal/blob/main/docs/architecture/matching-service.md" rel="noopener noreferrer">Matching Service architecture doc</a>.
+Double-dispatch is avoided the same way a durable queue avoids it everywhere in this
+survey: a task is handed to exactly one poll response, and it is not deleted until the
+activity or workflow task completes — if the worker never responds, the <strong>task's own
+schedule-to-start / start-to-close timeout</strong> fires and the Matching Service reschedules it,
+which is a lease, not a broadcast. For throughput, Task Queues are split into
+<strong>partitions</strong> (default 4, tunable) forming a tree; pollers and tasks can be "forwarded"
+from a starved child partition up to the root so that an idle poller on one partition can
+still receive a task queued on another — this is Temporal's answer to the "how does a
+single logical queue scale past one lock" problem
+<a href="https://github.com/temporalio/temporal/blob/main/docs/architecture/matching-service.md" rel="noopener noreferrer">Matching Service architecture doc</a>.</p>
+<h3 id="1-4-sticky-execution-a-cache-not-a-correctness-mechanism">1.4 Sticky execution — a cache, not a correctness mechanism<a class="anchor" href="#1-4-sticky-execution-a-cache-not-a-correctness-mechanism" aria-label="Link to this section">#</a></h3>
+<p><strong>Sticky Execution</strong> binds the <em>next</em> Workflow Task for a given Workflow Execution to the
+Worker that handled the <em>previous</em> one, via an auto-generated <strong>Sticky Queue</strong> unique to
+that worker process. The payoff is that the sticky worker already has the workflow's state
+machine cached in memory and does not need to replay the full Event History; the cost is
+worker memory pinned per open workflow
+<a href="https://docs.temporal.io/sticky-execution" rel="noopener noreferrer">Sticky Execution docs</a>. Crucially, sticky
+queues carry their own <strong>schedule-to-start timeout, defaulting to 5 seconds</strong> — far
+shorter than a normal task queue's — because if the sticky worker is gone, waiting the
+normal timeout would stall the workflow for no reason. When that 5s timeout fires,
+stickiness for that execution is dropped and the task falls back to the regular (non-sticky)
+task queue, at the cost of a full-history replay by whichever worker picks it up next
+<a href="https://docs.temporal.io/sticky-execution" rel="noopener noreferrer">Sticky Execution docs</a>. This is a clean pattern
+worth stealing narrowly: <strong>affinity is a performance hint with a short, separate timeout,
+never the mechanism that guarantees the task is eventually served.</strong></p>
+<h3 id="1-5-heartbeats-timeouts-and-long-running-activity-liveness">1.5 Heartbeats, timeouts, and long-running activity liveness<a class="anchor" href="#1-5-heartbeats-timeouts-and-long-running-activity-liveness" aria-label="Link to this section">#</a></h3>
+<p>Temporal activities (the unit closest to dag-worker-go's "node handed to an external
+worker") support four independently-configurable timeouts: Schedule-To-Start (queue wait),
+Start-To-Close (execution), Schedule-To-Close (end to end), and <strong>Heartbeat</strong>
+<a href="https://temporal.io/blog/activity-timeouts" rel="noopener noreferrer">Temporal blog, activity timeouts</a>. Heartbeat
+is the liveness signal for long activities: the worker periodically calls
+<code>RecordActivityHeartbeat</code>; if the server does not see a heartbeat within
+<code>HeartbeatTimeout</code>, the activity is considered failed and retried per the retry policy —
+independent of the (necessarily much longer) Start-To-Close timeout
+<a href="https://docs.temporal.io/encyclopedia/detecting-activity-failures" rel="noopener noreferrer">Detecting Activity failures</a>.
+On retry, any heartbeat <em>details</em> payload from the failed attempt is delivered with the new
+attempt so the activity can resume from a checkpoint instead of restarting from zero —
+<code>activity.GetHeartbeatDetails()</code> in the Go SDK
+<a href="https://pkg.go.dev/go.temporal.io/sdk/activity" rel="noopener noreferrer">activity package docs</a>. In Go:</p>
+<pre><code class="language-go">activityoptions := workflow.ActivityOptions{
+    StartToCloseTimeout: <span class="tok-num">10</span> * time.Minute,
+    HeartbeatTimeout:    <span class="tok-num">10</span> * time.Second,
+    RetryPolicy: &amp;temporal.RetryPolicy{
+        InitialInterval: time.Second,
+        MaximumAttempts: <span class="tok-num">5</span>,
+    },
+}
+ctx = workflow.WithActivityOptions(ctx, activityoptions)</code></pre>
+<p>The pattern is directly transplantable to dag-worker-go's per-node settable timeout
+requirement: <strong>the timeout that detects a dead worker should be short and heartbeat-driven,
+decoupled from the (much longer, business-defined) deadline for the whole unit of work.</strong></p>
+<h3 id="1-6-what-temporal-got-wrong-hard-limits">1.6 What Temporal got wrong / hard limits<a class="anchor" href="#1-6-what-temporal-got-wrong-hard-limits" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Event History is not infinite.</strong> The service logs a warning past <strong>10,240 events</strong> and
+hard-<strong>terminates</strong> the workflow execution past <strong>51,200 total events</strong>, or past <strong>2,000
+updates</strong>, or past <strong>10,000 signals</strong>
+<a href="https://docs.temporal.io/workflow-execution/event" rel="noopener noreferrer">Event History docs</a>. The prescribed
+fix, <code>ContinueAsNew</code>, atomically closes the current execution and starts a fresh one
+under the same Workflow ID with a reset history — effectively a manual, developer-owned
+"compact the log" operation
+<a href="https://docs.temporal.io/develop/go/continue-as-new" rel="noopener noreferrer">Continue-As-New, Go SDK</a>. This is a
+hard reminder that an append-only-log-as-truth design needs an explicit truncation/
+compaction story from day one, or it becomes a footgun that only appears at scale.</li>
+<li><strong>Sticky-queue timeout tuning was itself a multi-year bug hunt.</strong> Issues
+<a href="https://github.com/temporalio/temporal/issues/2363" rel="noopener noreferrer">#2363</a> and PR
+<a href="https://github.com/temporalio/temporal/pull/2811" rel="noopener noreferrer">#2811</a> track a <strong>5-second delay after
+a worker disappears</strong> before its sticky tasks fall back to the general queue — the
+fallback timeout was originally too coarse-grained, a reminder that "fall back to a
+general queue" needs its own tight timeout, not the workflow-task default.</li>
+<li>Sticky execution interacting with worker shutdown produced repeated "Workflow Task Timed
+Out" reports across SDKs, e.g.
+<a href="https://github.com/temporalio/sdk-python/issues/783" rel="noopener noreferrer">sdk-python#783</a> — affinity-to-a-
+dead-process is an evergreen source of spurious timeouts; any sticky/affinity feature
+needs an explicit, fast "worker gone" signal (heartbeat or connection drop), not just a
+timer.</li>
+</ul>
+<hr>
+<h2 id="2-netflix-conductor">2. Netflix Conductor<a class="anchor" href="#2-netflix-conductor" aria-label="Link to this section">#</a></h2>
+<p>Conductor is an <strong>RPC/pull orchestrator</strong>: task workers live on separate machines from the
+server and communicate over HTTP, polling their designated queues for work rather than
+being pushed to
+<a href="https://conductor.netflix.com/devguide/architecture/technicaldetails.html" rel="noopener noreferrer">Technical Details</a>.
+This is architecturally the closest match in this survey to dag-worker-go's "external
+workers poll/receive ready nodes" model.</p>
+<p><strong>Task state machine</strong> (task, not workflow, level):</p>
+<p><code>SCHEDULED → IN_PROGRESS → {COMPLETED | FAILED | FAILED_WITH_TERMINAL_ERROR | TIMED_OUT | COMPLETED_WITH_ERRORS}</code>,
+with <code>{FAILED, TIMED_OUT} → SCHEDULED</code> as an automatic, delayed retry, and <code>CANCELED</code> /
+<code>SKIPPED</code> as workflow-driven side transitions
+<a href="https://conductor-oss.github.io/conductor/devguide/architecture/tasklifecycle.html" rel="noopener noreferrer">Task Lifecycle</a>.
+A task sits in <code>SCHEDULED</code> in a queue until a worker polls it, at which point the server
+marks it <code>IN_PROGRESS</code>
+<a href="https://conductor-oss.github.io/conductor/devguide/architecture/tasklifecycle.html" rel="noopener noreferrer">Task Lifecycle</a>.</p>
+<p><strong>Four independent timeouts</strong>, all server-enforced, none worker-trusted:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Timeout</th><th>Fires when</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>pollTimeoutSeconds</code></td><td>no worker polls the task at all</td><td>task → <code>TIMED_OUT</code></td></tr>
+<tr><td><code>responseTimeoutSeconds</code> (default 600s)</td><td>worker polled but never reported back</td><td>task → <code>TIMED_OUT</code></td></tr>
+<tr><td><code>timeoutSeconds</code></td><td>overall SLA for a single attempt</td><td>task → <code>TIMED_OUT</code></td></tr>
+<tr><td><code>totalTimeoutSeconds</code></td><td>hard budget across <em>all</em> retries</td><td>no further retries scheduled, regardless of remaining retry count</td></tr>
+</tbody></table></div>
+<p><a href="https://conductor-oss.github.io/conductor/devguide/architecture/tasklifecycle.html" rel="noopener noreferrer">Task Lifecycle</a></p>
+<p>The split between "never polled" and "polled but silent" is worth stealing directly: it
+distinguishes a starved queue (no capacity) from a dead worker (had capacity, then
+vanished), which are different operational problems and should alert differently. Workers
+can also extend their own deadline mid-flight by reporting progress with a
+<code>callbackAfterSeconds</code> value — a lightweight heartbeat that resets the response-timeout
+clock without a full heartbeat RPC
+<a href="https://conductor-oss.github.io/conductor/devguide/architecture/tasklifecycle.html" rel="noopener noreferrer">Task Lifecycle</a>.</p>
+<p>Orchestration itself is driven by a <strong>"decide"</strong> pass — Conductor's server-side loop
+recursively evaluates a running workflow's state, schedules the next ready tasks, persists
+checkpoints, and re-runs whenever a task transitions
+<a href="https://netflixtechblog.com/netflix-conductor-a-microservices-orchestrator-2e8d4771bf40" rel="noopener noreferrer">Netflix Tech Blog, original architecture</a>.
+This is architecturally a <strong>level-triggered reconciler over a persisted graph</strong>, the same
+family as Kubernetes controllers (§13) and Argo Workflows (§6), and a strong precedent for
+treating "which nodes are now ready" as a pure function recomputed from persisted state
+rather than as edge-triggered event chaining.</p>
+<p>Netflix later contributed Conductor to the OSS community; <strong>Conductor OSS</strong>, maintained
+primarily by Orkes, is the continuation of that repository
+<a href="https://conductor-oss.github.io/conductor/devguide/faq.html" rel="noopener noreferrer">Conductor OSS FAQ</a>. Public
+documentation does not detail the original scaling pain that motivated the handoff, so no
+claim is made there beyond the fact of the transition.</p>
+<hr>
+<h2 id="3-apache-airflow">3. Apache Airflow<a class="anchor" href="#3-apache-airflow" aria-label="Link to this section">#</a></h2>
+<h3 id="3-1-dagrun-taskinstance-state-machines-and-the-scheduler-loop">3.1 DagRun / TaskInstance state machines and the scheduler loop<a class="anchor" href="#3-1-dagrun-taskinstance-state-machines-and-the-scheduler-loop" aria-label="Link to this section">#</a></h3>
+<p>Airflow separates <strong>DagRun</strong> (one graph execution) from <strong>TaskInstance</strong> (one node's
+execution within that run). A TaskInstance has 14 distinct states in current Airflow:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>State</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>none</code></td><td>dependencies not yet met, not queued</td></tr>
+<tr><td><code>scheduled</code></td><td>scheduler determined dependencies are met</td></tr>
+<tr><td><code>queued</code></td><td>assigned to an Executor, awaiting a worker slot</td></tr>
+<tr><td><code>running</code></td><td>actively executing on a worker</td></tr>
+<tr><td><code>restarting</code></td><td>externally asked to restart while running</td></tr>
+<tr><td><code>success</code></td><td>finished without error</td></tr>
+<tr><td><code>failed</code></td><td>errored, no retries left (or none configured)</td></tr>
+<tr><td><code>skipped</code></td><td>skipped by branching / LatestOnly / trigger rule</td></tr>
+<tr><td><code>upstream_failed</code></td><td>an upstream failed and the trigger rule requires it</td></tr>
+<tr><td><code>up_for_retry</code></td><td>failed, retries remain, will be rescheduled</td></tr>
+<tr><td><code>up_for_reschedule</code></td><td>a Sensor in reschedule mode, releasing its worker slot between polls</td></tr>
+<tr><td><code>deferred</code></td><td>handed off to a trigger (async wait, e.g. <code>defer()</code>)</td></tr>
+<tr><td><code>awaiting_input</code></td><td>waiting on a human response, no worker held</td></tr>
+<tr><td><code>removed</code></td><td>task vanished from the DAG definition since the run started</td></tr>
+</tbody></table></div>
+<p><a href="https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/tasks.html" rel="noopener noreferrer">Airflow docs, Tasks</a></p>
+<p>The happy path is <code>none → scheduled → queued → running → success</code>. Two states are
+notable design choices worth stealing: <strong><code>up_for_reschedule</code></strong> (a sensor releases its
+worker slot while "polling" rather than blocking it — decoupling "waiting for an external
+condition" from "occupying execution capacity") and <strong><code>deferred</code></strong> (the same idea
+generalized: hand the wait to a lightweight async trigger process instead of a worker at
+all). Both encode the idea that <em>waiting</em> and <em>executing</em> are different resource classes
+and should not compete for the same slot.</p>
+<h3 id="3-2-scheduler-ha-via-database-row-locking-no-consensus-system">3.2 Scheduler HA via database row locking — no consensus system<a class="anchor" href="#3-2-scheduler-ha-via-database-row-locking-no-consensus-system" aria-label="Link to this section">#</a></h3>
+<p>Airflow's scheduler runs a repeating <strong><code>_do_scheduling()</code></strong> pass: create new DagRuns,
+promote queued DagRuns to running, and — the performance-critical part — a <strong>critical
+section</strong> that moves TaskInstances from <code>scheduled</code> to <code>queued</code>/dispatched to the executor
+while respecting pool/concurrency limits
+<a href="https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/scheduler.html" rel="noopener noreferrer">Scheduler docs</a>.
+That critical section is protected by taking a <strong>row-level write lock on every row of the
+<code>Pool</code> table</strong>, conceptually <code>SELECT * FROM slot_pool FOR UPDATE NOWAIT</code> (the real query
+differs slightly)
+<a href="https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/scheduler.html" rel="noopener noreferrer">Scheduler docs</a>.
+Multiple scheduler processes can run <strong>active-active</strong> against the same Postgres/MySQL
+database with <strong>no leader election, no Raft/Paxos, no ZooKeeper/Consul</strong> — coordination is
+entirely through the shared metadata database's locking primitives, an explicit design
+choice to keep "operational surface area" minimal
+<a href="https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/scheduler.html" rel="noopener noreferrer">Scheduler docs</a>,
+<a href="https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=103092651" rel="noopener noreferrer">AIP-15</a>. Each
+scheduler is fully active — not a hot standby — and does its own task-error-handling,
+health-check, and email work
+<a href="https://www.astronomer.io/blog/airflow-2-scheduler/" rel="noopener noreferrer">Astronomer, Benefits of the Airflow 2.0 Scheduler</a>.</p>
+<p>This only works if the database supports the right SQL locking clauses:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Backend</th><th>Multi-scheduler support</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td>PostgreSQL 12+</td><td>Full</td><td>native <code>SELECT ... FOR UPDATE [SKIP LOCKED|NOWAIT]</code></td></tr>
+<tr><td>MySQL 8.0+</td><td>Full</td><td>added <code>SKIP LOCKED</code>/<code>NOWAIT</code> in 8.0</td></tr>
+<tr><td>MariaDB 10.6+</td><td>Full (after 10.6.0)</td><td><code>SKIP LOCKED</code>/<code>NOWAIT</code> landed in 10.6.0; earlier versions deadlock</td></tr>
+<tr><td>MySQL 5.x</td><td><strong>Unsupported</strong></td><td>no <code>SKIP LOCKED</code>/<code>NOWAIT</code>; prone to false deadlock detection</td></tr>
+<tr><td>SQLite</td><td><strong>Unsupported</strong></td><td>no real row locking; single-writer only</td></tr>
+</tbody></table></div>
+<p><a href="https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/scheduler.html" rel="noopener noreferrer">Scheduler docs</a></p>
+<p>This is a direct, load-bearing precedent for the requirement that dag-worker-go support a
+Postgres backend for multi-instance operation, and it shows the exact mechanism
+(<code>SKIP LOCKED</code>/<code>NOWAIT</code> row-claiming, no external coordinator) that scales this pattern.</p>
+<h3 id="3-3-where-the-locking-design-bit-them">3.3 Where the locking design bit them<a class="anchor" href="#3-3-where-the-locking-design-bit-them" aria-label="Link to this section">#</a></h3>
+<p>Even with row locks, Airflow's scheduler has repeatedly deadlocked in production because
+two code paths lock <strong>DagRun</strong> and <strong>TaskInstance</strong> rows in different orders. Issue
+<a href="https://github.com/apache/airflow/issues/27473" rel="noopener noreferrer">#27473</a> traces a concrete deadlock: one
+path (<code>DagRun.update_state()</code>) writes <code>dag_run.last_scheduling_decision</code> while another
+(<code>DagRun.schedule_tis()</code>) bulk-updates <code>task_instance.state = 'scheduled'</code>; under
+concurrent schedulers this produces a classic "Process A waits for lock held by B; B waits
+for a lock held by A" cycle. The maintainers' own guidance is that whenever a scheduling
+path needs locks on multiple tables, it must always take them in the same global order
+(DagRun before TaskInstance), because Postgres's deadlock detector will otherwise fire
+under load — the issue itself was closed "not planned" in the tracker, i.e. accepted as a
+recurring cost of the design rather than fully fixed
+<a href="https://github.com/apache/airflow/issues/27473" rel="noopener noreferrer">GH #27473</a>. <strong>Takeaway for
+dag-worker-go: define and document a single, global lock-acquisition order across every
+multi-table transaction from day one</strong> — this is exactly the kind of bug that is cheap to
+prevent up front and expensive to hunt down after the fact.</p>
+<p>Airflow's own scheduler doc admits the operational cost bluntly: even where multi-scheduler
+is "supported," the Postgres/MySQL 8 requirement locks out anyone running an older or
+embedded-friendly database, and community reports (e.g.
+<a href="https://github.com/apache/airflow/issues/53491" rel="noopener noreferrer">#53491</a>, 30–60 minute slowdowns from DB
+lock contention under HA) show the row-lock approach still degrades under enough
+concurrent scheduler load — it is a scaling technique with a ceiling, not a free lunch.</p>
+<h3 id="3-4-dynamic-task-mapping-aip-42-the-closest-analog-to-a-dynamic-dag">3.4 Dynamic task mapping (AIP-42) — the closest analog to a dynamic DAG<a class="anchor" href="#3-4-dynamic-task-mapping-aip-42-the-closest-analog-to-a-dynamic-dag" aria-label="Link to this section">#</a></h3>
+<p>Airflow's static-DAG-as-Python-code model could not express "spawn N parallel tasks where N
+is only known at run time" until <strong>AIP-42 Dynamic Task Mapping</strong>
+(<a href="https://cwiki.apache.org/confluence/display/AIRFLOW/AIP-42+Dynamic+Task+Mapping" rel="noopener noreferrer">proposal</a>).
+The design:</p>
+<ul>
+<li>A TaskInstance gets a new integer <code>mapping_id</code> column, default <code>-1</code> (unmapped); the
+primary key expands from <code>(dag_id, task_id, run_id)</code> to
+<code>(dag_id, task_id, run_id, mapping_id)</code>. Related tables (<code>TaskFail</code>,
+<code>TaskReschedule</code>, rendered-fields cache) get the same treatment.</li>
+<li>A new <code>TaskMap</code> table stores only the <strong>shape</strong> (type, length, dict keys) of a mapped
+upstream's output, specifically so the scheduler never has to load the full (potentially
+huge) XCom payload just to know how many mapped instances to create.</li>
+<li><code>.expand()</code> over multiple iterables takes their <strong>Cartesian product</strong>, with a
+deterministic index ordering derived from Python 3.6+ dict insertion order (e.g.
+expanding over a length-5 and a length-3 iterable yields indices 0–14 in a fixed,
+reproducible order).</li>
+<li>Expansion happens lazily: the scheduler only materializes the N concrete TaskInstances
+once the mapped task's dependencies are actually satisfied, not at DAG-parse time.</li>
+<li>A <code>maximum_map_size</code> config caps N to prevent an accidental combinatorial explosion from
+a bad upstream value taking down the metadata database.</li>
+<li>The authors explicitly benchmarked the schema migration cost before shipping: adding the
+<code>mapping_id</code> column and widening the primary key took <strong>1 minute 7 seconds on a 35-million-
+row table</strong>, versus 9–28 minutes for other Airflow migrations around the same era — i.e.
+they treated "can this ship without a multi-hour outage on large installs" as a hard
+gate.</li>
+</ul>
+<p><a href="https://cwiki.apache.org/confluence/display/AIRFLOW/AIP-42+Dynamic+Task+Mapping" rel="noopener noreferrer">AIP-42</a></p>
+<p>The lesson generalizes directly to dag-worker-go's "dynamic DAG, nodes/edges added while
+running" requirement: <strong>store the <em>shape</em> of dynamically generated fan-out separately from
+its payload</strong>, cap fan-out with a hard configurable ceiling, and expand lazily against
+readiness rather than eagerly at graph-definition time.</p>
+<hr>
+<h2 id="4-prefect-2-3">4. Prefect 2 / 3<a class="anchor" href="#4-prefect-2-3" aria-label="Link to this section">#</a></h2>
+<p>Prefect's orchestration model treats every state transition as a <strong>negotiation</strong>: the
+execution engine <em>proposes</em> a state to the Prefect API/server, and server-side
+<strong>orchestration rules</strong> (retry policy, concurrency limits, caching) can accept, reject, or
+rewrite that proposal before it is committed
+<a href="https://docs.prefect.io/v3/concepts/states" rel="noopener noreferrer">Prefect docs, States</a>. This inverts the
+typical "worker owns its own state transitions" model: the source of truth about whether a
+transition is <em>allowed</em> lives centrally, not in the worker process. Prefect's own docs
+frame the key modeling insight as <strong>state <em>type</em> drives orchestration logic; state <em>name</em>
+is just a human label</strong> — a task that is retrying still has type <code>RUNNING</code> even though its
+displayed name is "Retrying," so downstream logic never has to special-case retry-vs-first-
+attempt <a href="https://docs.prefect.io/v3/concepts/states" rel="noopener noreferrer">Prefect docs, States</a>. Concretely,
+Prefect 3 defines roughly 20 named states across 7 types:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Type</th><th>Example names</th><th>Terminal?</th></tr></thead>
+<tbody>
+<tr><td><code>SCHEDULED</code></td><td>Scheduled, Late, AwaitingRetry, AwaitingConcurrencySlot, Resuming</td><td>no</td></tr>
+<tr><td><code>PENDING</code></td><td>Pending, Submitting, InfrastructurePending</td><td>no</td></tr>
+<tr><td><code>RUNNING</code></td><td>Running, Retrying</td><td>no</td></tr>
+<tr><td><code>PAUSED</code></td><td>Paused, Suspended</td><td>no</td></tr>
+<tr><td><code>CANCELLING</code></td><td>Cancelling</td><td>no</td></tr>
+<tr><td><code>CANCELLED</code></td><td>Cancelled</td><td><strong>yes</strong></td></tr>
+<tr><td><code>COMPLETED</code></td><td>Completed, Cached, RolledBack</td><td><strong>yes</strong></td></tr>
+<tr><td><code>FAILED</code></td><td>Failed, TimedOut</td><td><strong>yes</strong></td></tr>
+<tr><td><code>CRASHED</code></td><td>Crashed</td><td><strong>yes</strong></td></tr>
+</tbody></table></div>
+<p><a href="https://docs.prefect.io/v3/concepts/states" rel="noopener noreferrer">Prefect docs, States</a></p>
+<p>Note the explicit <code>CRASHED</code> type distinct from <code>FAILED</code>: a <code>FAILED</code> run raised an
+application exception, a <code>CRASHED</code> run was killed by the <em>infrastructure</em> (OS signal,
+<code>SIGTERM</code>, OOM) — i.e. Prefect encodes "the worker itself died" as a first-class outcome
+different from "the worker ran and reported an error," which is precisely the
+error-vs-timeout distinction the dag-worker-go brief calls for ("error-with-timeout" as
+its own bucket).</p>
+<p><strong>Execution/leasing model (Prefect 3):</strong> work is queued server-side in <strong>work pools</strong>,
+optionally subdivided into <strong>work queues</strong> for priority/concurrency partitioning; long-
+running <strong>workers</strong> poll a work pool (matched by infra type) for scheduled flow runs, then
+provision infrastructure and execute
+<a href="https://docs.prefect.io/v3/concepts/workers" rel="noopener noreferrer">Prefect docs, Workers</a>. In the hosted-cloud
+deployment mode, the control plane <strong>never opens an inbound connection into the customer's
+network</strong> — the worker only ever makes outbound polls and posts back status — a
+zero-inbound-firewall design that is worth keeping in mind for any dag-worker-go deployment
+guidance, even though the library itself is embedded rather than SaaS
+<a href="https://www.prefect.io/learn/diagram-hybrid-pool" rel="noopener noreferrer">Prefect, Hybrid Work Pool Architecture</a>.</p>
+<p>Prefect's own public criticism of Airflow (its direct predecessor problem) is that
+"Airflow remains bottlenecked by its own scheduler, which takes 10 seconds to run any
+task, meaning no matter how big your cluster, Airflow will still only ask it to run a task
+every 10 seconds" — a fixed polling-interval scheduler loop caps throughput independent of
+available worker capacity
+<a href="https://medium.com/the-prefect-blog/why-not-airflow-4cfa423299c4" rel="noopener noreferrer">Prefect Blog, Why Not Airflow?</a>.
+This is exactly the failure mode a <code>LISTEN/NOTIFY</code>- or heartbeat-driven design (§12, River)
+avoids: <strong>a scheduler loop with a fixed sleep interval puts a hard ceiling on latency that
+no amount of worker parallelism can buy down.</strong></p>
+<hr>
+<h2 id="5-dagster">5. Dagster<a class="anchor" href="#5-dagster" aria-label="Link to this section">#</a></h2>
+<p>Dagster's execution path has four cooperating pieces:</p>
+<ol>
+<li><strong>Run Coordinator</strong> — everything submitted from the UI/CLI passes through it first; it
+applies deployment-wide limits and prioritization (e.g. <code>QueuedRunCoordinator</code> caps
+total concurrent runs) before handing off.</li>
+<li><strong>Run Launcher</strong> — the actual interface to compute (local process, Kubernetes Job,
+Docker container, ECS task, …).</li>
+<li><strong><code>dagster-daemon</code> process</strong> — a single long-running process that itself orchestrates
+several sub-daemons: the schedule daemon, sensor daemon, run-queue daemon, and
+run-monitoring daemon; it also does periodic janitorial work (expiring stale runs).</li>
+<li><strong>Asset Daemon</strong> — continuously evaluates each asset's <code>AutomationCondition</code> (the
+successor to the older <code>AutoMaterializePolicy</code>) and launches materialization runs when
+conditions are met.</li>
+</ol>
+<p><a href="https://atlan.com/dagster-data-orchestration/" rel="noopener noreferrer">Dagster docs, Run Launcher/Coordinator</a>,
+<a href="https://deepwiki.com/dagster-io/dagster/4.3-asset-daemon-and-tick-system" rel="noopener noreferrer">Asset Daemon and Tick System</a>,
+<a href="https://docs.dagster.io/deployment/execution/dagster-daemon" rel="noopener noreferrer">Dagster daemon docs</a>.
+Runs triggered by a schedule or sensor go through the identical Run Coordinator → Run
+Launcher pipeline as a manually-launched run; only the <em>first</em> caller differs (the daemon
+instead of the webserver) — the same "one funnel regardless of trigger source" discipline
+seen in Kubernetes's reconciliation model (§13). Publicly documented Dagster material does
+not specify whether <code>QueuedRunCoordinator</code>'s concurrency accounting uses Postgres row locks
+or an in-memory/queue-table scheme internally; that implementation detail was not
+confirmed by primary sources during this research and should not be assumed.</p>
+<hr>
+<h2 id="6-argo-workflows">6. Argo Workflows<a class="anchor" href="#6-argo-workflows" aria-label="Link to this section">#</a></h2>
+<p>Argo represents a workflow as a <strong>Kubernetes Custom Resource</strong>; the workflow-controller is
+a standard Kubernetes controller reconciling that resource against the state of the Pods
+it spawns. <strong>NodePhase</strong> — the state of one DAG step — has 7 values:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Phase</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>Pending</code></td><td>node is waiting to run</td></tr>
+<tr><td><code>Running</code></td><td>node is running</td></tr>
+<tr><td><code>Succeeded</code></td><td>node finished with exit code 0</td></tr>
+<tr><td><code>Skipped</code></td><td>node was skipped (e.g. <code>when:</code> condition false)</td></tr>
+<tr><td><code>Failed</code></td><td>node (or a child of it) exited non-zero</td></tr>
+<tr><td><code>Error</code></td><td>node had an error <em>other than</em> a non-zero exit (e.g. pod eviction, image pull failure)</td></tr>
+<tr><td><code>Omitted</code></td><td>node's <code>depends</code> condition was never satisfied</td></tr>
+</tbody></table></div>
+<p><a href="https://github.com/argoproj/argo-workflows/blob/main/pkg/apis/workflow/v1alpha1/workflow_types.go" rel="noopener noreferrer">argo-workflows source, <code>workflow_types.go</code></a></p>
+<p>The <code>Failed</code> vs <code>Error</code> split is a genuinely useful distinction most systems in this survey
+collapse into one bucket: <strong>the unit of work ran and reported failure</strong> vs <strong>the
+infrastructure never let the unit of work finish at all</strong> — directly analogous to the
+Prefect <code>FAILED</code>/<code>CRASHED</code> split (§4) and to the "error" vs "error-with-timeout" split
+dag-worker-go's brief already calls for.</p>
+<p><strong>Storage ceiling and its fix.</strong> Because a Workflow is an actual Kubernetes object living
+in etcd, and etcd enforces a hard <strong>1 MB per-object size limit</strong>, a workflow with enough
+nodes eventually cannot fit its own <code>/status/nodes</code> map in the resource. Argo's answer is a
+two-stage escape hatch: first compress <code>status.nodes</code> into <code>status.compressedNodes</code> (gzip
+by default; <code>zstd</code>/<code>brotli</code> selectable via <code>WORKFLOW_COMPRESSION_ALGORITHM</code>), and if that
+is <em>still</em> too big, offload node status entirely into an external Postgres/MySQL/MariaDB
+table via <code>nodeStatusOffLoad: true</code>
+<a href="https://argo-workflows.readthedocs.io/en/latest/offloading-large-workflows/" rel="noopener noreferrer">Offloading Large Workflows</a>.
+This is a direct precedent for a scaling failure mode dag-worker-go must design around from
+the start rather than retrofit: <strong>a DAG's per-node status must not be forced to live inside
+a single record whose backend has a hard size ceiling</strong> — this argues for status being
+one row per node in a store designed for that access pattern (as the brief's "pluggable
+storage" already implies), not a single blob column.</p>
+<p>Community issues repeatedly report workflows getting stuck as <strong>"workflow never
+reconciled"</strong> — a liveness-probe failure category where the controller stops making
+progress on a resource, generally under apiserver load or after a controller restart loses
+its in-memory work queue state
+(<a href="https://github.com/argoproj/argo-workflows/discussions/13460" rel="noopener noreferrer">discussion #13460</a>,
+<a href="https://github.com/argoproj/argo-workflows/issues/11051" rel="noopener noreferrer">issue #11051</a>). The generalizable
+lesson: a reconciliation loop's <em>liveness</em> depends on the health of the API it reconciles
+against, and a controller needs to distinguish "nothing to do" from "stuck trying to do
+something" in its own health signal, or the two look identical from outside.</p>
+<hr>
+<h2 id="7-luigi">7. Luigi<a class="anchor" href="#7-luigi" aria-label="Link to this section">#</a></h2>
+<p>Luigi predates all of the above and shows what the <em>absence</em> of the mechanisms above costs
+in production. It has a single <strong>central scheduler</strong> process; workers hold a keep-alive
+thread that reports liveness, and task status flows
+<code>PENDING → RUNNING → DONE</code>, <code>RUNNING → FAILED</code>, and — after enough consecutive failures —
+<code>FAILED → DISABLED</code>, with a timer eventually returning a disabled task to <code>PENDING</code>
+<a href="https://deepwiki.com/spotify/luigi/2.4-scheduler" rel="noopener noreferrer">Luigi scheduler internals, DeepWiki</a>.
+Because the scheduler is a <strong>single stateful process with no persistence guarantees
+described in its own docs</strong>, three failure classes recur across its issue tracker:</p>
+<ul>
+<li>Tasks get stuck permanently <code>RUNNING</code> even after their output already exists, because
+the scheduler's record of "who is running this" and the worker's actual liveness drift
+apart with no independent timeout to reconcile them
+(<a href="https://github.com/spotify/luigi/issues/434" rel="noopener noreferrer">issue #434</a>,
+<a href="https://github.com/spotify/luigi/issues/2200" rel="noopener noreferrer">issue #2200</a>).</li>
+<li>If a worker does blocking I/O on its main thread in single-process mode, its keep-alive
+heartbeat thread starves too, and the scheduler — with no independent way to check
+liveness — declares the worker disconnected even though it is still working
+(<a href="https://github.com/spotify/luigi/issues/2070" rel="noopener noreferrer">issue #2070</a>).</li>
+<li>A task whose dependency is satisfied by a <em>different</em> worker than the one that originally
+claimed it can be left permanently <code>PENDING</code>, because ownership and readiness are not
+cleanly separated (<a href="https://github.com/spotify/luigi/issues/3049" rel="noopener noreferrer">issue #3049</a>).</li>
+</ul>
+<p>The unifying root cause across all three: <strong>liveness detection (heartbeat) and cooperative
+scheduling both ran on the same thread/process as user task code, with no independent
+timeout authority.</strong> Every system later in this survey that gets this right (Faktory,
+Sidekiq Pro, Temporal, Conductor) puts the timeout clock in the <em>server</em>, driven by an
+explicit heartbeat or lease-expiry check, never trusting the worker's own thread scheduling
+to notice its own death.</p>
+<hr>
+<h2 id="8-nextflow">8. Nextflow<a class="anchor" href="#8-nextflow" aria-label="Link to this section">#</a></h2>
+<p>Nextflow implements the <strong>dataflow programming model</strong>: a pipeline is a DAG of
+<strong>Processes</strong> that communicate exclusively through typed, asynchronous <strong>Channels</strong>; a
+process fires automatically whenever all of its input channels have a value available, and
+the runtime parallelizes independent processes without any explicit fork/join code from the
+pipeline author
+<a href="https://www.nextflow.io/docs/latest/cache-and-resume.html" rel="noopener noreferrer">Nextflow docs, cache-and-resume</a>,
+<a href="https://medium.com/23andme-engineering/introduction-to-nextflow-4d0e3b6768d1" rel="noopener noreferrer">23andMe Engineering, Introduction to Nextflow</a>.
+Execution is fully decoupled from <em>where</em> it runs — the same pipeline definition targets a
+local executor, an HPC scheduler (SLURM/PBS/HTCondor), or a cloud batch service purely by
+changing the configured <strong>Executor</strong>.</p>
+<p>The mechanism most relevant to dag-worker-go is <strong>content-addressed task caching</strong>: every
+task execution is unconditionally recorded into a task cache keyed by a <strong>hash of its
+inputs</strong> (script text, input file content hashes, parameter values); on a subsequent
+<code>-resume</code> run, Nextflow recomputes that hash for each task and, if a matching cache entry
+exists <em>and</em> the task's declared output files are still physically present in its work
+directory, skips re-execution entirely and reuses the recorded outputs — otherwise it
+re-executes
+<a href="https://www.nextflow.io/docs/latest/cache-and-resume.html" rel="noopener noreferrer">Nextflow docs, cache-and-resume</a>.
+This is a strong, directly-portable idea for a dynamic DAG library: <strong>idempotent
+re-submission of a node is "free" if the node's content hash and its physical output are
+both still valid</strong>, which gives hosts a resume/replay story without the library needing an
+event-sourced history at all — a lighter-weight alternative to Temporal's approach (§1.2)
+that trades "replay produces bit-identical history" for "replay skips work whose inputs
+provably haven't changed."</p>
+<hr>
+<h2 id="9-htcondor-dagman">9. HTCondor DAGMan<a class="anchor" href="#9-htcondor-dagman" aria-label="Link to this section">#</a></h2>
+<p>DAGMan is the workflow layer over HTCondor's batch scheduler and is the closest thing in
+this survey to a battle-tested <strong>crash-recovery protocol for a DAG scheduler process
+itself</strong> (as opposed to recovering individual worker tasks). Each DAG node has exactly six
+states:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Status</th><th>Value</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>STATUS_NOT_READY</code></td><td>0</td><td>≥1 parent unfinished (or node is a FINAL node)</td></tr>
+<tr><td><code>STATUS_READY</code></td><td>1</td><td>all parents finished, not yet running</td></tr>
+<tr><td><code>STATUS_PRERUN</code></td><td>2</td><td>the node's PRE script is executing</td></tr>
+<tr><td><code>STATUS_SUBMITTED</code></td><td>3</td><td>the node's HTCondor job(s) are queued/running</td></tr>
+<tr><td><code>STATUS_POSTRUN</code></td><td>4</td><td>the node's POST script is executing</td></tr>
+<tr><td><code>STATUS_DONE</code></td><td>5</td><td>node completed successfully</td></tr>
+</tbody></table></div>
+<p><a href="https://htcondor.readthedocs.io/en/latest/automated-workflows/dagman-information-files.html" rel="noopener noreferrer">HTCondor manual, DAGMan node status</a></p>
+<p>Two recovery mechanisms matter:</p>
+<ul>
+<li><strong>Rescue DAG.</strong> When DAGMan exits from a <em>failed</em> run, it writes a <code>.rescue001</code> file
+(incrementing <code>.rescue002</code>, <code>.rescue003</code>, … on repeated failures) marking every
+already-succeeded node with the <code>DONE</code> keyword. Resubmitting that rescue file skips every
+<code>DONE</code> node and resumes exactly at the first unfinished one
+<a href="https://htcondor.readthedocs.io/en/v8_8/users-manual/dagman-applications.html" rel="noopener noreferrer">DAGMan Applications manual</a>.</li>
+<li><strong>Recovery mode.</strong> If the DAGMan <em>process itself</em> dies before it can write a Rescue DAG
+(killed, <code>condor_hold</code>), resubmitting/releasing the same job causes DAGMan to
+reconstruct the state it should have persisted by replaying the <code>*.nodes.log</code> file — an
+append-only job-event log HTCondor was already writing for unrelated reasons — and only
+then resumes scheduling
+<a href="https://htcondor-wiki.cs.wisc.edu/index.cgi/wiki?p=DagRecovery" rel="noopener noreferrer">HTCondorWiki, DagRecovery</a>.</li>
+</ul>
+<p>The second point is the load-bearing idea: <strong>DAGMan's crash recovery for the <em>scheduler
+process itself</em> is bootstrapped off a log it was already writing for a different purpose
+(job accounting), not a separate WAL built specifically for scheduler recovery.</strong> For
+dag-worker-go, this argues that node-status transitions, once persisted for the "everyone
+can subscribe to a stream of transitions" requirement, are automatically sufficient to
+reconstruct scheduler state after a crash — a second, separate recovery log is redundant if
+the transition log is itself durable and replayable.</p>
+<hr>
+<h2 id="10-celery-canvas">10. Celery + Canvas<a class="anchor" href="#10-celery-canvas" aria-label="Link to this section">#</a></h2>
+<p>Celery's <strong>Canvas</strong> primitives compose async tasks: <strong><code>chain</code></strong> runs tasks strictly in
+sequence, piping each result into the next; <strong><code>group</code></strong> fans a set of tasks out for
+concurrent execution and collects results; <strong><code>chord</code></strong> is a <code>group</code> plus a callback that
+fires only once every member of the group has completed
+<a href="https://docs.celeryq.dev/en/stable/userguide/canvas.html" rel="noopener noreferrer">Celery docs, Canvas</a>. <code>chord</code> is
+implemented via a <code>chord_unlock</code> sentinel task that polls the result backend until the
+group is complete, then dispatches the callback — polling, not a push notification, is the
+mechanism, and it inherits every problem of poll-based completion detection.</p>
+<p>Reliability is bolted on via broker semantics, and it shows:</p>
+<ul>
+<li><strong>Redis broker + <code>acks_late</code> + <code>task_reject_on_worker_lost</code> does not actually work</strong>:
+the setting to re-queue a task whose worker was killed mid-execution is documented as
+broken specifically on the Redis broker, so a killed worker silently loses the task
+instead of releasing it back to the queue
+(<a href="https://github.com/celery/celery/issues/3541" rel="noopener noreferrer">issue #3541</a>).</li>
+<li><strong>Chords can hang forever</strong> if a member task dies via <code>SIGKILL</code>/<code>SystemExit</code> (commonly
+the OOM killer) — the unlock/<code>link_error</code> callback that would normally fire is never
+invoked for that failure mode, so the whole chord stalls waiting for a member that will
+never report in
+(<a href="https://github.com/celery/celery/issues/2911" rel="noopener noreferrer">issue #2911</a>).</li>
+<li><strong>Warm shutdown drops "successful" tasks under <code>acks_late=True</code></strong>: a task that finishes
+and returns success <em>after</em> the worker received <code>SIGTERM</code> may never get acked, so on
+restart it is redelivered and re-executed despite having already succeeded — an
+at-least-once violation of the acking contract at exactly the moment (graceful shutdown)
+it's supposed to be safest
+(<a href="https://github.com/celery/celery/issues/3802" rel="noopener noreferrer">issue #3802</a>).</li>
+<li>Celery's own FAQ concedes the point: Redis "won't perform as well as" an AMQP broker for
+strict reliability, and RabbitMQ (or another real AMQP broker) is the recommended choice
+when delivery guarantees matter
+<a href="https://docs.celeryq.dev/en/stable/faq.html" rel="noopener noreferrer">Celery FAQ</a>.</li>
+</ul>
+<p><strong>Takeaway:</strong> a <code>chord</code>-style "wait for N siblings, then continue" join is exactly the
+dynamic-fan-in shape a DAG library needs, but Celery's implementation shows the two ways to
+get it wrong — polling for completion instead of being notified, and letting the
+ack/lease contract silently break under process-kill signals — both of which
+dag-worker-go's own explicit ack-with-timeout design (per the brief) is meant to avoid.</p>
+<hr>
+<h2 id="11-sidekiq-and-faktory">11. Sidekiq and Faktory<a class="anchor" href="#11-sidekiq-and-faktory" aria-label="Link to this section">#</a></h2>
+<h3 id="11-1-sidekiq-the-just-redis-baseline-and-its-exact-failure-mode">11.1 Sidekiq — the "just Redis" baseline, and its exact failure mode<a class="anchor" href="#11-1-sidekiq-the-just-redis-baseline-and-its-exact-failure-mode" aria-label="Link to this section">#</a></h3>
+<p>Sidekiq's default fetch is a plain <code>BRPOP</code>: pop-and-delete in one atomic step. That is
+maximally simple and fast, but if the worker process dies <strong>between</strong> the pop and finishing
+the job, the job is gone — Redis never had a second copy of it
+<a href="https://github.com/sidekiq/sidekiq/wiki/Reliability" rel="noopener noreferrer">Sidekiq Reliability wiki</a>. The
+documented fix pattern is <code>BRPOPLPUSH</code> (now <code>BLMOVE</code> as of Redis 6.2, since <code>BRPOPLPUSH</code> is
+deprecated): atomically pop from the ready queue <strong>and</strong> push the same payload onto a
+private "in-progress" list <em>in the same command</em>; only once the job is confirmed done is it
+removed from that in-progress list — this is the textbook Redis-native at-least-once
+reliable-queue pattern
+<a href="https://github.com/sidekiq/sidekiq/wiki/Reliability" rel="noopener noreferrer">Sidekiq Reliability wiki</a>. Note the
+Redis-list version of this pattern (unlike a lease/TTL scheme) requires an <em>external</em> sweep
+to notice a list entry whose owning process died — the entry itself carries no expiry.</p>
+<p>Sidekiq Pro's <code>super_fetch</code> builds exactly that sweep on top of <code>LMOVE</code>: each process
+emits a heartbeat that <strong>expires after 60 seconds</strong>; on startup (and periodically), a
+process scans for other processes' heartbeats that have expired and, if at least a minute
+has passed since the last such check, adopts their orphaned in-progress lists back onto the
+ready queue. To avoid hammering Redis, a <strong>full <code>SCAN</code> of the keyspace for orphaned queues
+runs only once per hour</strong>
+<a href="https://thoughtbot.com/blog/enhancing-job-reliability-with-sidekiq-pro-s-super-fetch-strategy" rel="noopener noreferrer">thoughtbot, super_fetch</a>,
+<a href="https://www.bigbinary.com/blog/increase-reliability-of-background-job-processing-using-super_fetch-of-sidekiq-pro" rel="noopener noreferrer">BigBinary, super_fetch</a>.
+A job recovered as orphaned <strong>three times within 72 hours</strong> is treated as a poison pill and
+force-moved to the Dead set rather than retried a fourth time
+<a href="https://www.bigbinary.com/blog/increase-reliability-of-background-job-processing-using-super_fetch-of-sidekiq-pro" rel="noopener noreferrer">BigBinary, super_fetch</a>.
+Shutdown handling is signal-specific and load-bearing: <code>SIGTERM</code>/<code>SIGINT</code> let Sidekiq push
+its unfinished jobs back to the queue cleanly before exiting; <code>SIGKILL</code> gives it no chance
+to do that and in-flight job data for that process is lost outright unless a
+super_fetch-style external sweep exists
+<a href="https://github.com/sidekiq/sidekiq/wiki/Reliability" rel="noopener noreferrer">Sidekiq Reliability wiki</a>.</p>
+<h3 id="11-2-faktory-the-language-agnostic-protocol-first-version-of-the-same-idea">11.2 Faktory — the language-agnostic, protocol-first version of the same idea<a class="anchor" href="#11-2-faktory-the-language-agnostic-protocol-first-version-of-the-same-idea" aria-label="Link to this section">#</a></h3>
+<p>Faktory generalizes Sidekiq's pattern into an explicit wire protocol so <em>any</em> language can
+be a worker, not just Ruby. Jobs move through five states:</p>
+<p><code>SCHEDULED → ENQUEUED → WORKING → {done, implicit} | RETRIES → {ENQUEUED again | DEAD}</code></p>
+<p><a href="https://github.com/contribsys/faktory/blob/main/docs/protocol-specification.md" rel="noopener noreferrer">Faktory protocol spec</a></p>
+<p>The verbs are <code>PUSH</code> (producer enqueues), <code>FETCH</code> (consumer reserves — blocks up to 2
+seconds if the named queues are empty), and exactly one of <code>ACK</code> or <code>FAIL</code> from the
+consumer once it is done. <code>FETCH</code> is a <strong>lease, not a delete</strong>: it starts a <code>reserve_for</code>
+timer (default <strong>1800s</strong>, minimum <strong>60s</strong>, configurable per-job) during which the consumer
+must respond; if that timer expires with no <code>ACK</code>/<code>FAIL</code>, the server itself moves the job to
+<code>RETRIES</code> and it becomes fetchable again — no external sweep process required, because the
+lease expiry is enforced server-side by construction, not bolted on afterward
+<a href="https://github.com/contribsys/faktory/blob/main/docs/protocol-specification.md" rel="noopener noreferrer">Faktory protocol spec</a>.
+This is a materially cleaner design than Sidekiq's own (list-based, sweep-dependent)
+mechanism, and closely matches what dag-worker-go's brief already specifies for its own
+worker-ack-with-timeout requirement — <strong>Faktory's <code>FETCH</code>/<code>reserve_for</code>/auto-retry-on-
+expiry is close to a reference implementation of exactly the mechanism the brief asks
+for</strong>, generalized: a per-job configurable reservation timeout, set at fetch/take time,
+with a library-wide default (1800s here) — an extremely close match to "settable per node
+at the moment the worker takes it, with a library default."</p>
+<hr>
+<h2 id="12-go-native-job-queues">12. Go-native job queues<a class="anchor" href="#12-go-native-job-queues" aria-label="Link to this section">#</a></h2>
+<h3 id="12-1-river-postgresql">12.1 River (PostgreSQL)<a class="anchor" href="#12-1-river-postgresql" aria-label="Link to this section">#</a></h3>
+<p>River claims jobs with Postgres's <code>FOR UPDATE SKIP LOCKED</code>, added in Postgres 9.5
+specifically so that concurrent claimants can skip rows another transaction already has
+locked instead of blocking on them
+<a href="https://brandur.org/river" rel="noopener noreferrer">brandur.org/river</a>. River's producer/executor split matters for
+contention: <strong>one producer per process</strong> consolidates the <code>SKIP LOCKED</code> claim for <em>all</em> of
+that process's internal goroutine executors in a single query, so only inter-process
+contention (not intra-process) ever touches the lock — "many fewer" real contenders than a
+naive one-lock-per-worker-goroutine design
+<a href="https://brandur.org/river" rel="noopener noreferrer">brandur.org/river</a>. River layers Postgres <code>LISTEN</code>/<code>NOTIFY</code> on
+top purely as a latency optimization: the moment a job becomes ready, <code>NOTIFY</code> can wake an
+idle poller immediately, pushing mean dispatch latency down to sub-millisecond instead of
+waiting for the next poll tick
+<a href="https://brandur.org/river" rel="noopener noreferrer">brandur.org/river</a>. Because enqueue is a normal SQL <code>INSERT</code>,
+jobs enqueued inside a caller's own transaction are <strong>transactionally consistent with
+whatever else that transaction did</strong> — a job is visible to workers if and only if the
+enqueuing transaction commits, eliminating the classic "wrote to the DB, then crashed
+before publishing to the queue" dual-write hole entirely
+<a href="https://brandur.org/river" rel="noopener noreferrer">brandur.org/river</a>. The author reports roughly 10k trivial
+jobs/sec on a commodity laptop but explicitly declines to publish it as a real benchmark
+number <a href="https://brandur.org/river" rel="noopener noreferrer">brandur.org/river</a> — a good discipline for
+dag-worker-go's own 1M-node benchmark suite to imitate: report methodology and hardware
+alongside every number, or don't publish the number.</p>
+<pre><code class="language-sql"><span class="tok-com">-- River-style claim: one producer, N jobs at once, no blocking on contested rows</span>
+<span class="tok-kw">WITH</span> claimed <span class="tok-kw">AS</span> (
+  <span class="tok-kw">SELECT</span> id
+  <span class="tok-kw">FROM</span> river_job
+  <span class="tok-kw">WHERE</span> state = <span class="tok-str">'available'</span>
+    <span class="tok-kw">AND</span> queue = $<span class="tok-num">1</span>
+    <span class="tok-kw">AND</span> scheduled_at &lt;= <span class="tok-kw">now</span>()
+  <span class="tok-kw">ORDER</span> <span class="tok-kw">BY</span> priority DESC, id ASC
+  <span class="tok-kw">FOR</span> <span class="tok-kw">UPDATE</span> <span class="tok-kw">SKIP</span> <span class="tok-kw">LOCKED</span>
+  <span class="tok-kw">LIMIT</span> $<span class="tok-num">2</span>
+)
+<span class="tok-kw">UPDATE</span> river_job
+<span class="tok-kw">SET</span> state = <span class="tok-str">'running'</span>, attempted_at = <span class="tok-kw">now</span>(), attempt = attempt + <span class="tok-num">1</span>
+<span class="tok-kw">FROM</span> claimed
+<span class="tok-kw">WHERE</span> river_job.id = claimed.id
+<span class="tok-kw">RETURNING</span> river_job.*;</code></pre>
+<h3 id="12-2-asynq-redis">12.2 Asynq (Redis)<a class="anchor" href="#12-2-asynq-redis" aria-label="Link to this section">#</a></h3>
+<p>Asynq's task lifecycle is <code>pending → active → {completed | retry → pending | archived}</code>,
+with a separate <code>scheduled</code> state for delayed tasks; it promises "guaranteed at least one
+execution" and "automatic recovery of tasks in the event of a worker crash" via a
+lease/deadline model — an active task carries a deadline, and an independent recoverer
+process requeues any active task whose deadline has passed without completion
+<a href="https://github.com/hibiken/asynq/blob/master/README.md" rel="noopener noreferrer">hibiken/asynq README</a>. This is
+architecturally Faktory's <code>reserve_for</code> idea reimplemented over Redis sorted sets rather
+than a bespoke wire protocol — same mechanism, different storage substrate, which is itself
+a useful data point: <strong>the lease-with-deadline pattern is storage-agnostic</strong> and should be
+implementable identically over Redis, Postgres, or Memcached in dag-worker-go, differing
+only in which primitive expresses "atomically claim and set an expiry" (<code>SKIP LOCKED</code> +
+<code>UPDATE</code> in Postgres; a Lua script combining <code>ZREM</code>+<code>ZADD</code> in Redis; <code>CAS</code>/<code>gets</code>+<code>cas</code> with
+a TTL in Memcached).</p>
+<h3 id="12-3-machinery-and-gocelery-celery-s-shape-ported-and-largely-abandoned">12.3 Machinery and gocelery — Celery's shape, ported, and largely abandoned<a class="anchor" href="#12-3-machinery-and-gocelery-celery-s-shape-ported-and-largely-abandoned" aria-label="Link to this section">#</a></h3>
+<p>Both are broker-agnostic (RabbitMQ/SQS/Redis) Go reimplementations of Celery's model,
+supporting <code>group</code>/<code>chord</code>/<code>chain</code>, JSON task envelopes, and Fibonacci-backoff retries
+<a href="https://medium.com/swlh/task-orchestration-in-go-machinery-66a0ddcda548" rel="noopener noreferrer">Medium, Task orchestration in Go Machinery</a>,
+<a href="https://github.com/gocelery/gocelery" rel="noopener noreferrer">gocelery/gocelery</a>. At the time of the survey used
+for this dossier, Machinery's most recent commit dated to December 2021
+<a href="https://go.libhunt.com/gocelery-alternatives" rel="noopener noreferrer">go.libhunt.com, gocelery alternatives</a> — a
+cautionary data point that "port Celery's API surface into Go" has not historically
+attracted long-term maintenance, likely because none of Celery's actual reliability
+problems (§10) disappear just by porting the API to a different language; the interesting
+engineering (leasing, ack semantics, chord-completion notification) has to be redesigned,
+not translated.</p>
+<h3 id="12-4-temporal-go-sdk">12.4 Temporal Go SDK<a class="anchor" href="#12-4-temporal-go-sdk" aria-label="Link to this section">#</a></h3>
+<p>Covered in depth in §1.5; the concrete Go-specific API surface — <code>ActivityOptions{
+HeartbeatTimeout, StartToCloseTimeout, RetryPolicy }</code>, <code>activity.RecordHeartbeat(ctx,
+details)</code>, <code>activity.GetHeartbeatDetails()</code> on resume — is a directly reusable API shape
+for dag-worker-go's own "worker takes a node, may set a timeout, may report progress"
+contract, minus Temporal's determinism/replay machinery, which dag-worker-go's external
+(non-replayed) worker model does not need.</p>
+<hr>
+<h2 id="13-kubernetes-job-cronjob-controller-reconciliation">13. Kubernetes Job / CronJob controller reconciliation<a class="anchor" href="#13-kubernetes-job-cronjob-controller-reconciliation" aria-label="Link to this section">#</a></h2>
+<h3 id="13-1-level-triggered-reconciliation-not-edge-triggered-event-handling">13.1 Level-triggered reconciliation, not edge-triggered event handling<a class="anchor" href="#13-1-level-triggered-reconciliation-not-edge-triggered-event-handling" aria-label="Link to this section">#</a></h3>
+<p>Every Kubernetes controller — including the Job and CronJob controllers — is built on one
+non-negotiable design rule: <strong>reconciliation is level-triggered.</strong> An edge-triggered
+design would have to replay every event in order to know what to do next; a level-triggered
+controller ignores the event that woke it up entirely and instead re-derives the answer
+from scratch by comparing <em>current observed state</em> to <em>desired state</em> — "are there 4
+healthy Pods? If not, create or delete until there are"
+<a href="https://medium.com/hackernoon/level-triggering-and-reconciliation-in-kubernetes-1f17fe30333d" rel="noopener noreferrer">HackerNoon, Level Triggering and Reconciliation in Kubernetes</a>.
+In practice Kubernetes runs a <strong>hybrid</strong>: watch events are only ever used as a cheap "go
+look again now" <em>hint</em> that something might have changed; they never carry the logic for
+<em>what</em> to do — that always comes from a fresh read of current state
+<a href="https://www.golinuxcloud.com/kubernetes-reconcile-loop-explained/" rel="noopener noreferrer">golinuxcloud, Kubernetes Reconcile Loop Explained</a>.
+The practical payoff: a controller that crashes and restarts, or that missed an event
+entirely because it was down, self-heals for free on its next reconcile pass — there is no
+missed-event failure mode to reason about, because no code path depends on having seen
+every event
+<a href="https://www.golinuxcloud.com/kubernetes-reconcile-loop-explained/" rel="noopener noreferrer">golinuxcloud, Kubernetes Reconcile Loop Explained</a>.
+<strong>This is arguably the single most important idea in this entire survey for
+dag-worker-go's "reactive, subscribe to a stream" requirement</strong>: the stream of transitions
+should be a <em>convenience/notification</em> channel for subscribers, never the sole source of
+truth for "what needs to happen next" — that answer must always be independently
+recomputable by re-reading current DAG state, or a missed message on the stream becomes a
+permanently stuck node.</p>
+<h3 id="13-2-job-controller-exactly-once-effective-dispatch-via-finalizers-not-locks">13.2 Job controller: exactly-once-effective dispatch via finalizers, not locks<a class="anchor" href="#13-2-job-controller-exactly-once-effective-dispatch-via-finalizers-not-locks" aria-label="Link to this section">#</a></h3>
+<p>The Job controller's core problem is structurally identical to dag-worker-go's "hand a
+ready node to exactly one worker": don't create more Pods than <code>parallelism</code> allows, and
+don't lose track of a Pod's outcome. Its mechanism is <strong>finalizers</strong>, not a lock: every Pod
+the Job controller creates gets a tracking finalizer attached, and that finalizer is only
+removed once the controller has durably recorded the Pod's terminal status in the Job's own
+<code>status</code> — as of Kubernetes 1.27+, this finalizer-based tracking is the <em>only</em> mode (no
+fallback to counting live Pods), specifically because counting live Pods is racy under
+apiserver list/watch staleness
+<a href="https://kubernetes.io/docs/concepts/workloads/controllers/job/" rel="noopener noreferrer">Kubernetes docs, Jobs</a>.
+Failed Pods are recreated with <strong>exponential backoff — 10s, 20s, 40s, … capped at 6
+minutes</strong> — until <code>backoffLimit</code> is hit, at which point the Job itself is marked failed
+<a href="https://kubernetes.io/docs/concepts/workloads/controllers/job/" rel="noopener noreferrer">Kubernetes docs, Jobs</a>. A
+subtlety fixed only in 1.28: when a <code>podFailurePolicy</code> is configured, the controller
+recreates a <strong>terminating</strong> Pod's replacement only after that Pod actually reaches the
+terminal <code>Failed</code> phase, not the instant termination is requested — otherwise a
+double-count of "how many Pods are trying to do this work" is briefly possible during the
+termination window
+<a href="https://kubernetes.io/docs/concepts/workloads/controllers/job/" rel="noopener noreferrer">Kubernetes docs, Jobs</a>.
+<strong>The generalizable pattern: "the work is claimed" and "the work's outcome is durably
+recorded" are two different facts, and the claim must not be released/retried until the
+second fact is confirmed</strong> — a finalizer is just a durable flag co-located with the claimed
+resource that enforces this ordering; dag-worker-go's storage layer needs an equivalent
+(e.g. a node cannot be re-offered to another worker while its previous claim's outcome is
+still unconfirmed, even if the claim's lease has expired — the expiry should trigger
+<em>investigation</em>, not silent instant reassignment, if there is any chance the original
+worker is still finishing up. In practice this is a tradeoff most systems here resolve
+in favor of availability over this stricter safety — see §16 on fencing tokens for the
+correct general fix).</p>
+<h3 id="13-3-cronjob-controller-idempotent-scheduling-not-a-timer-thread">13.3 CronJob controller: idempotent scheduling, not a timer thread<a class="anchor" href="#13-3-cronjob-controller-idempotent-scheduling-not-a-timer-thread" aria-label="Link to this section">#</a></h3>
+<p>CronJobs are a thin, purely time-driven layer over Jobs: on each reconcile, the controller
+computes what run <em>should</em> exist given the cron schedule, <code>concurrencyPolicy</code> (Allow /
+Forbid / Replace), <code>startingDeadlineSeconds</code>, and history limits (<strong>default 3 successful /
+1 failed</strong> retained), and creates or skips a Job accordingly — again level-triggered, so a
+controller restart never double-fires a scheduled run, it just re-derives "is a Job for
+this time slot missing" from the Job objects that already exist
+<a href="https://tanmaybatham.medium.com/what-happens-when-you-create-a-cronjob-in-kubernetes-a-deep-internal-level-breakdown-70797edda81b" rel="noopener noreferrer">Tanmay Batham, What Happens When You Create a CronJob</a>.</p>
+<h3 id="13-4-leader-election-as-a-lease-object-the-other-valid-answer-to-avoid-double-dispatch">13.4 Leader election as a Lease object — the <em>other</em> valid answer to "avoid double-dispatch"<a class="anchor" href="#13-4-leader-election-as-a-lease-object-the-other-valid-answer-to-avoid-double-dispatch" aria-label="Link to this section">#</a></h3>
+<p>Where Airflow (§3.2) chose row-locking with <em>no</em> leader election, core Kubernetes
+components (<code>kube-controller-manager</code>, <code>kube-scheduler</code>) choose the opposite: <strong>exactly one
+active instance</strong>, enforced by a <code>coordination.k8s.io/v1</code> <strong>Lease</strong> object. The current
+holder periodically overwrites <code>spec.renewTime</code>; if <code>leaseDurationSeconds</code> elapses with no
+renewal, any standby can atomically take over via a conditional write to the same object —
+correctness rests entirely on the apiserver's own compare-and-swap semantics, not on wall
+clocks agreeing across machines
+<a href="https://kubernetes.io/docs/concepts/architecture/leases/" rel="noopener noreferrer">Kubernetes docs, Leases</a>. This
+is a legitimate alternative to Airflow-style row-locking for the "avoid double-dispatch
+across instances" problem, but it trades <em>throughput</em> (only one instance ever does the
+scheduling work) for <em>simplicity of reasoning</em> — the opposite tradeoff from active-active
+row-locking, which gets all instances working but pays for it in lock contention and
+lock-ordering bugs (§3.3). Both are legitimate; dag-worker-go should pick per-operation, not
+globally (see §15 for the actual recommendation).</p>
+<hr>
+<h2 id="14-nomad-and-mesos-two-very-different-answers-to-who-gets-the-work">14. Nomad and Mesos: two very different answers to "who gets the work"<a class="anchor" href="#14-nomad-and-mesos-two-very-different-answers-to-who-gets-the-work" aria-label="Link to this section">#</a></h2>
+<h3 id="14-1-mesos-two-level-offer-based-framework-decides">14.1 Mesos — two-level, offer-based, framework decides<a class="anchor" href="#14-1-mesos-two-level-offer-based-framework-decides" aria-label="Link to this section">#</a></h3>
+<p>Mesos splits scheduling into two levels. The <strong>Mesos master</strong> tracks free resources
+cluster-wide and periodically makes <strong>resource offers</strong> to registered frameworks according
+to a fairness policy (Dominant Resource Fairness, DRF, in the original design); each
+<strong>framework's own scheduler</strong> then decides, for each offer, to accept it (and bind
+specific tasks to it) or decline
+<a href="https://salemal.medium.com/paper-review-of-mesos-a-platform-for-fine-grained-resource-sharing-in-the-data-center-55d44fecb243" rel="noopener noreferrer">Mesos paper review, Salem Alqahtani</a>,
+<a href="https://datastrophic.io/resource-allocation-in-mesos-dominant-resource-fairness-explained/" rel="noopener noreferrer">Datastrophic, DRF explained</a>.
+The master never inspects task semantics — it only ever hands out fungible resource
+bundles and lets each framework apply its own task-placement logic, which is what lets
+wildly different frameworks (a batch scheduler, a long-running-service scheduler, a
+big-data framework) coexist on one cluster without the master needing to understand any of
+them.</p>
+<h3 id="14-2-nomad-single-scheduler-optimistic-concurrency-plan-apply">14.2 Nomad — single scheduler, optimistic concurrency, plan-apply<a class="anchor" href="#14-2-nomad-single-scheduler-optimistic-concurrency-plan-apply" aria-label="Link to this section">#</a></h3>
+<p>Nomad instead runs its own schedulers <strong>optimistically concurrent</strong>: multiple scheduler
+worker goroutines evaluate different pending jobs <em>in parallel</em>, with <strong>no locking or
+reservation</strong> between them while they compute a <em>plan</em> — meaning two schedulers can
+legitimately propose conflicting allocations onto the same node at the same time
+<a href="https://developer.hashicorp.com/nomad/docs/concepts/scheduling/how-scheduling-works" rel="noopener noreferrer">Nomad docs, How Scheduling Works</a>.
+Conflicts are resolved at a single serialization point: every computed plan is submitted to
+a <strong>plan queue</strong> and applied one at a time by the (Raft) leader, which checks the plan
+against the <em>actual current</em> cluster state and does a partial or complete rejection if
+resources were consumed by another plan in the meantime; a rejected scheduler re-evaluates
+against a fresh state snapshot and resubmits
+<a href="https://github.com/hashicorp/nomad/blob/main/contributing/architecture-eval-triggers.md" rel="noopener noreferrer">Nomad architecture, eval-triggers</a>.
+Every <strong>Evaluation</strong> — the unit of "something happened that might require rescheduling"
+(17 distinct trigger types: job register/deregister, node state change, deployment
+watcher ticks, periodic-job firing, etc.) — is itself durably written to Raft before being
+handed to a scheduler worker, so a scheduler crash mid-evaluation loses no work; the
+evaluation simply gets redelivered
+<a href="https://github.com/hashicorp/nomad/blob/main/contributing/architecture-eval-triggers.md" rel="noopener noreferrer">Nomad architecture, eval-triggers</a>.
+Nomad's own docs credit Google's <strong>Omega</strong> paper for this optimistic-concurrency pattern —
+schedule speculatively and in parallel, reconcile with a cheap atomic check at commit time,
+rather than serializing all scheduling decisions up front
+[Datastrophic/related coverage cites Omega as Nomad's inspiration]. <strong>This is the
+single-writer-serialization-point pattern generalized</strong>: it is structurally the same idea
+as Postgres <code>SKIP LOCKED</code> (many claimants race, one storage-layer primitive picks a
+winner atomically) and as the Kubernetes optimistic-concurrency resourceVersion check on
+every <code>PUT</code>/<code>PATCH</code> — three different systems converging on "let many actors compute
+speculatively, make the <em>commit</em> atomic and conflict-checked, retry losers" as the
+general answer to distributed double-dispatch.</p>
+<hr>
+<h2 id="15-cross-cutting-work-distribution-across-multiple-instances">15. Cross-cutting: work distribution across multiple instances<a class="anchor" href="#15-cross-cutting-work-distribution-across-multiple-instances" aria-label="Link to this section">#</a></h2>
+<p>The brief flags this as an open design question — partition-per-scope? consistent
+hashing? pure pull-based competition? lease stealing? — and the survey above gives
+concrete, tested answers for each option:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Strategy</th><th>Who uses it</th><th>Mechanism</th><th>Failure mode if instance dies</th></tr></thead>
+<tbody>
+<tr><td><strong>Pure pull-based competition</strong> ("pull queue")</td><td>Faktory, Sidekiq, Asynq, River, Celery</td><td>Every instance polls the same shared queue; storage-layer atomicity (<code>SKIP LOCKED</code>, <code>LMOVE</code>, <code>FETCH</code>+lease) picks exactly one claimant per item</td><td>Only the claimed-but-unacked items are affected; lease/reservation timeout releases them automatically</td></tr>
+<tr><td><strong>Row-lock active-active, no partitioning</strong></td><td>Airflow scheduler</td><td>Every scheduler instance repeatedly contends for the same <code>Pool</code>-table row lock to run its own critical section</td><td>Lock is released with the crashed transaction; another instance's next loop iteration just gets it</td></tr>
+<tr><td><strong>Leader election (single active)</strong></td><td>kube-controller-manager, kube-scheduler</td><td><code>Lease</code> object with TTL; standbys idle-poll for the lease to free up</td><td>Bounded failover latency = lease TTL; zero throughput from standbys meanwhile</td></tr>
+<tr><td><strong>Partition ownership, dynamically rebalanced</strong></td><td>Temporal Task Queue partitioning (§1.3), Kafka consumer groups (not surveyed directly but the same family)</td><td>Logical queue split into N partitions; a partition is "owned" (loaded) by one matching-service shard at a time, with forwarding to cover gaps</td><td>Requires an explicit partition-ownership protocol; more moving parts than pull-based competition</td></tr>
+<tr><td><strong>Two-level offer/accept</strong></td><td>Mesos</td><td>Central resource tracker offers bundles; frameworks accept/decline</td><td>Framework crash mid-decision just times the offer out; master resource state is authoritative</td></tr>
+<tr><td><strong>Optimistic parallel scheduling + serialized commit</strong></td><td>Nomad</td><td>Every scheduler computes speculatively in parallel; a single plan-apply point does the atomic conflict check</td><td>Rejected plans are cheap to redo against fresh state; no locks held during computation</td></tr>
+<tr><td><strong>Consistent hashing over a fixed key space</strong></td><td>Not directly used by name in any system surveyed above (Cadence/Temporal use tree-partitioning instead), but the standard general-purpose answer for "which of N nodes owns key K" — see <a href="https://dev.to/arslan_ah/how-to-use-consistent-hashing-in-a-system-design-interview-33ge" rel="noopener noreferrer">DEV.to, Consistent Hashing</a></td><td>A hash ring; a key's owner is the first node walking clockwise from the key's hash position; adding/removing a node moves only ~k/N keys</td><td>Needs virtual nodes (multiple ring positions per physical node) to avoid uneven load, since raw consistent hashing alone measurably skews distribution across nodes</td></tr>
+</tbody></table></div>
+<p><strong>Position taken:</strong> for dag-worker-go, <strong>pure pull-based competition with a per-node
+reservation lease (Faktory's model) is the right default</strong>, because it requires zero
+coordination protocol beyond what the storage backend already provides
+(<code>SKIP LOCKED</code>/<code>LMOVE</code>/<code>gets</code>+<code>cas</code>+TTL), it degrades gracefully (a dead instance simply
+stops claiming work; nothing needs rebalancing), and it is the only option in the table
+above that all four required backends (in-memory, Redis, Memcached, PostgreSQL) can
+implement natively without bolting on an external coordinator. <strong>Scope-based partitioning
+should be layered on top as an optional optimization</strong> (route claims for scope X
+preferentially to instances that already have scope X's hot data cached — Temporal's
+sticky-execution idea, §1.4 — never as the mechanism that guarantees a node is eventually
+claimed). Consistent hashing and leader election both solve <em>different</em> problems (routing
+to a data owner; guaranteeing single-writer for expensive coordination like DagRun
+creation) and are worth keeping as secondary tools, not the primary work-distribution
+answer, given the O(1)/O(log n) and 1M-node performance mandate — hash-ring rebalancing and
+Raft-backed leader election both add latency and moving parts pure pull-based competition
+avoids entirely.</p>
+<hr>
+<h2 id="16-distributed-locking-correctness-what-a-lease-is-actually-allowed-to-assume">16. Distributed-locking correctness: what a lease is actually allowed to assume<a class="anchor" href="#16-distributed-locking-correctness-what-a-lease-is-actually-allowed-to-assume" aria-label="Link to this section">#</a></h2>
+<p>Every "lease with a timeout" mechanism surveyed above (Faktory's <code>reserve_for</code>, Sidekiq
+Pro's heartbeat expiry, Asynq's deadline, Nomad's plan-apply check) implicitly assumes a
+<strong>bounded clock skew and bounded pause time</strong>: if the <em>original</em> claimant is merely paused
+(GC, scheduler preemption, a slow disk write) rather than dead, and it wakes up and
+finishes its write <em>after</em> another claimant has already taken over the same work, both
+writes can land — a correctness violation, not just a performance blip. Martin Kleppmann's
+widely-cited critique of the Redlock algorithm formalizes exactly this failure mode:
+Redlock's safety argument implicitly requires a synchronous system model (bounded network
+delay, bounded process pause, bounded clock drift) that real systems routinely violate — a
+GC pause can run to "several minutes," far longer than any sane lease duration, and Redis's
+own clock source (<code>gettimeofday</code>) is not even monotonic, so it can jump backward on NTP
+correction
+<a href="https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html" rel="noopener noreferrer">Kleppmann, How to do distributed locking</a>.
+His fix is <strong>fencing tokens</strong>: the lock/lease service hands out a monotonically increasing
+number with every grant, and the <em>protected resource itself</em> (not the lock service) must
+reject any write tagged with a token older than one it has already seen — this pushes the
+correctness check to the last possible point (the actual write), where it can't be
+undermined by a stale holder waking up late. Kleppmann's explicit verdict: Redlock-style
+locks are fine when a lock's only job is an <em>efficiency</em> optimization (avoid duplicate work,
+tolerable if it occasionally fails), but are <strong>not sufficient on their own for
+correctness-critical mutual exclusion</strong> — for that, either add fencing tokens at the
+protected resource, or use a lock service backed by a real consensus protocol (ZooKeeper,
+etcd/Raft) whose session/lease semantics are actually verified against these failure modes
+<a href="https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html" rel="noopener noreferrer">Kleppmann, How to do distributed locking</a>.</p>
+<p><strong>This directly bears on dag-worker-go's Redis/Memcached backends.</strong> A node's "claimed by
+worker W until time T" record is a lease of exactly this kind. If two instances of the
+library, or two workers under the same instance, can ever both believe they hold a valid
+claim on the same node (slow worker + expired lease + late-arriving completion report), the
+storage write for "mark node success" needs a <strong>fencing check</strong>: attach the lease's
+generation/version number to the ack, and reject (or at minimum flag for reconciliation) an
+ack whose version does not match the node's <em>current</em> lease generation — this is a small,
+cheap addition (one extra integer compare in the same atomic update that already claims the
+node) and it is the difference between "occasionally re-does work" (acceptable) and
+"occasionally corrupts final state by accepting two conflicting acks" (not acceptable for a
+system whose whole job is tracking node status correctly).</p>
+<hr>
+<h2 id="17-comparison-table-node-task-state-machines">17. Comparison table — node/task state machines<a class="anchor" href="#17-comparison-table-node-task-state-machines" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>System</th><th>Public/core states</th><th>Distinguishes infra-failure from app-failure?</th><th>Distinguishes "not yet started" from "waiting on external condition"?</th><th>Retry modeled as</th><th>Terminal states</th></tr></thead>
+<tbody>
+<tr><td><strong>Temporal/Cadence</strong> (workflow)</td><td>Running, Completed, Failed, Canceled, Terminated, ContinuedAsNew, TimedOut</td><td>Yes — Activity failure vs Workflow Task timeout are different event types in History</td><td>Yes — Timers, Signals, <code>defer</code> all first-class History event kinds</td><td>New Activity Task Execution per retry policy attempt</td><td>Completed, Failed, Canceled, Terminated, TimedOut</td></tr>
+<tr><td><strong>Netflix Conductor</strong> (task)</td><td>SCHEDULED, IN_PROGRESS, COMPLETED, FAILED, FAILED_WITH_TERMINAL_ERROR, TIMED_OUT, CANCELED, SKIPPED, COMPLETED_WITH_ERRORS</td><td>Partially — <code>TIMED_OUT</code> is separate from <code>FAILED</code>, but both infra and app timeouts collapse into <code>TIMED_OUT</code></td><td>No — no dedicated "waiting" state distinct from <code>SCHEDULED</code></td><td><code>{FAILED,TIMED_OUT} → SCHEDULED</code></td><td>COMPLETED, FAILED_WITH_TERMINAL_ERROR, CANCELED, SKIPPED</td></tr>
+<tr><td><strong>Airflow</strong> (TaskInstance)</td><td>none, scheduled, queued, running, success, failed, skipped, upstream_failed, up_for_retry, up_for_reschedule, deferred, awaiting_input, removed, restarting</td><td>No — no separate "infra killed my worker" state; shows up as <code>failed</code> or <code>up_for_retry</code></td><td><strong>Yes</strong>, uniquely well: <code>up_for_reschedule</code> (sensor) and <code>deferred</code> (async trigger) both mean "waiting, not occupying a worker"</td><td><code>failed → up_for_retry → scheduled</code></td><td>success, failed, skipped, upstream_failed, removed</td></tr>
+<tr><td><strong>Prefect 3</strong></td><td>20 names / 7 types: Scheduled, Pending, Running, Paused, Cancelling, Cancelled, Completed, Failed, Crashed (+ variants)</td><td><strong>Yes, explicitly</strong>: <code>CRASHED</code> type (infra/signal killed it) vs <code>FAILED</code> type (app raised)</td><td>Yes — <code>Paused</code>/<code>Suspended</code> types are distinct from <code>Pending</code></td><td><code>Failed → AwaitingRetry → Retrying (type RUNNING)</code></td><td>Cancelled, Completed, Failed, Crashed</td></tr>
+<tr><td><strong>Argo Workflows</strong> (Node)</td><td>Pending, Running, Succeeded, Skipped, Failed, Error, Omitted</td><td><strong>Yes, explicitly</strong>: <code>Error</code> (infra) vs <code>Failed</code> (non-zero exit)</td><td>Partially — <code>Omitted</code> covers unmet <code>depends</code>, but no distinct "polling" state</td><td>Controlled by <code>retryStrategy</code>, not a distinct phase</td><td>Succeeded, Skipped, Failed, Error, Omitted</td></tr>
+<tr><td><strong>Luigi</strong></td><td>PENDING, RUNNING, DONE, FAILED, DISABLED</td><td>No</td><td>No</td><td><code>FAILED → DISABLED → (timer) → PENDING</code></td><td>DONE (DISABLED is a soft-terminal with auto-recovery)</td></tr>
+<tr><td><strong>HTCondor DAGMan</strong> (node)</td><td>NOT_READY, READY, PRERUN, SUBMITTED, POSTRUN, DONE</td><td>No (failure isn't a node status value at all — it's out-of-band, driving Rescue-DAG generation)</td><td>Yes — <code>READY</code> (deps met, not started) distinct from <code>PRERUN</code>/<code>SUBMITTED</code> (actually executing)</td><td>Whole-DAG level (Rescue DAG resubmission), not per-node</td><td>DONE</td></tr>
+<tr><td><strong>Faktory</strong> (job)</td><td>Scheduled, Enqueued, Working, Retries, Dead</td><td>No (server-side; app vs infra failure is opaque to the state machine, both produce <code>FAIL</code>)</td><td>Yes — <code>Scheduled</code> (future <code>at</code>) distinct from <code>Enqueued</code> (ready now)</td><td><code>Working → Retries → Enqueued</code>, capped by <code>retry</code> count</td><td>Dead (after exhausting <code>retry</code>, unless negative)</td></tr>
+<tr><td><strong>Kubernetes Job/Pod</strong></td><td>Pod: Pending, Running, Succeeded, Failed, Unknown; Job (derived): Active, Complete, Failed</td><td><strong>Yes</strong> via <code>podFailurePolicy</code> (distinguishes exit-code classes and disruption-caused failures from app failures)</td><td>Yes — <code>Pending</code> (image pull, scheduling) is distinct from <code>Running</code></td><td>New Pod per <code>backoffLimit</code> attempt, exponential 10s→6min</td><td>Job: Complete, Failed</td></tr>
+</tbody></table></div>
+<p><strong>Consensus reading across the table:</strong> the systems that age best (Prefect, Argo, K8s) all
+independently arrived at a <strong>3-axis minimum</strong>: (1) is it done or not, (2) if done, did the
+<em>application</em> fail or did the <em>infrastructure</em> fail it, (3) if not done, is it actively
+running or genuinely waiting on something external. Systems that collapse (2) into a single
+<code>FAILED</code>/<code>error</code> bucket (Conductor, Luigi, Faktory) all show up elsewhere in this survey with
+operator complaints about ambiguous alerting or manual log-diving to tell the two apart.
+This is a strong argument for dag-worker-go's minimal public vocabulary being <strong>new →
+in-progress → success → error → error-timeout</strong> (5 states) rather than collapsing timeout
+into plain <code>error</code>, exactly as the brief already leans toward — the prior art overwhelmingly
+supports keeping that distinction even while keeping everything else internal.</p>
+<hr>
+<h2 id="18-comparison-table-leasing-work-claiming-mechanisms">18. Comparison table — leasing / work-claiming mechanisms<a class="anchor" href="#18-comparison-table-leasing-work-claiming-mechanisms" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>System</th><th>Claim primitive</th><th>Atomicity guarantee</th><th>Lease/timeout owner</th><th>What happens on expiry</th><th>Requires external sweeper?</th></tr></thead>
+<tbody>
+<tr><td><strong>Temporal Matching Service</strong></td><td>Sync/async match on a Task Queue (partitioned)</td><td>Server-mediated single-delivery per poll response</td><td>Server (Schedule-To-Start / Heartbeat timeouts)</td><td>Task rescheduled to the queue (or history replayed on a non-sticky worker)</td><td>No</td></tr>
+<tr><td><strong>Netflix Conductor</strong></td><td>Long-poll <code>FETCH</code> moves task to <code>IN_PROGRESS</code></td><td>Server-side state transition on poll</td><td>Server (<code>responseTimeoutSeconds</code>, extendable via <code>callbackAfterSeconds</code>)</td><td>Task → <code>TIMED_OUT</code>, then auto-<code>SCHEDULED</code> retry</td><td>No</td></tr>
+<tr><td><strong>Airflow scheduler dispatch</strong></td><td><code>SELECT ... FOR UPDATE [NOWAIT]</code> on Pool table row</td><td>Postgres/MySQL row lock</td><td>N/A — dispatch itself, not a worker lease (worker liveness is separate, via heartbeat)</td><td>Lock released on transaction end (commit or crash)</td><td>No, for the dispatch step itself</td></tr>
+<tr><td><strong>Faktory</strong></td><td><code>FETCH</code> verb</td><td>Server-side; job moves to <code>WORKING</code>, timer starts</td><td>Server (<code>reserve_for</code>, default 1800s, min 60s)</td><td>Auto-moved to <code>RETRIES</code> by server itself</td><td><strong>No</strong> — expiry enforced server-side, no separate process needed</td></tr>
+<tr><td><strong>Sidekiq (plain)</strong></td><td><code>BRPOP</code></td><td>Redis atomic pop</td><td>None (no lease at all)</td><td><strong>Job lost</strong> if worker dies mid-processing</td><td>N/A (this is the reliability gap)</td></tr>
+<tr><td><strong>Sidekiq (<code>BRPOPLPUSH</code>/<code>BLMOVE</code> pattern)</strong></td><td>Atomic pop-and-push to private list</td><td>Redis atomic list move</td><td>None inherent — needs external sweep</td><td>Job sits in the dead worker's private list forever unless swept</td><td><strong>Yes</strong>, always</td></tr>
+<tr><td><strong>Sidekiq Pro <code>super_fetch</code></strong></td><td><code>LMOVE</code> + heartbeat key</td><td>Redis atomic list move + separate heartbeat key with TTL</td><td>Heartbeat (60s expiry) + orphan-scan process</td><td>Orphan-scan (throttled to ≥1/min per check, full <code>SCAN</code> ≤1/hr) requeues it</td><td><strong>Yes</strong>, but built-in</td></tr>
+<tr><td><strong>River (Postgres)</strong></td><td><code>SELECT ... FOR UPDATE SKIP LOCKED</code></td><td>Postgres MVCC row lock, skip-on-contention</td><td>Application-level retry/attempt tracking; no separate lease timer documented</td><td>Depends on caller's own attempt/timeout logic on top of River's job states</td><td>Not for claiming; yes if modeling worker-crash detection</td></tr>
+<tr><td><strong>Asynq (Redis)</strong></td><td>Move to <code>active</code> ZSET with a deadline score</td><td>Redis atomic (Lua script)</td><td>Deadline embedded in the sorted-set score</td><td>Independent recoverer process requeues tasks past deadline</td><td><strong>Yes</strong>, built-in recoverer</td></tr>
+<tr><td><strong>Kubernetes Job controller</strong></td><td>Finalizer attached at Pod creation</td><td>apiserver optimistic-concurrency (<code>resourceVersion</code> CAS)</td><td>No timeout on the finalizer itself — bounded by Pod lifecycle + <code>activeDeadlineSeconds</code> if set</td><td>Finalizer removed only after terminal Pod phase is durably observed</td><td>No — reconciliation loop <em>is</em> the sweeper, running continuously</td></tr>
+<tr><td><strong>Nomad plan-apply</strong></td><td>Plan submitted to single-leader plan queue</td><td>Raft-serialized apply with fresh-state conflict check</td><td>N/A — not a lease, a speculate-then-commit-or-reject model</td><td>Rejected plan triggers a new Evaluation against fresh state</td><td>No — rejection <em>is</em> the recovery path</td></tr>
+<tr><td><strong>Mesos</strong></td><td>Framework accepts a resource offer</td><td>Master tracks resource accounting per offer; offer has a short implicit validity window</td><td>Framework-side (offer can simply be declined or ignored)</td><td>Offer rescinded/reoffered if unused</td><td>No</td></tr>
+<tr><td><strong>Kubernetes leader election</strong></td><td>Conditional write to a <code>Lease</code> object</td><td>apiserver CAS on the Lease resource</td><td><code>leaseDurationSeconds</code>, renewed by the current holder</td><td>Any standby may take over once expired</td><td>No — the Lease object itself carries the timeout</td></tr>
+</tbody></table></div>
+<p><strong>Consensus reading:</strong> the mechanisms that need <strong>no external sweeper process</strong> — Faktory,
+Asynq (recoverer is <em>built into</em> the library, not bolted on separately by the operator),
+Kubernetes finalizers, Nomad's plan-apply — are uniformly the ones where the storage layer
+itself enforces the timeout as part of the same atomic operation that granted the claim
+(a TTL/deadline stored <em>with</em> the claim, checked by the same code path that would service a
+new claim request). The one mechanism that structurally <em>requires</em> a bolted-on external
+sweeper — Sidekiq's base <code>BRPOPLPUSH</code> pattern — is also the one with the most
+documented production incidents in this survey (§11.1). <strong>This is the strongest single
+actionable finding in this whole dossier: dag-worker-go's lease/claim operation must be a
+single atomic primitive that both claims the node and records its expiry, on every backend,
+and node reclamation must be driven by that same expiry being checked inline by the next
+claim attempt — never by a separate cron-style sweep process that can itself fail, fall
+behind, or be forgotten in a deployment.</strong></p>
+<hr>
+<h2 id="recommendations-for-dag-worker-go">Recommendations for dag-worker-go<a class="anchor" href="#recommendations-for-dag-worker-go" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>Public status vocabulary: <code>new → in-progress → success | error | error-timeout</code>,
+nothing else public.</strong> Every mature system surveyed independently converges on needing
+the app-failure/infra-failure split (§17) — do not collapse <code>error</code> and <code>error-timeout</code>
+into one bucket the way Conductor and Faktory do; the operational cost of that
+collapse (ambiguous alerting, manual log correlation) is visible across multiple issue
+trackers in this survey. Keep retry count, attempt history, lease generation, and
+partition/queue placement entirely internal, matching the brief's "minimal public,
+everything else internal" instruction and matching Prefect's state-type-vs-state-name
+split (§4) as the cleanest precedent for how to structure the internal/public boundary
+in code (an internal richer enum that <em>maps onto</em> the small public one, never the
+reverse).</li>
+<li><strong>Make the claim operation a single atomic primitive on every backend, with the lease
+deadline stored as part of the same write that grants the claim</strong> (§18's strongest
+finding). Concretely: in-memory — a mutex-guarded map entry with <code>(workerID, leaseUntil,
+fenceToken)</code>; Postgres — <code>UPDATE ... SET status='in-progress', worker_id=$1,
+lease_until=now()+$2, fence_token=fence_token+1 WHERE id IN (SELECT id FROM nodes WHERE
+status='ready' ... FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *</code>; Redis — a single Lua
+script doing the ready-set removal, in-progress-ZSET insert (score = deadline), and
+fence-token increment atomically; Memcached — <code>gets</code>/<code>cas</code> on a per-node key encoding
+status+lease+fence, retried on CAS failure. <strong>Never implement lease reclamation as a
+separate cron/sweeper job</strong> — make expiry-checking part of the same code path that
+services a new claim (whoever asks "give me ready work" also atomically reclaims
+anything whose lease has passed, in the same query/script), matching Faktory and the
+Kubernetes reconcile loop rather than base Sidekiq.</li>
+<li><strong>Adopt Faktory's exact lease-timeout contract</strong>: a library-wide default reservation
+timeout, overridable per node at the moment a worker takes it (<code>reserve_for</code> in
+Faktory's terms) — this is already explicitly requested in the brief and Faktory's
+protocol spec (§11.2) is close to a reference implementation to copy the shape of,
+including the sane bounds (a minimum floor on the timeout, e.g. Faktory's 60s, to
+prevent a misconfigured caller from creating a reclaim storm).</li>
+<li><strong>Add fencing tokens to every ack, from day one, on every backend</strong> (§16). The ack
+handler must compare the fence token on the incoming ack to the node's current fence
+token and reject (routing to a "late/conflicting ack" internal state for
+observability, not silently dropping) any ack whose token is stale. This is one integer
+column/field and one comparison; it is the difference between "an occasional double-
+claim redoes idempotent work" (fine) and "an occasional double-claim corrupts which
+worker's result is recorded as final" (not fine), and per Kleppmann (§16) this is <em>not</em>
+optional once Redis or Memcached are in scope as real backends, since neither offers
+the consensus guarantees that would make it safe to skip.</li>
+<li><strong>Default to pure pull-based competition for cross-instance work distribution</strong> (§15's
+position), because it is the only strategy in the comparison table implementable
+natively and identically on all four required backends without introducing an external
+coordination service the brief never asked for. Offer scope-affinity as an optional,
+best-effort routing hint layered on top (a claim query can prefer nodes in scopes the
+calling instance has recently touched, exactly as Temporal's sticky execution prefers
+but never requires the previous worker, §1.4) — never make correctness depend on the
+hint. Do not build partition ownership, consistent hashing, or leader election into the
+critical path for v1; revisit only if pull-based claim contention is measured (not
+assumed) to be a bottleneck at the 1M-node benchmark scale.</li>
+<li><strong>Reconciliation over the DAG's readiness graph must be level-triggered and independent
+of the event stream</strong> (§13.1's central lesson, reinforced by Netflix Conductor's
+"decide" pass, §2). "Which nodes are now ready to dispatch" must always be answerable by
+a fresh query against persisted state, never by replaying a log of past transitions —
+the pub/sub stream the brief requires is a <em>notification convenience</em> for subscribers,
+and must not be a dependency for correctness. Concretely: a crashed instance restarting,
+or a subscriber that missed messages, must both be able to recover to a fully correct
+view purely by re-querying current node/edge state.</li>
+<li><strong>Give dynamically-added fan-out its own shape/payload split, à la Airflow's AIP-42</strong>
+(§3.4): when a node's processing dynamically creates N new child nodes, store the count/
+shape of that expansion separately from any large payload driving it, cap N with a
+hard configurable ceiling to prevent a combinatorial blow-up from taking down the shared
+store, and expand lazily (only materialize child node rows once something actually
+needs to know about them), not eagerly the instant the parent completes.</li>
+<li><strong>Design the storage schema so no single node's status, or any node's history, is ever
+forced into one oversized field/row/object</strong> (§6's etcd-1MB lesson from Argo). Node
+status belongs in a table/keyspace designed for wide row counts and point lookups (one
+row per node), never serialized as a single blob that grows with total DAG size — this
+is exactly the pluggable-storage, O(1)-per-node access pattern the brief already
+requires, but Argo's postmortem is concrete evidence for <em>why</em> it matters at scale, not
+just an abstract nicety.</li>
+<li><strong>Enforce and document one global multi-table lock-acquisition order from the first
+commit</strong>, per Airflow's still-open deadlock class (§3.3). If a single transaction ever
+needs to touch both a "node" row and a "scope"/"dag-run" row (or their equivalents),
+pick and document the order once (e.g. always scope before node) and enforce it in code
+review / lint, because this exact bug class recurs independently at Airflow's scale and
+is far cheaper to prevent by convention than to debug in production later.</li>
+<li><strong>Bound and document the event/history log's growth, and provide an explicit
+compaction/retention story before it is needed</strong>, per Temporal's hard 51,200-event
+termination ceiling (§1.6). Even though dag-worker-go's per-node history is unlikely to
+approach Temporal's per-workflow scale, the <em>pattern</em> — an unbounded append-only log
+backing "subscribe to every status transition" — needs an explicit answer for "what
+happens after 1M nodes have each transitioned 3 times" from the design phase, not
+discovered as an incident later. Nextflow's content-hash-based idempotent-skip model
+(§8) is a good complementary idea for allowing large graphs to be safely re-submitted/
+resumed without needing Temporal-grade replay machinery.</li>
+</ol>
+<h2 id="open-questions">Open questions<a class="anchor" href="#open-questions" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>Should the fencing-token check live in the storage adapter interface (so every backend
+implementation is forced to support it) or be optional per backend?</strong> Making it mandatory
+is the correctness-safe choice per §16, but adds implementation burden to a Memcached
+adapter (no native CAS-with-struct support beyond raw <code>gets</code>/<code>cas</code> on an opaque blob) —
+needs a concrete Memcached data-layout decision before this can be answered definitively.</li>
+<li><strong>What is the actual maximum useful Task-Queue-style partition count for dag-worker-go's
+claim query at 1M nodes</strong>, i.e. at what concurrent-claimant count does <code>SKIP LOCKED</code>
+contention (Postgres) or a single Lua script (Redis) stop scaling linearly, and does that
+threshold arrive before or after the point where sharding the ready-set by scope becomes
+worth its added complexity? This needs to be answered empirically by the benchmark suite
+the brief already mandates, not by further literature research.</li>
+<li><strong>Should scope-affinity routing (recommendation 5) be implemented at all in v1, or
+deferred entirely until a measured bottleneck justifies it?</strong> Temporal's own sticky-queue
+design took multiple bug-fix cycles to get the fallback timeout right (§1.6); building it
+prematurely risks importing that same class of bug before there's demonstrated need.</li>
+<li><strong>How should node-level heartbeats (for long-running external work, analogous to
+Temporal's Activity Heartbeat / Conductor's <code>callbackAfterSeconds</code>) interact with the
+per-node settable timeout</strong> — is a heartbeat a first-class part of the public worker-ack
+API from v1, or an internal-only extension point added once a real long-running-work use
+case appears? The brief specifies only a flat "timeout, then error-with-timeout,"
+which is closer to Faktory's single <code>reserve_for</code> than to Temporal's four-timeout model;
+worth confirming this simpler model is intentional before building it, since retrofitting
+heartbeat-based deadline extension later touches the same lease primitive recommendation 2
+already locks in.</li>
+<li><strong>Netflix's own rationale for spinning Conductor out to Orkes/OSS stewardship</strong> (scaling
+pain with its original Dynomite/Cassandra/Elasticsearch dependency stack, or purely a
+business decision) was not confirmed by any primary source found during this research;
+if a deeper Conductor post-mortem exists it was not surfaced by the queries run here and
+is worth a targeted follow-up if Conductor's storage-layer choices become directly
+relevant to a design decision.</li>
+</ul>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/research/01-prior-art-workflow-engines.md" rel="noopener noreferrer">View source: docs/research/01-prior-art-workflow-engines.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,883 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADR-0040: Testing strategy, coverage policy, and CI topology · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/adr/0040-testing-strategy-coverage-and-ci/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#adr-0040-testing-strategy-coverage-policy-and-ci-topology">ADR-0040: Testing strategy, coverage policy, and CI topology</a></li>
+<ul>
+<li><a href="#context">Context</a></li>
+<li><a href="#decision">Decision</a></li>
+<ul>
+<li><a href="#four-test-tiers-with-a-fixed-location-each">Four test tiers, with a fixed location each</a></li>
+<li><a href="#unit-tests-t-parallel-everywhere-synctest-for-timeouts-rapid-for-the-scheduler">Unit tests: t.Parallel() everywhere, synctest for timeouts, rapid for the scheduler</a></li>
+<li><a href="#storage-tier-dagworker-integration-1-fixed-ports-service-healthy">Storage tier: DAGWORKER_INTEGRATION=1, fixed ports, service_healthy</a></li>
+<li><a href="#coverage-95-aggregate-per-module-never-per-file">Coverage: 95% aggregate, per module, never per file</a></li>
+<li><a href="#ci-job-matrix">CI job matrix</a></li>
+</ul>
+<li><a href="#consequences">Consequences</a></li>
+<ul>
+<li><a href="#positive">Positive</a></li>
+<li><a href="#negative">Negative</a></li>
+<li><a href="#neutral">Neutral</a></li>
+</ul>
+<li><a href="#alternatives-considered">Alternatives considered</a></li>
+<li><a href="#references">References</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="adr-0040-testing-strategy-coverage-policy-and-ci-topology">ADR-0040: Testing strategy, coverage policy, and CI topology<a class="anchor" href="#adr-0040-testing-strategy-coverage-policy-and-ci-topology" aria-label="Link to this section">#</a></h1>
+<ul>
+<li><strong>Status:</strong> Accepted</li>
+<li><strong>Date:</strong> 2026-08-22</li>
+<li><strong>Deciders:</strong> Vladyslav Kazantsev (project owner)</li>
+<li><strong>Amends:</strong> —</li>
+<li><strong>Backing research:</strong> docs/research/11-testing-verification-and-ci.md §1-5; docs/research/00-synthesis.md §1, §8-9</li>
+</ul>
+<h2 id="context">Context<a class="anchor" href="#context" aria-label="Link to this section">#</a></h2>
+<p><code>dagworker</code>'s entire value proposition is correctness under concurrent access from multiple
+processes against shared storage, at a mandated 1,000,000-node scale, across three real backends
+(in-memory, Redis, PostgreSQL — memcached is dropped entirely per AMD-5/ADR-0017 and never
+appears as a backend under test). A plain <code>go test ./...</code> with a coverage number tells you almost
+nothing about that specific property: <code>-race</code> "only reports races that actually execute" — a
+race-free run over a 60%-covered suite says nothing about the other 40% — and a green suite proves
+nothing about interleavings the Go scheduler simply did not happen to produce on a given run.
+Getting real confidence requires several genuinely different techniques layered on top of each
+other, each catching a different class of bug, and each with a defined, permanent home in the repo
+rather than a one-off script someone wrote before a release.</p>
+<p>Three architectural facts drive where each technique lives. First, ADR-0029 pins Go at exactly
+1.25 with no lower floor, which makes <code>testing/synctest</code> (GA, not experimental) an unconditional
+part of the test architecture for the lease-timeout state machine — this only works because
+ADR-0029 already commits the scheduler's internal timing exclusively to the stdlib <code>time</code> package.
+Second, ADR-0031's module split means a storage backend's own conformance tests must live inside
+that backend's own module (<code>storage/redis</code>, <code>storage/postgres</code>), each calling into the shared
+<code>dagstore/dagstoretest.RunConformance</code> suite that lives in core — there is no single directory that
+can import both backends without re-creating the dependency-weight problem ADR-0031 exists to
+avoid. Third, the owner's explicit request for <strong>custom, non-default ports</strong> in the integration
+Compose file rules out <code>testcontainers-go</code> as the integration harness: its two headline features —
+dynamic host-port allocation and Ryuk-managed per-test container teardown — are exactly the two
+things this project does not want, since it wants one stable, well-known port a developer can
+<code>redis-cli -p 16379</code> into by hand, identically in local dev and in CI.</p>
+<p>The coverage gate itself needs a specific, honest definition. Go's default coverage instrumentation
+is per-package unless <code>-coverpkg</code> widens it, <code>-covermode=set</code> (the default) silently under-counts
+concurrent code because it isn't safe for racing goroutines to increment, and a Docker-Compose-
+driven end-to-end suite that drives a <em>built binary</em> over the network cannot use <code>-coverprofile</code> at
+all — it needs the separate <code>GOCOVERDIR</code> instrumented-binary mechanism, merged after the fact with
+<code>go tool covdata</code>. A 95%-of-statements number is also gameable in a way Go's own tooling cannot
+detect: "ran but nothing was asserted" and "ran and was verified" produce an identical coverage
+report, which is precisely why this ADR treats occasional mutation-testing spot checks and a
+same-process linearizability checker as first-class parts of the strategy, not optional extras.</p>
+<h2 id="decision">Decision<a class="anchor" href="#decision" aria-label="Link to this section">#</a></h2>
+<h3 id="four-test-tiers-with-a-fixed-location-each">Four test tiers, with a fixed location each<a class="anchor" href="#four-test-tiers-with-a-fixed-location-each" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Tier</th><th>Lives at</th><th>Backend(s)</th><th>Gate</th></tr></thead>
+<tbody>
+<tr><td><strong>Unit</strong></td><td>co-located <code>_test.go</code> next to every package, in every module</td><td>none — no I/O, no goroutscale infra beyond the in-memory store</td><td>every <code>go test ./...</code>, every push</td></tr>
+<tr><td><strong>Feature</strong></td><td><code>test/feature/</code> inside the <strong>core module only</strong></td><td>in-memory (default <code>Store</code>)</td><td>every push, no external infra</td></tr>
+<tr><td><strong>Storage</strong></td><td>inside each backend module (<code>storage/redis/*_test.go</code>, <code>storage/postgres/*_test.go</code>) plus core's own in-memory backend package, all calling <code>dagstore/dagstoretest.RunConformance</code></td><td>in-memory (unconditional), Redis + Postgres (gated)</td><td>Redis/Postgres legs gated by <code>DAGWORKER_INTEGRATION=1</code></td></tr>
+<tr><td><strong>Perf</strong></td><td><code>test/perf/</code> inside the core module</td><td>in-memory, Redis, Postgres in the same run</td><td>ratio guards on every push (required); absolute 1M-node benchmarks nightly (advisory + trend)</td></tr>
+</tbody></table></div>
+<p>The <strong>storage</strong> tier deliberately has no single cross-module directory: <code>storage/redis</code>'s
+conformance test file lives in <code>storage/redis</code> and imports <code>dagstore/dagstoretest</code> off the
+<code>require</code> line it already has on core (ADR-0031) plus its own <code>go-redis</code> client; <code>storage/postgres</code>
+mirrors this with <code>pgx</code>. This keeps each backend module's own <code>go test ./...</code> fully self-contained
+— no module outside <code>cmd/dagworkerd</code> ever needs to import more than one backend at a time.</p>
+<h3 id="unit-tests-t-parallel-everywhere-synctest-for-timeouts-rapid-for-the-scheduler">Unit tests: <code>t.Parallel()</code> everywhere, <code>synctest</code> for timeouts, <code>rapid</code> for the scheduler<a class="anchor" href="#unit-tests-t-parallel-everywhere-synctest-for-timeouts-rapid-for-the-scheduler" aria-label="Link to this section">#</a></h3>
+<p>Every unit test calls <code>t.Parallel()</code> unless a specific, commented reason prevents it (e.g. a test
+that legitimately needs <code>t.Setenv</code>, which is documented as incompatible with parallel ancestors).
+<code>paralleltest</code>/<code>tparallel</code> (ADR-0039) enforce this mechanically rather than by convention.</p>
+<p>The lease-timeout state machine is tested via <code>testing/synctest.Test</code>, which requires — and is the
+reason ADR-0029 requires — that the internal scheduler's timing goes exclusively through the
+stdlib <code>time</code> package:</p>
+<pre><code class="language-go"><span class="tok-kw">func</span> TestLeaseTimeout_MarksNodeErrorTimeout(t *testing.T) {
+    synctest.Test(t, <span class="tok-kw">func</span>(t *testing.T) {
+        store := newInMemoryStore()
+        mgr, _ := dagworker.New(store, dagworker.WithDefaultLeaseTimeout(<span class="tok-num">30</span>*time.Second))
+        <span class="tok-com">// ... claim a node, then advance the bubble's virtual clock past the deadline:</span>
+        synctest.Sleep(<span class="tok-num">31</span> * time.Second)
+        n, _ := mgr.GetNode(context.Background(), scope, id)
+        <span class="tok-kw">if</span> n.Status != dagworker.StatusError || n.Outcome.Reason != dagworker.ReasonTimeout {
+            t.Fatalf(<span class="tok-str">"got %v/%v, want Error/ReasonTimeout"</span>, n.Status, n.Outcome.Reason)
+        }
+    })
+}</code></pre>
+<p>This runs in microseconds of wall-clock time, deterministically, only because the timeout-sweeper
+goroutine is started from inside the bubble and uses <code>time.After</code>/<code>context.WithDeadline</code> — no
+hand-rolled ticker, no externally-injected clock (ADR-0029).</p>
+<p><strong>Property tests</strong> use <code>pgregory.net/rapid</code> with <code>t.Repeat</code>'s stateful/model-based API — a real
+scheduler run alongside a trivial reference-model reimplementation, with an empty-string <code>""</code> key
+in the action map serving as the invariant check that runs around every action. Four named
+properties are mandatory, written before the scheduler implementation is complete:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Property</th><th>Check</th></tr></thead>
+<tbody>
+<tr><td><strong>No double lease</strong></td><td>A <code>map[NodeID]WorkerID</code> of currently-out leases, maintained in the <em>test</em>, fails immediately if <code>Claim</code> returns a node already present in it.</td></tr>
+<tr><td><strong>Eventual readiness</strong></td><td>If a node's predecessors have all succeeded (per the reference model) and it isn't terminal, it must be <code>Ready</code> — or reachable to <code>Ready</code> — after quiescence; checked after settling, never at an arbitrary interleaving (a liveness property, bounded accordingly).</td></tr>
+<tr><td><strong>Antichain invariant</strong></td><td>For every pair of nodes in the in-flight set, neither is a transitive predecessor of the other in the current graph — an O(k²) pairwise check over the small in-flight set.</td></tr>
+<tr><td><strong>Acyclicity under interleaving</strong></td><td><code>HasCycle() == false</code> after <strong>every single mutation</strong>, not just at the end of a sequence — a property test that only checks final state can miss a transient cycle a concurrent reader could have observed mid-mutation.</td></tr>
+</tbody></table></div>
+<p>A <strong>seeded chaos harness</strong> (<code>internal/chaos</code>, core module — no external dependency) wraps the
+in-memory <code>Store</code> and, given a seed, injects latency, a transient error, or a torn write (return
+success without actually committing, modeling a mid-operation crash) on a configurable fraction of
+calls. It logs its seed on every failure and accepts a <code>-seed</code> replay flag, mirroring <code>-shuffle</code>'s
+reproducibility contract, and is exercised by the same rapid property tests above to stress the
+four properties under adversarial timing — this is an intentionally narrower substitute for
+FoundationDB/TigerBeetle-grade deterministic simulation (full DST requires forking the Go runtime
+or a WASM single-threaded target, disproportionate for a library), proportionate because the
+scheduler's internal clock and randomness are already injectable (ADR-0029) and its
+decision-making is already serialized per scope (ADR-0033).</p>
+<p>A same-process <strong>Porcupine</strong> linearizability check runs as a unit-tier test: every call to the
+public <code>Claim</code>/<code>Ack</code>/<code>Nack</code>/<code>Extend</code> surface, from every goroutine in the test, is timestamped at
+call and return and checked against a small reference <code>porcupine.Model</code> (state transitions:
+<code>new → leased → success|error</code>, illegal to lease an already-leased node or ack a lease you don't
+hold). This runs on every PR — cheap, fast, no external infra. Cross-process Jepsen/Elle-style
+fault injection against real multi-instance Redis/Postgres clusters is explicitly <strong>out of scope</strong>
+for this ADR and deferred to a post-1.0 hardening milestone; Porcupine against an in-process
+multi-goroutine harness is the correct day-one investment.</p>
+<h3 id="storage-tier-dagworker-integration-1-fixed-ports-service-healthy">Storage tier: <code>DAGWORKER_INTEGRATION=1</code>, fixed ports, <code>service_healthy</code><a class="anchor" href="#storage-tier-dagworker-integration-1-fixed-ports-service-healthy" aria-label="Link to this section">#</a></h3>
+<p>Integration tests are gated by a single environment variable, checked via <code>t.Skip()</code> when unset —
+not a build tag (fragments the source tree, easy to forget) and not <code>testing.Short()</code> (a semantic
+mismatch: <code>-short</code> means "skip slow tests," not "requires infrastructure the reader may not have
+running"). <code>go test ./...</code> with no Docker running still passes everywhere, always.</p>
+<p><code>docker-compose.test.yml</code> at the repo root — hand-written, not <code>testcontainers-go</code>, per the custom-
+port requirement — with <strong>Redis and PostgreSQL only</strong> (no memcached service, AMD-5):</p>
+<pre><code class="language-yaml">services:
+  redis:
+    image: redis:<span class="tok-num">7.4</span>-alpine
+    ports: [<span class="tok-str">"16379:6379"</span>]
+    healthcheck:
+      test: [<span class="tok-str">"CMD"</span>, <span class="tok-str">"redis-cli"</span>, <span class="tok-str">"ping"</span>]
+      interval: <span class="tok-num">2</span>s
+      timeout: <span class="tok-num">2</span>s
+      retries: <span class="tok-num">15</span>
+      start_period: <span class="tok-num">5</span>s
+
+  postgres:
+    image: postgres:<span class="tok-num">17</span>-alpine
+    ports: [<span class="tok-str">"15432:5432"</span>]
+    environment:
+      POSTGRES_PASSWORD: dagworker
+      POSTGRES_DB: dagworker_test
+    healthcheck:
+      test: [<span class="tok-str">"CMD-SHELL"</span>, <span class="tok-str">"pg_isready -U postgres"</span>]
+      interval: <span class="tok-num">2</span>s
+      timeout: <span class="tok-num">2</span>s
+      retries: <span class="tok-num">15</span>
+      start_period: <span class="tok-num">5</span>s</code></pre>
+<p><code>depends_on: &lt;service&gt;: condition: service_healthy</code> gates any dependent service on the healthcheck
+passing — this is the mechanism that replaces a hand-rolled polling loop, and it is the same file a
+contributor runs by hand (<code>docker compose -f docker-compose.test.yml up</code>) as the one CI runs, so a
+failing integration test is reproducible identically in both places.</p>
+<h3 id="coverage-95-aggregate-per-module-never-per-file">Coverage: 95% aggregate, per module, never per file<a class="anchor" href="#coverage-95-aggregate-per-module-never-per-file" aria-label="Link to this section">#</a></h3>
+<pre><code class="language-bash"><span class="tok-com"># inside each module's own directory (ADR-0031's per-module CI loop):</span>
+go test -covermode=atomic -coverpkg=./... -coverprofile=cover.out ./...
+pct=$(go tool cover -func=cover.out | tail -<span class="tok-num">1</span> | grep -oE <span class="tok-str">'[0-9]+\.[0-9]+'</span>)
+awk -v p=<span class="tok-str">"$pct"</span> <span class="tok-str">'BEGIN { exit !(p &gt;= 95.0) }'</span></code></pre>
+<p><code>-covermode=atomic</code> unconditionally — <code>set</code> (the default) silently under-counts exactly the
+concurrent code paths this project cares most about, and the extra cost is marginal on top of a
+build already paying for correctness-focused testing. <code>-coverpkg=./...</code> unconditionally — a
+cross-package call chain (a <code>test/feature</code> test driving <code>internal/engine</code> → <code>internal/lease</code>) must
+credit the packages it actually executed, not just the calling test package's own (empty) statement
+count.</p>
+<p>Coverage from the Docker-Compose-driven end-to-end suite comes from the <strong>built <code>dagworkerd</code>
+binary itself</strong>, since <code>-coverprofile</code> only instruments test binaries:</p>
+<pre><code class="language-bash">go build -cover -o dagworkerd -coverpkg=./... ./cmd/dagworkerd
+GOCOVERDIR=covdata ./dagworkerd --config e2e.yaml &amp;
+<span class="tok-com"># ... drive the e2e suite over the network against the running process ...</span>
+kill -TERM $!   <span class="tok-com"># graceful shutdown — coverage flushes ONLY on clean exit, never on SIGKILL</span>
+go tool covdata merge -i=unit_covdata,covdata -o combined
+go tool covdata percent -i=combined</code></pre>
+<p>The 95% gate is <strong>aggregate per module, never per file</strong> — enforced via the single <code>total:</code> line
+from <code>go tool cover -func</code>, not a per-file threshold. Per-file 95% pressure is precisely what
+produces assertion-free padding tests on genuinely hard-to-test glue code; spot-checking per-
+package numbers is a code-review activity, not a CI gate. Legitimately uncoverable code
+(<code>default: panic("unreachable")</code> on an internal-only enum switch, OS-specific branches this
+project's CI matrix doesn't run) is excluded with a <code>// coverage-ignore: reason</code> comment convention
+and a documented reason, never silently. An occasional (not per-PR) mutation-testing pass over the
+lease/scheduling core is scheduled quarterly to catch the gap Go's own tooling cannot see: a test
+that runs a statement but asserts nothing about it.</p>
+<h3 id="ci-job-matrix">CI job matrix<a class="anchor" href="#ci-job-matrix" aria-label="Link to this section">#</a></h3>
+<p>One Go version only — <strong>1.25</strong>, per ADR-0029's single floor; no multi-version hedge matrix.</p>
+<pre><code class="language-yaml">jobs:
+  unit:        <span class="tok-com"># per-module loop (ADR-0031), every push</span>
+    steps: [go build ./..., go test -shuffle=on ./...]
+
+  race:        <span class="tok-com"># every push</span>
+    steps: [go test -race -shuffle=on -count=<span class="tok-num">1</span> ./...]
+
+  coverage:    <span class="tok-com"># every push, aggregate ≥95% gate per module</span>
+    steps: [go test -covermode=atomic -coverpkg=./... -coverprofile=cover.out ./..., awk-threshold-check]
+
+  storage-integration:
+    strategy: { matrix: { backend: [redis, postgres] } }   <span class="tok-com"># no memcached — AMD-5</span>
+    steps:
+      - docker compose -f docker-compose.test.yml up -d ${{ matrix.backend }}
+      - wait-for service_healthy
+      - env: { DAGWORKER_INTEGRATION: <span class="tok-str">"1"</span> }
+        run: go test -race -run <span class="tok-str">"TestStoreContract/${{ matrix.backend }}"</span> ./storage/${{ matrix.backend }}/...
+      - docker compose -f docker-compose.test.yml down -v
+
+  lint:        <span class="tok-com"># ADR-0039, pinned golangci-lint v2.x</span>
+    steps: [golangci-lint-action]
+
+  complexity-ratio-guard:   <span class="tok-com"># every push, required — dimensionless, same-run ratios</span>
+    steps:
+      - go test -run <span class="tok-str">'^$'</span> -bench <span class="tok-str">'BenchmarkComplexity_.*'</span> ./test/perf/...
+      - assert: pipelined &gt;= <span class="tok-num">20x</span> unpipelined; in-memory &gt;= <span class="tok-num">100x</span> Redis; Redis &gt;= <span class="tok-num">300x</span> Postgres — same run
+
+  benchmark-nightly:        <span class="tok-com"># scheduled, advisory + trend, NOT a blocking PR check</span>
+    steps:
+      - go test -run <span class="tok-str">'^$'</span> -bench . -benchmem -count=<span class="tok-num">10</span> ./test/perf/... | tee new.txt
+      - benchstat against the previous nightly baseline; feed benchmark-action for trend charts</code></pre>
+<p>Splitting <code>unit</code>/<code>race</code>/<code>coverage</code> into separate jobs is deliberate: <code>-race</code>'s 2–20x slowdown and
+5–10x memory multiplier would otherwise inflate the coverage job's wall time for no accuracy
+benefit — <code>-covermode=atomic</code>, not <code>-race</code>, is coverage's own concurrency-correctness requirement.
+Every job name above, including each <code>storage-integration</code> matrix leg's rendered name (e.g.
+<code>storage-integration (redis)</code>), is a required status check in branch protection — a backend added
+to the matrix later must be added to that list explicitly or it silently becomes non-blocking.</p>
+<p><strong>Ratio guards are a required, blocking, every-push gate; absolute 1M-node benchmarks are nightly
+and advisory.</strong> This split is deliberate, not a demotion of the absolute numbers: dimensionless
+ratios computed in the <em>same CI run</em> (pipelined ≥ 20× unpipelined; in-memory ≥ 100× Redis ≥ 300×
+Postgres) are stable across whatever CPU class a shared runner happens to be that day, while
+absolute latency thresholds are not — gating a PR on an absolute number measured on noisy shared
+infrastructure produces exactly the flaky-benchmark-blocks-merge failure mode this design avoids
+by construction. The nightly job uses <code>benchstat</code>'s own documented floor of <code>-count=10</code> and tracks
+trend via <code>benchmark-action/github-action-benchmark</code> so a slow creeping regression too small for
+any single PR's ratio check to flag is still visible over weeks.</p>
+<h2 id="consequences">Consequences<a class="anchor" href="#consequences" aria-label="Link to this section">#</a></h2>
+<h3 id="positive">Positive<a class="anchor" href="#positive" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>Four tiers with one fixed location each means a new contributor never has to guess where a test
+belongs, and the per-module CI loop (ADR-0031) means no nested module's tests are silently
+skipped by a root-level <code>go test ./...</code>.</li>
+<li><code>synctest</code>-based timeout tests are deterministic and run in microseconds — no <code>-race</code>-under-load
+flake from a real 30-second sleep racing a background sweeper's polling interval.</li>
+<li>The four named rapid properties plus the seeded chaos harness plus Porcupine give three
+structurally different techniques converging on the same claim (no double lease, no lost
+readiness, no cycle, no stale ack after reassignment) — a bug that slips past one is unlikely to
+slip past all three.</li>
+<li>The aggregate-not-per-file coverage rule removes the single biggest incentive to write
+assertion-free padding tests.</li>
+</ul>
+<h3 id="negative">Negative<a class="anchor" href="#negative" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>Four tiers, a chaos harness, a Porcupine model, and a <code>rapid</code> property suite is real upfront
+engineering investment before the scheduler's first line of production logic exists — this is a
+deliberate "write the failing test first" front-load, not a cost deferred to later.</li>
+<li>The storage tier's per-backend-module test placement (no shared cross-module integration
+directory) means <code>dagstore/dagstoretest</code>'s public surface is a contract every future backend
+module must satisfy exactly — a breaking change to <code>RunConformance</code> itself requires touching
+every backend module in the same release window as core, which is the one place this design
+re-introduces a coordination cost ADR-0031 otherwise avoids.</li>
+<li>Jepsen/Elle-style cross-process fault injection is explicitly deferred — real multi-instance
+partition/clock-skew bugs against live Redis/Postgres clusters will not be caught by this ADR's
+day-one gates, only by the post-1.0 hardening milestone.</li>
+</ul>
+<h3 id="neutral">Neutral<a class="anchor" href="#neutral" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>Mutation testing is scheduled quarterly, not per-PR, because it is slow; the tool choice
+(<code>go-mutesting</code> or a successor) is left open and revisited when the quarterly cadence is first
+exercised in practice.</li>
+<li>The nightly absolute-benchmark job's runner-class variability is a known, accepted limitation —
+self-hosted, pinned-class runners are a future upgrade if <code>benchstat</code>'s p-value gate needs to
+become a hard blocking check rather than an advisory trend line.</li>
+</ul>
+<h2 id="alternatives-considered">Alternatives considered<a class="anchor" href="#alternatives-considered" aria-label="Link to this section">#</a></h2>
+<p><strong><code>testcontainers-go</code> as the integration harness.</strong> Rejected per the owner's explicit request for
+fixed, custom, non-default ports: testcontainers-go's two headline features (dynamic host-port
+allocation, Ryuk-managed per-test container teardown) are precisely the two things this project
+does not want — it wants one stable port set identical across local dev, CI, and manual debugging
+with <code>redis-cli -p 16379</code>.</p>
+<p><strong>Build tags (<code>//go:build integration</code>) instead of an env-var gate.</strong> Rejected: fragments the
+source tree (every integration file needs the tag; an untagged file can't share unexported helpers
+with a tagged one without careful package layout) and is easy for a contributor to simply forget.</p>
+<p><strong><code>testing.Short()</code>/<code>-short</code> as the integration gate.</strong> Rejected: a semantic mismatch — <code>-short</code> is
+documented for skipping <em>slow</em> tests within an otherwise-normal run, not for requiring <em>extra
+infrastructure</em> the reader may not have; using it here would confuse the next contributor who
+expects <code>-short</code> to mean "faster," not "different infra requirement."</p>
+<p><strong>Full FoundationDB/TigerBeetle-style deterministic simulation testing</strong> (fork the Go runtime for
+seeded single-threaded scheduling, or compile to WASM for the same effect). Rejected as
+disproportionate for a library rather than a database kernel — the narrower chaos-harness-plus-
+injected-clock approximation captures the properties this project's owner cares most about
+(multiple instances racing against shared storage) at a fraction of the engineering cost, and
+nothing about this design forecloses a heavier investment later if multi-instance guarantees become
+the project's primary marketed differentiator.</p>
+<p><strong>Per-file coverage minimums instead of an aggregate gate.</strong> Rejected: this is the textbook way a
+coverage number gets gamed rather than earned — a hard-to-test glue file gets a padding test that
+executes it without asserting anything, purely to clear a per-file bar, which is worse for
+confidence than the same file sitting at a lower, honestly-explained number while the module-wide
+aggregate still clears 95%.</p>
+<p><strong>Absolute latency thresholds as the sole performance CI gate.</strong> Rejected per the project's own
+"benchmark before publishing tuned numbers" discipline: absolute numbers measured on shared,
+variable-class CI runners produce exactly the false-failure flakiness a dimensionless, same-run
+ratio gate is immune to by construction.</p>
+<h2 id="references">References<a class="anchor" href="#references" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><a href="https://go.dev/doc/articles/race_detector" rel="noopener noreferrer">Go race detector article</a> — detection scope and overhead</li>
+<li><a href="https://pkg.go.dev/testing/synctest" rel="noopener noreferrer"><code>testing/synctest</code> package docs</a> — bubble semantics, GA in Go 1.25</li>
+<li><a href="https://pkg.go.dev/pgregory.net/rapid" rel="noopener noreferrer"><code>pgregory.net/rapid</code> docs</a> — <code>t.Repeat</code> stateful/model-based testing</li>
+<li><a href="https://github.com/anishathalye/porcupine" rel="noopener noreferrer"><code>anishathalye/porcupine</code> README</a> — linearizability checking API</li>
+<li><a href="https://apple.github.io/foundationdb/testing.html" rel="noopener noreferrer">Apple's FoundationDB testing docs</a> — deterministic simulation precedent</li>
+<li><a href="https://docs.tigerbeetle.com/concepts/safety/" rel="noopener noreferrer">TigerBeetle safety / VOPR docs</a> — simulator precedent</li>
+<li><a href="https://go.dev/doc/build-cover" rel="noopener noreferrer">Go integration coverage / <code>build-cover</code></a> — <code>GOCOVERDIR</code>, <code>go tool covdata</code></li>
+<li><a href="https://pkg.go.dev/golang.org/x/perf/cmd/benchstat" rel="noopener noreferrer"><code>pkg.go.dev/golang.org/x/perf/cmd/benchstat</code></a> — Mann–Whitney U-test, <code>-count=10</code> floor</li>
+<li><a href="https://docs.docker.com/reference/compose-file/services/" rel="noopener noreferrer">Docker Compose services reference</a> — <code>healthcheck</code>, <code>depends_on.condition: service_healthy</code></li>
+<li><a href="https://golang.testcontainers.org/" rel="noopener noreferrer"><code>golang.testcontainers.org</code></a> — dynamic ports, Ryuk, evaluated and rejected</li>
+<li>docs/research/11-testing-verification-and-ci.md §1 (tooling mechanics), §2 (verification techniques), §3 (coverage mechanics), §4 (integration infra), §5 (CI design)</li>
+<li>docs/research/00-synthesis.md §1 (dimensionless ratio-gate rationale), §9 (phased plan backend availability)</li>
+</ul>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/adr/0040-testing-strategy-coverage-and-ci.md" rel="noopener noreferrer">View source: docs/adr/0040-testing-strategy-coverage-and-ci.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

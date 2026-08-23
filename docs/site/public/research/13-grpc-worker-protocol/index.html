@@ -1,0 +1,1746 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>13 — The gRPC Worker Protocol · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/research/13-grpc-worker-protocol/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#13-the-grpc-worker-protocol">13 — The gRPC Worker Protocol</a></li>
+<ul>
+<li><a href="#decision-up-front">Decision, up front</a></li>
+<li><a href="#1-long-poll-the-primary-dispatch-mechanism">1. Long poll — the primary dispatch mechanism</a></li>
+<ul>
+<li><a href="#1-1-temporal-the-single-best-piece-of-prior-art-here">1.1 Temporal: the single best piece of prior art here</a></li>
+<li><a href="#1-2-nomad-the-same-shape-over-http-with-an-explicit-ceiling">1.2 Nomad: the same shape over HTTP, with an explicit ceiling</a></li>
+<li><a href="#1-3-buildbarn-long-poll-with-a-server-scheduled-resync-the-closest-sibling-design">1.3 Buildbarn: long poll with a server-scheduled resync — the closest sibling design</a></li>
+<li><a href="#1-4-what-long-poll-is-not-good-at">1.4 What long poll is not good at</a></li>
+</ul>
+<li><a href="#2-server-streaming-dispatch-the-flow-control-trap">2. Server-streaming dispatch — the flow-control trap</a></li>
+<li><a href="#3-bidirectional-streaming-with-explicit-credit-where-it-s-the-right-tool-and-where-it-isn-t">3. Bidirectional streaming with explicit credit — where it's the right tool, and where it isn't</a></li>
+<ul>
+<li><a href="#3-1-envoy-xds-ads-nonce-ack-as-a-convergence-protocol-not-a-capacity-protocol">3.1 Envoy xDS ADS: nonce/ack as a convergence protocol, not a capacity protocol</a></li>
+<li><a href="#3-2-kubernetes-cri-explicitly-not-a-push-streaming-dispatch-model">3.2 Kubernetes CRI: explicitly not a push/streaming dispatch model</a></li>
+<li><a href="#3-3-reactive-streams-request-n-the-pattern-in-the-abstract">3.3 Reactive Streams request(n): the pattern in the abstract</a></li>
+</ul>
+<li><a href="#4-why-the-hybrid-is-narrow-http-2-s-own-flow-control-is-the-credit-protocol">4. Why the hybrid is narrow: HTTP/2's own flow control is the credit protocol</a></li>
+<li><a href="#5-the-complete-proto-file">5. The complete .proto file</a></li>
+<li><a href="#6-watch-resume-semantics-modeled-directly-on-etcd">6. Watch: resume semantics, modeled directly on etcd</a></li>
+<li><a href="#7-deadlines-and-cancellation-and-why-the-lease-deadline-must-be-its-own-thing">7. Deadlines and cancellation — and why the lease deadline must be its own thing</a></li>
+<li><a href="#8-keepalive-the-setting-that-silently-breaks-long-polls">8. Keepalive — the setting that silently breaks long polls</a></li>
+<li><a href="#9-graceful-shutdown-and-draining">9. Graceful shutdown and draining</a></li>
+<li><a href="#10-error-model-google-rpc-status-and-canonical-code-mapping">10. Error model: google.rpc.Status and canonical code mapping</a></li>
+<li><a href="#11-authn-authz">11. AuthN / AuthZ</a></li>
+<li><a href="#12-observability">12. Observability</a></li>
+<li><a href="#13-backwards-compatibility-buf-lint-buf-breaking-protovalidate">13. Backwards compatibility: buf lint, buf breaking, protovalidate</a></li>
+<li><a href="#14-codegen-and-repo-layout">14. Codegen and repo layout</a></li>
+<li><a href="#15-load-balancing-across-replicas-why-long-poll-an-l4-lb-is-a-trap">15. Load balancing across replicas — why long poll + an L4 LB is a trap</a></li>
+<li><a href="#16-recommendations-for-dagworker">16. Recommendations for dagworker</a></li>
+<li><a href="#open-questions">Open questions</a></li>
+<li><a href="#sources">Sources</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="13-the-grpc-worker-protocol">13 — The gRPC Worker Protocol<a class="anchor" href="#13-the-grpc-worker-protocol" aria-label="Link to this section">#</a></h1>
+<p>Status: research dossier. Scope: the wire protocol between a remote worker (Python, Node,
+Rust, Java, or Go) and <code>dagworkerd</code>, the optional daemon that embeds the <code>dagworker</code> core
+library and exposes it over gRPC and HTTP/JSON. The core library (<code>github.com/specialistvlad/dagworker</code>)
+imports none of this; <code>dagworkerd</code> and a generated client SDK are the only things that do.</p>
+<p>The central question: <strong>how does a remote worker get told "here is a node, you have N
+seconds"?</strong> Three shapes exist in production systems. This dossier studies all three with
+real proto and real failure modes, picks one (a hybrid, but a narrow one), and specifies the
+full protocol.</p>
+<hr>
+<h2 id="decision-up-front">Decision, up front<a class="anchor" href="#decision-up-front" aria-label="Link to this section">#</a></h2>
+<p><strong>Primary dispatch is a unary long-poll RPC (<code>ClaimNode</code>), exactly Temporal's
+<code>PollActivityTaskQueue</code> shape.</strong> Heartbeat, Complete, and Fail are unary RPCs keyed by an
+opaque, server-issued <code>task_token</code> — again exactly Temporal's shape. A worker's <em>capacity</em> is
+expressed the same way Temporal expresses it: by how many concurrent <code>ClaimNode</code> calls it has
+in flight, not by an explicit credit message. <strong>Status/availability notification is a
+separate, independent bidirectional stream (<code>Watch</code>)</strong> modeled on etcd's <code>Watch</code> RPC, used
+only to wake idle pollers and to give operators/schedulers a live event feed — it never
+carries the lease itself. No general-purpose "push tasks down a stream" RPC exists in this
+design; §3 explains why that shape is the wrong tool for <em>this</em> problem even though it is the
+right tool for others (xDS, CRI's exec/attach).</p>
+<p>This is the hybrid the assignment permits, but it is a narrow one: exactly two RPC shapes
+(long-poll unary, bidi-stream-for-events), not three, and no bespoke credit protocol — HTTP/2
+already gives dagworker one for free (§4).</p>
+<hr>
+<h2 id="1-long-poll-the-primary-dispatch-mechanism">1. Long poll — the primary dispatch mechanism<a class="anchor" href="#1-long-poll-the-primary-dispatch-mechanism" aria-label="Link to this section">#</a></h2>
+<h3 id="1-1-temporal-the-single-best-piece-of-prior-art-here">1.1 Temporal: the single best piece of prior art here<a class="anchor" href="#1-1-temporal-the-single-best-piece-of-prior-art-here" aria-label="Link to this section">#</a></h3>
+<p>Temporal's <code>WorkflowService</code> is a single gRPC service with ~80 RPCs; the ones that matter for
+worker dispatch are five, and their shapes are worth internalizing field-by-field
+(<a href="https://github.com/temporalio/api/blob/master/temporal/api/workflowservice/v1/service.proto" rel="noopener noreferrer"><code>workflowservice/v1/service.proto</code></a>):</p>
+<pre><code>rpc PollWorkflowTaskQueue (PollWorkflowTaskQueueRequest) returns (PollWorkflowTaskQueueResponse)
+rpc PollActivityTaskQueue (PollActivityTaskQueueRequest) returns (PollActivityTaskQueueResponse)
+rpc RecordActivityTaskHeartbeat (RecordActivityTaskHeartbeatRequest) returns (RecordActivityTaskHeartbeatResponse)
+rpc RespondActivityTaskCompleted (RespondActivityTaskCompletedRequest) returns (RespondActivityTaskCompletedResponse)
+rpc RespondActivityTaskFailed (RespondActivityTaskFailedRequest) returns (RespondActivityTaskFailedResponse)</code></pre>
+<p><code>PollActivityTaskQueue</code> is a <strong>unary RPC that blocks server-side</strong> until a task exists or an
+internal poll timeout elapses; the worker's SDK runs a pool of goroutines each holding one
+call open, so <em>N concurrent poll calls = N units of consumption capacity</em> — there is no
+separate "I have capacity for K" message, because the poll call itself <em>is</em> the capacity
+signal. Not exposed over HTTP, gRPC-only
+(<a href="https://github.com/temporalio/api/blob/master/temporal/api/workflowservice/v1/service.proto" rel="noopener noreferrer">source</a>).</p>
+<p>The response carries a <strong>task token</strong> — the single artifact worth studying hardest:</p>
+<pre><code class="language-protobuf"><span class="tok-kw">message</span> PollActivityTaskQueueResponse {
+  <span class="tok-kw">bytes</span> task_token = <span class="tok-num">1</span>;                                    <span class="tok-com">// "A unique identifier for this task"</span>
+  ...
+  google.protobuf.Duration schedule_to_close_timeout = <span class="tok-num">14</span>; <span class="tok-com">// first scheduled -&gt; final result, total budget</span>
+  google.protobuf.Duration start_to_close_timeout = <span class="tok-num">15</span>;    <span class="tok-com">// this attempt's budget</span>
+  google.protobuf.Duration heartbeat_timeout = <span class="tok-num">16</span>;         <span class="tok-com">// window within which a heartbeat is required</span>
+}</code></pre>
+<p>(<a href="https://github.com/temporalio/api/blob/master/temporal/api/workflowservice/v1/request_response.proto" rel="noopener noreferrer">source</a>)</p>
+<p><code>task_token</code> is <strong>opaque bytes to the client</strong> but internally encodes enough for the server to
+validate every later call against it: which workflow/activity/attempt it belongs to, and
+implicitly a fencing generation. Every one of <code>RecordActivityTaskHeartbeat</code>,
+<code>RespondActivityTaskCompleted</code>, and <code>RespondActivityTaskFailed</code> takes the <em>same</em>
+<code>task_token</code> as field 1 and nothing else identifies the unit of work
+(<a href="https://github.com/temporalio/api/blob/master/temporal/api/workflowservice/v1/request_response.proto" rel="noopener noreferrer">source</a>).
+That is precisely a fencing token in the classic distributed-systems sense (Martin Kleppmann's
+"How to do distributed locking" pattern): whoever presents the <em>current</em> token wins; a stale
+token from a timed-out attempt is rejected. Temporal's server documents the rejection
+explicitly: <code>RespondActivityTaskCompleted</code> and <code>RespondActivityTaskFailed</code> <strong>fail with
+<code>NotFound</code> if the task token is invalid due to timeout, prior completion, or non-existence</strong>
+(<a href="https://github.com/temporalio/api/blob/master/temporal/api/workflowservice/v1/service.proto" rel="noopener noreferrer">source</a>) —
+collapsing three distinct causes (expired lease, already-acked, garbage token) into one gRPC
+code is a deliberate simplification worth copying (§9) precisely <em>because</em> task tokens are
+meant to be single-use and short-lived, not because <code>NotFound</code> is the only defensible choice.</p>
+<p>Three independent timeout knobs ride alongside the token
+(<a href="https://docs.temporal.io/encyclopedia/detecting-activity-failures" rel="noopener noreferrer">Temporal docs</a>):
+<code>ScheduleToStartTimeout</code> (queue wait), <code>StartToCloseTimeout</code> (this attempt), <code>ScheduleToCloseTimeout</code>
+(all attempts combined), plus <code>HeartbeatTimeout</code> as a <em>liveness</em> check independent of the
+others. This is the direct ancestor of dagworker's "lease timeout" plus "no ack before the
+deadline ⇒ timeout failure, reclaimable" rule from the project brief — Temporal just names the
+lease components separately instead of folding them into one number, and dagworker should too
+(§6 keeps <code>lease_expires_at</code> and the <code>ClaimNode</code> RPC deadline strictly separate for the same
+reason).</p>
+<p><code>RecordActivityTaskHeartbeat</code>'s response carries <code>cancel_requested: bool</code>
+(<a href="https://github.com/temporalio/api/blob/master/temporal/api/workflowservice/v1/request_response.proto" rel="noopener noreferrer">source</a>) —
+the heartbeat is a full duplex channel, not just a liveness ping: the server piggybacks
+cancellation onto the very same call the worker was already making. dagworker's <code>ExtendLease</code>
+response reuses this exact idea (§5).</p>
+<h3 id="1-2-nomad-the-same-shape-over-http-with-an-explicit-ceiling">1.2 Nomad: the same shape over HTTP, with an explicit ceiling<a class="anchor" href="#1-2-nomad-the-same-shape-over-http-with-an-explicit-ceiling" aria-label="Link to this section">#</a></h3>
+<p>Nomad's blocking queries are the same long-poll idea over plain HTTP: a client sends
+<code>?index=&lt;X&gt;&amp;wait=&lt;duration&gt;</code>, the server hangs the response until the resource's index moves
+past <code>X</code> or <code>wait</code> elapses (<strong>capped at 10 minutes</strong>, defaulting to 5), and every response
+carries <code>X-Nomad-Index</code> for the next call
+(<a href="https://developer.hashicorp.com/nomad/api-docs#blocking-queries" rel="noopener noreferrer">Nomad HTTP API docs</a>).
+Nomad's own docs warn that a blocking call returning is <strong>"no guarantee of a change"</strong> — the
+timeout and an idempotent write both look identical to the client, so callers must always
+re-diff on the returned state rather than assume "it returned, so something happened." This is
+the same shape dagworker's <code>ClaimNode</code> must have: a timed-out poll returns a normal, successful
+<code>ClaimNodeResponse</code> with no lease set, not an error — errors are for exceptional cases,
+"nothing was ready yet" is not exceptional.</p>
+<h3 id="1-3-buildbarn-long-poll-with-a-server-scheduled-resync-the-closest-sibling-design">1.3 Buildbarn: long poll with a <em>server-scheduled</em> resync — the closest sibling design<a class="anchor" href="#1-3-buildbarn-long-poll-with-a-server-scheduled-resync-the-closest-sibling-design" aria-label="Link to this section">#</a></h3>
+<p>Buildbarn's worker↔scheduler protocol is a single RPC, <code>Synchronize</code>, and it is the most
+direct precedent for dagworker of the three because it dispatches arbitrary opaque work units
+(build actions) rather than a fixed workflow/activity model:</p>
+<pre><code class="language-protobuf"><span class="tok-kw">service</span> OperationQueue {
+  <span class="tok-kw">rpc</span> Synchronize(SynchronizeRequest) <span class="tok-kw">returns</span> (SynchronizeResponse);
+}</code></pre>
+<p>(<a href="https://github.com/buildbarn/bb-remote-execution/blob/master/pkg/proto/remoteworker/remoteworker.proto" rel="noopener noreferrer">source</a>)</p>
+<p>A worker calls <code>Synchronize</code> repeatedly, reporting its <code>CurrentState</code> (idle, or executing a
+specific action digest at a specific phase — fetching inputs / running / uploading outputs)
+and receiving a <code>DesiredState</code> back (stay idle, or here is an action to run). The genuinely
+interesting piece: the response also carries <code>next_synchronization_at</code>, an absolute timestamp
+telling the worker exactly when to call back next — <strong>the scheduler controls the polling
+cadence, not a client-side constant</strong>. The call is documented to be non-blocking while
+executing (the worker is just checking in) but the scheduler is explicitly allowed to <strong>"let
+the call hang until more work is available"</strong> when the worker reports idle
+(<a href="https://github.com/buildbarn/bb-remote-execution/blob/master/pkg/proto/remoteworker/remoteworker.proto" rel="noopener noreferrer">source</a>).
+This is a strict superset of Temporal's model: same long-poll-when-idle behavior, plus a
+server-driven backoff/resync schedule that a fixed client-side poll-timeout constant can't
+express (useful if dagworkerd ever wants to tell a worker "stop hammering me, come back in
+30s" without returning an error). §11 recommends dagworker's <code>ClaimNodeResponse</code> carry an
+optional <code>retry_after</code> for exactly this, borrowed from Buildbarn rather than invented fresh.</p>
+<h3 id="1-4-what-long-poll-is-not-good-at">1.4 What long poll is <em>not</em> good at<a class="anchor" href="#1-4-what-long-poll-is-not-good-at" aria-label="Link to this section">#</a></h3>
+<p>All three systems above accept the same cost: a blocked RPC occupies one HTTP/2 stream (cheap,
+~tens of bytes of local state) but, more importantly, occupies one <em>goroutine/thread and one
+logical connection slot</em> on both sides for the poll's duration, and interacts badly with
+infrastructure that assumes short-lived unary calls (idle-connection-killing L4 load balancers,
+§10; aggressive client keepalive misconfiguration, §7). None of that is disqualifying — it is
+exactly why §7 and §10 exist — but it is why long poll alone is not the whole answer for
+<em>event</em> delivery: a client watching for DAG-wide transitions (not "give me one claimable node")
+would need dozens of outstanding long polls (one per interesting node) or one enormous
+multiplexed poll that reinvents streaming badly. That job is handed to <code>Watch</code> (§3, §6)
+instead.</p>
+<hr>
+<h2 id="2-server-streaming-dispatch-the-flow-control-trap">2. Server-streaming dispatch — the flow-control trap<a class="anchor" href="#2-server-streaming-dispatch-the-flow-control-trap" aria-label="Link to this section">#</a></h2>
+<p>The naive alternative: <code>rpc StreamNodes(StreamNodesRequest) returns (stream Node)</code>, server
+pushes ready nodes down the stream as fast as they exist. This looks efficient — no poll
+round-trips — and it is exactly the shape REv2's <code>Execute</code> uses, but for a different problem:</p>
+<pre><code class="language-protobuf"><span class="tok-kw">rpc</span> Execute(ExecuteRequest) <span class="tok-kw">returns</span> (<span class="tok-kw">stream</span> google.longrunning.Operation) { ... }
+<span class="tok-kw">rpc</span> WaitExecution(WaitExecutionRequest) <span class="tok-kw">returns</span> (<span class="tok-kw">stream</span> google.longrunning.Operation) { ... }</code></pre>
+<p>(<a href="https://github.com/bazelbuild/remote-apis/blob/main/build/bazel/remote/execution/v2/remote_execution.proto" rel="noopener noreferrer">source</a>)</p>
+<p>Note what's actually being streamed: <code>Execute</code> submits <strong>one</strong> action and streams <code>Operation</code>
+<em>progress updates for that one action</em> (queued → executing → complete) back to whichever
+client is watching; it is a progress feed, not a task-dispatch feed. Crucially,
+<code>WaitExecution</code> lets a <strong>disconnected client reattach</strong> to an in-progress operation by name and
+receive the current status immediately followed by the rest of the stream
+(<a href="https://github.com/bazelbuild/remote-apis/blob/main/build/bazel/remote/execution/v2/remote_execution.proto" rel="noopener noreferrer">source</a>) —
+that reattach-by-durable-name idea is worth keeping (dagworker's <code>GetNode</code> plus <code>Watch</code> with a
+<code>node_id_filter</code> gives the same capability), but note this is a <strong>1:1 stream per unit of
+work</strong>, never a fan-out queue of many different units pushed to one consumer — REv2 does not
+use server-streaming to solve "dispatch arbitrary tasks to a pool of workers," and neither
+should dagworker.</p>
+<p>The actual problem with a genuine fan-out push stream (server picks N ready nodes and streams
+them at whatever worker happens to be connected) is <strong>flow control at the wrong layer</strong>. gRPC
+sits on HTTP/2, and HTTP/2 flow control (RFC 7540 §6.9, <code>WINDOW_UPDATE</code> frames) governs <em>bytes
+in flight per stream and per connection</em> — it stops the sender from writing more DATA frames
+than the receiver's TCP-adjacent buffer has advertised room for. It has no concept of "the
+receiver is a worker currently running 3 CPU-bound jobs and can't start a 4th" — that is
+application-level capacity, and HTTP/2 windows cannot express it. A server-streaming dispatch
+RPC therefore needs its own, bespoke, application-level signal for "stop sending, I'm full,"
+and a way to un-stall once capacity frees up. gRPC gives you exactly one tool to build that
+signal with on a pure server-stream: the receiver can slow down how fast it calls <code>Recv()</code>,
+which eventually (only after the receiver stops draining and the <em>transport-level</em> window
+fills) back-pressures the sender — but by then the server has already committed to <em>who</em> gets
+which node, with no way to hand a stuck node to a different, idle worker without an explicit
+un-dispatch/retry protocol. This is the well-known head-of-line problem with server push:
+<strong>capacity signaling and item routing collapse into one unreliable byte-buffer heuristic.</strong>
+Long poll sidesteps the entire problem by construction — a poll call only exists while the
+worker actually wants one unit of work, so there is never a "the server pushed too much"
+state to reach.</p>
+<hr>
+<h2 id="3-bidirectional-streaming-with-explicit-credit-where-it-s-the-right-tool-and-where-it-isn-t">3. Bidirectional streaming with explicit credit — where it's the right tool, and where it isn't<a class="anchor" href="#3-bidirectional-streaming-with-explicit-credit-where-it-s-the-right-tool-and-where-it-isn-t" aria-label="Link to this section">#</a></h2>
+<h3 id="3-1-envoy-xds-ads-nonce-ack-as-a-convergence-protocol-not-a-capacity-protocol">3.1 Envoy xDS ADS: nonce/ack as a <em>convergence</em> protocol, not a capacity protocol<a class="anchor" href="#3-1-envoy-xds-ads-nonce-ack-as-a-convergence-protocol-not-a-capacity-protocol" aria-label="Link to this section">#</a></h3>
+<p>Envoy's Aggregated Discovery Service multiplexes many resource types over one bidi stream.
+<code>DiscoveryRequest</code> carries <code>version_info</code> (the last version the client accepted),
+<code>resource_names</code> (what it wants), <code>type_url</code>, and — the mechanism worth stealing —
+<code>response_nonce</code>, which must echo the <code>nonce</code> of the <code>DiscoveryResponse</code> being
+acknowledged or rejected. <strong>ACK</strong>: client resends the request with the new <code>version_info</code> and
+the response's <code>nonce</code>. <strong>NACK</strong>: client keeps its <em>old</em> <code>version_info</code> but still echoes the
+new <code>nonce</code>, plus fills <code>error_detail</code>
+(<a href="https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol" rel="noopener noreferrer">xDS protocol docs</a>). The
+nonce exists purely to disambiguate <em>which</em> response a request is acknowledging when several
+are in flight — "servers should not send a DiscoveryResponse for any DiscoveryRequest that has
+a stale nonce"
+(<a href="https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol" rel="noopener noreferrer">source</a>). This is not a
+credit/backpressure protocol at all — it's a convergence/idempotency protocol for
+eventually-consistent config sync (a slow/misbehaving client can be sent more updates whether
+it acked the last one or not; xDS updates are absolute-state snapshots, not deltas, so no
+element of it is throttled by consumer readiness). This is exactly why the assignment's third
+shape ("worker sends I-have-capacity-for-K") <em>isn't</em> ADS's actual mechanism, even though ADS is
+the canonical bidi-stream-with-ack example — worth being precise about, since it's tempting to
+reach for ADS as "the" bidi credit pattern when it demonstrates something adjacent but distinct
+(resumable convergence, which dagworker <em>does</em> want for <code>Watch</code>, see §6) rather than
+backpressure (which dagworker gets a different way, §4).</p>
+<h3 id="3-2-kubernetes-cri-explicitly-not-a-push-streaming-dispatch-model">3.2 Kubernetes CRI: explicitly <em>not</em> a push/streaming dispatch model<a class="anchor" href="#3-2-kubernetes-cri-explicitly-not-a-push-streaming-dispatch-model" aria-label="Link to this section">#</a></h3>
+<p>CRI is worth including specifically as <strong>negative evidence</strong>. <code>Exec</code>, <code>Attach</code>, and
+<code>PortForward</code> are unary RPCs that return <strong>a URL to a separate streaming server</strong> —
+<code>ExecResponse.url</code> — rather than streaming bytes over the CRI gRPC channel itself
+(<a href="https://github.com/kubernetes/cri-api/blob/master/pkg/apis/runtime/v1/api.proto" rel="noopener noreferrer">cri-api <code>runtime/v1/api.proto</code></a>).
+There is no watch/subscribe RPC for container or pod status in the CRI surface at all — the
+kubelet's PLEG (pod lifecycle event generator) gets status by <strong>periodically polling</strong>
+<code>ListPodSandboxStatus</code>/<code>ListContainerStats</code> and diffing, not by having the runtime push
+transitions to it
+(<a href="https://github.com/kubernetes/cri-api/blob/master/pkg/apis/runtime/v1/api.proto" rel="noopener noreferrer">source</a>).
+Two lessons: (1) even a system with genuinely heavy, real-time-sensitive dispatch (starting
+and stopping containers) chose to keep its <em>interactive</em> streaming (exec/attach) completely
+out of the control RPC channel via a redirect-to-a-dedicated-server pattern rather than
+multiplexing it onto the same stream as scheduling decisions — dagworker has no interactive
+byte-stream requirement at all (a node's payload/result are just opaque bytes, not a live
+terminal), so this pattern doesn't directly apply, but the <em>principle</em> — don't let one
+mechanism do two jobs with different latency/volume profiles — is exactly why <code>Watch</code> is kept
+separate from <code>ClaimNode</code> in this design; (2) CRI shipped a real, large-scale production
+system on plain polling for status propagation, which is reassuring evidence that "poll,
+don't push" is a perfectly serviceable default and not something dagworker needs to apologize
+for.</p>
+<h3 id="3-3-reactive-streams-request-n-the-pattern-in-the-abstract">3.3 Reactive Streams <code>request(n)</code>: the pattern in the abstract<a class="anchor" href="#3-3-reactive-streams-request-n-the-pattern-in-the-abstract" aria-label="Link to this section">#</a></h3>
+<p>The Reactive Streams / <code>Flow.Subscriber</code> model is the textbook version of assignment shape
+(c): a <code>Subscription</code> exposes <code>request(long n)</code> (grant the publisher permission to send up to
+<code>n</code> more elements) and <code>cancel()</code>; the publisher must never send more than the outstanding
+requested amount (<a href="https://www.reactive-streams.org/" rel="noopener noreferrer">reactive-streams.org</a>). This is real and
+useful when one producer must serve many slow, heterogeneous consumers over one channel each
+with a different, fluctuating appetite — genuinely credit-based flow control. gRPC/Buildbarn's
+REv2 world doesn't need a bespoke version of it because of §4's observation: <strong>when the
+"credit" a worker has is just "one open slot," a unary RPC per slot already </strong>is** the
+<code>request(1)</code> call** — no separate credit message needs inventing.</p>
+<hr>
+<h2 id="4-why-the-hybrid-is-narrow-http-2-s-own-flow-control-is-the-credit-protocol">4. Why the hybrid is narrow: HTTP/2's own flow control <strong>is</strong> the credit protocol<a class="anchor" href="#4-why-the-hybrid-is-narrow-http-2-s-own-flow-control-is-the-credit-protocol" aria-label="Link to this section">#</a></h2>
+<p>This is the crux of the decision. A dagworker consumer's capacity is granular and discrete: a
+worker process has some number of execution slots (goroutines, OS threads, whatever), and each
+slot wants <em>at most one</em> outstanding node at a time. That is not "give me a byte-rate," it's
+"give me at most K concurrently outstanding units of work" — which is <em>precisely</em> what an
+HTTP/2 connection's <code>SETTINGS_MAX_CONCURRENT_STREAMS</code> already limits, and what a client that
+opens exactly K concurrent <code>ClaimNode</code> calls already expresses without any additional field on
+the wire. grpc-go exposes the server side of this knob directly as <code>grpc.MaxConcurrentStreams</code>,
+a <code>ServerOption</code> on <code>grpc.NewServer</code>. Point a fleet of dagworkerd replicas' <code>MaxConcurrentStreams</code>
+at (say) 4096, have each worker open exactly as many concurrent <code>ClaimNode</code> calls as it has
+execution slots, and the "credit" ADS/CRI-style protocols would build with an explicit
+<code>available_capacity</code> field is <em>already enforced by the transport</em>, for free, with a mechanism
+gRPC operators already understand and can observe (<code>grpc-go</code>'s stats handler surfaces stream
+counts, §12). Building a second, bespoke credit protocol on top — the way ADS needs one because
+it is fundamentally push/pub-sub over one shared stream per client, not "one stream per unit of
+capacity" — would be solving a problem dagworker doesn't have, at the cost of exactly the
+complexity §3.1 catalogs (nonce bookkeeping, un-acked-request tracking, re-issuing credit after
+a task finishes). The one piece worth keeping from the credit-protocol family is Buildbarn's
+<code>next_synchronization_at</code> idea (§1.3, folded into <code>ClaimNodeResponse.retry_after</code>, §11) — a
+one-directional, optional backoff hint, not a full bidirectional accounting scheme.</p>
+<p><code>Watch</code> is bidirectional <em>not</em> because dagworker needs credit accounting, but for the same
+reason etcd's <code>Watch</code> is bidirectional: so a client can multiplex several independent
+watches — and <em>cancel one of them</em> — on a single connection without tearing the whole stream
+down (§6). It is a convergence/resume protocol (ADS's actual lesson, §3.1), not a
+backpressure protocol.</p>
+<hr>
+<h2 id="5-the-complete-proto-file">5. The complete <code>.proto</code> file<a class="anchor" href="#5-the-complete-proto-file" aria-label="Link to this section">#</a></h2>
+<pre><code class="language-protobuf"><span class="tok-com">// Copyright (c) dagworker authors.</span>
+<span class="tok-com">// SPDX-License-Identifier: MIT</span>
+<span class="tok-com">//</span>
+<span class="tok-com">// dagworker/v1/dagworker.proto — wire protocol for remote workers and</span>
+<span class="tok-com">// control-plane clients of dagworkerd. Nothing in the dagworker core module</span>
+<span class="tok-com">// imports anything generated from this file; see §14 for the module</span>
+<span class="tok-com">// boundary this enforces.</span>
+<span class="tok-com">//</span>
+<span class="tok-com">// Design lineage (see this file's containing dossier for the full analysis):</span>
+<span class="tok-com">//   - poll/ack/heartbeat/task-token shape:   Temporal WorkflowService</span>
+<span class="tok-com">//   - Watch resume-by-revision shape:        etcd's Watch RPC (etcdserverpb)</span>
+<span class="tok-com">//   - long-poll-with-scheduled-resync shape: Buildbarn RemoteWorker.Synchronize</span>
+<span class="tok-com">//</span>
+<span class="tok-com">// buf lint: STANDARD. buf breaking: FILE category (see §13).</span>
+
+<span class="tok-kw">syntax</span> = <span class="tok-str">"proto3"</span>;
+
+<span class="tok-kw">package</span> dagworker.v1;
+
+<span class="tok-kw">option</span> go_package = <span class="tok-str">"github.com/specialistvlad/dagworker/gen/go/dagworker/v1;dagworkerv1"</span>;
+
+<span class="tok-kw">import</span> <span class="tok-str">"google/protobuf/timestamp.proto"</span>;
+<span class="tok-kw">import</span> <span class="tok-str">"google/protobuf/duration.proto"</span>;
+<span class="tok-kw">import</span> <span class="tok-str">"buf/validate/validate.proto"</span>;
+
+<span class="tok-com">// ===========================================================================</span>
+<span class="tok-com">// Enums</span>
+<span class="tok-com">// ===========================================================================</span>
+
+<span class="tok-com">// NodeStatus is the MINIMAL public status of a node (ADR: node status model).</span>
+<span class="tok-com">// Internal scheduling state — e.g. "claimed but not yet heartbeated" — is</span>
+<span class="tok-com">// derived server-side from (status, Lease) and is never sent on the wire as</span>
+<span class="tok-com">// its own enum value; a node with status IN_PROGRESS and an active lease</span>
+<span class="tok-com">// looks identical on this wire to one whose lease just silently expired,</span>
+<span class="tok-com">// by design (a client should never branch on lease presence to guess intent).</span>
+<span class="tok-kw">enum</span> NodeStatus {
+  NODE_STATUS_UNSPECIFIED = <span class="tok-num">0</span>;
+  NODE_STATUS_NEW         = <span class="tok-num">1</span>;
+  NODE_STATUS_IN_PROGRESS = <span class="tok-num">2</span>;
+  NODE_STATUS_SUCCESS     = <span class="tok-num">3</span>;
+  NODE_STATUS_ERROR       = <span class="tok-num">4</span>;
+  NODE_STATUS_CANCELLED   = <span class="tok-num">5</span>;
+  <span class="tok-com">// Values 1-15 fit in a single-byte varint tag; keep this range for</span>
+  <span class="tok-com">// statuses that appear in every WatchEvent before spending it on rarer ones.</span>
+  <span class="tok-kw">reserved</span> <span class="tok-num">6</span> to <span class="tok-num">15</span>;
+}
+
+<span class="tok-com">// FailureKind is carried in FailNode and mirrors Temporal's split between an</span>
+<span class="tok-com">// application-level activity failure and a worker/timeout-driven one; it</span>
+<span class="tok-com">// becomes ErrorInfo.reason (google.rpc.ErrorInfo) on the *next* read of this</span>
+<span class="tok-com">// node's terminal error, not just a FailNode request field.</span>
+<span class="tok-kw">enum</span> FailureKind {
+  FAILURE_KIND_UNSPECIFIED  = <span class="tok-num">0</span>;
+  FAILURE_KIND_APPLICATION  = <span class="tok-num">1</span>; <span class="tok-com">// the work itself failed; business-logic error</span>
+  FAILURE_KIND_WORKER_PANIC = <span class="tok-num">2</span>; <span class="tok-com">// the worker crashed/exited while holding the lease</span>
+  FAILURE_KIND_CANCELLED    = <span class="tok-num">3</span>; <span class="tok-com">// worker honored CancelNode / a cancellation_requested heartbeat</span>
+}
+
+<span class="tok-kw">enum</span> WatchEventKind {
+  WATCH_EVENT_KIND_UNSPECIFIED    = <span class="tok-num">0</span>;
+  WATCH_EVENT_KIND_TRANSITION     = <span class="tok-num">1</span>; <span class="tok-com">// node changed status; `node` is populated</span>
+  WATCH_EVENT_KIND_WORK_AVAILABLE = <span class="tok-num">2</span>; <span class="tok-com">// scope-wide wake signal; `node` is unset</span>
+}
+
+<span class="tok-com">// ===========================================================================</span>
+<span class="tok-com">// Core resources</span>
+<span class="tok-com">// ===========================================================================</span>
+
+<span class="tok-kw">message</span> Node {
+  <span class="tok-kw">string</span> id       = <span class="tok-num">1</span>;
+  <span class="tok-kw">string</span> scope    = <span class="tok-num">2</span>;
+  NodeStatus status = <span class="tok-num">3</span>;
+  <span class="tok-kw">bytes</span> payload   = <span class="tok-num">4</span>;
+  <span class="tok-kw">map</span>&lt;<span class="tok-kw">string</span>, <span class="tok-kw">string</span>&gt; labels = <span class="tok-num">5</span>; <span class="tok-com">// capability routing, e.g. {"gpu": "true"}</span>
+  <span class="tok-kw">int32</span> attempt      = <span class="tok-num">6</span>;
+  <span class="tok-kw">int32</span> max_attempts = <span class="tok-num">7</span>;
+  google.protobuf.Timestamp created_at = <span class="tok-num">8</span>;
+  google.protobuf.Timestamp updated_at = <span class="tok-num">9</span>;
+  <span class="tok-kw">int64</span> revision = <span class="tok-num">10</span>; <span class="tok-com">// storage-assigned, monotonic per scope; the Watch cursor unit (see etcd mod_revision)</span>
+  <span class="tok-kw">reserved</span> <span class="tok-num">11</span> to <span class="tok-num">15</span>;   <span class="tok-com">// headroom in the 1-byte-tag range for hot fields added later</span>
+}
+
+<span class="tok-kw">message</span> Edge {
+  <span class="tok-kw">string</span> scope        = <span class="tok-num">1</span>;
+  <span class="tok-kw">string</span> from_node_id = <span class="tok-num">2</span>; <span class="tok-com">// must reach NODE_STATUS_SUCCESS before to_node_id can become ready</span>
+  <span class="tok-kw">string</span> to_node_id   = <span class="tok-num">3</span>;
+}
+
+<span class="tok-com">// Lease is the artifact ClaimNode hands out. task_token is the ONLY value</span>
+<span class="tok-com">// the server trusts on ExtendLease/CompleteNode/FailNode; fencing_token is</span>
+<span class="tok-com">// the same generation counter exposed in the clear, for storage backends</span>
+<span class="tok-com">// (Postgres, Redis) that want a plain integer to CAS on instead of parsing</span>
+<span class="tok-com">// the opaque token server-side on every call.</span>
+<span class="tok-kw">message</span> Lease {
+  <span class="tok-kw">bytes</span> task_token   = <span class="tok-num">1</span>;
+  <span class="tok-kw">int64</span> fencing_token = <span class="tok-num">2</span>;
+  Node node            = <span class="tok-num">3</span>; <span class="tok-com">// inlined so ClaimNode is a single round trip</span>
+  google.protobuf.Timestamp lease_expires_at = <span class="tok-num">4</span>; <span class="tok-com">// absolute deadline; INDEPENDENT of the RPC deadline, see §7</span>
+}
+
+<span class="tok-com">// ===========================================================================</span>
+<span class="tok-com">// WorkerService — the surface a remote worker uses. Deliberately separate</span>
+<span class="tok-com">// from ControlService so a worker's mTLS identity/scope grant never needs</span>
+<span class="tok-com">// AddNodes/CancelNode privileges (see §11 AuthZ).</span>
+<span class="tok-com">// ===========================================================================</span>
+
+<span class="tok-kw">service</span> WorkerService {
+  <span class="tok-com">// ClaimNode long-polls: it blocks server-side until a ready node in</span>
+  <span class="tok-com">// `scope` matching `label_selector` exists, or until poll_timeout elapses,</span>
+  <span class="tok-com">// whichever is first. A response with `lease` unset means "no work; the</span>
+  <span class="tok-com">// caller should immediately re-call" — exactly Temporal returning an</span>
+  <span class="tok-com">// empty task_token, not an error. Capacity is expressed by how many</span>
+  <span class="tok-com">// concurrent ClaimNode calls a worker keeps open, not by a field (§4).</span>
+  <span class="tok-kw">rpc</span> ClaimNode(ClaimNodeRequest) <span class="tok-kw">returns</span> (ClaimNodeResponse);
+
+  <span class="tok-com">// ExtendLease is the heartbeat. Must be called again before</span>
+  <span class="tok-com">// lease_expires_at or the node fails server-side with a timeout reason and</span>
+  <span class="tok-com">// becomes claimable again, subject to retry policy — independent of</span>
+  <span class="tok-com">// whether this RPC's own deadline, or even the daemon process, is still</span>
+  <span class="tok-com">// alive at that moment (state lives in storage, not in dagworkerd; §9).</span>
+  <span class="tok-kw">rpc</span> ExtendLease(ExtendLeaseRequest) <span class="tok-kw">returns</span> (ExtendLeaseResponse);
+
+  <span class="tok-com">// CompleteNode reports success. Mirrors RespondActivityTaskCompleted.</span>
+  <span class="tok-kw">rpc</span> CompleteNode(CompleteNodeRequest) <span class="tok-kw">returns</span> (CompleteNodeResponse);
+
+  <span class="tok-com">// FailNode reports failure. Mirrors RespondActivityTaskFailed. Kept as its</span>
+  <span class="tok-com">// own RPC rather than a `oneof outcome` on one Ack RPC because Temporal's</span>
+  <span class="tok-com">// own service does the same, and because FailNodeResponse grows</span>
+  <span class="tok-com">// retry-scheduling fields that CompleteNodeResponse never needs.</span>
+  <span class="tok-kw">rpc</span> FailNode(FailNodeRequest) <span class="tok-kw">returns</span> (FailNodeResponse);
+}
+
+<span class="tok-kw">message</span> ClaimNodeRequest {
+  <span class="tok-kw">string</span> scope     = <span class="tok-num">1</span> [(buf.validate.field).<span class="tok-kw">string</span>.min_len = <span class="tok-num">1</span>];
+  <span class="tok-kw">string</span> worker_id = <span class="tok-num">2</span> [(buf.validate.field).<span class="tok-kw">string</span>.min_len = <span class="tok-num">1</span>];
+  <span class="tok-kw">map</span>&lt;<span class="tok-kw">string</span>, <span class="tok-kw">string</span>&gt; label_selector = <span class="tok-num">3</span>;
+  google.protobuf.Duration lease_duration = <span class="tok-num">4</span>; <span class="tok-com">// requested; server clamps to a scope-configured [min,max]</span>
+  google.protobuf.Duration poll_timeout = <span class="tok-num">5</span> [(buf.validate.field).duration = {
+    gte: { seconds: <span class="tok-num">0</span> }
+    lte: { seconds: <span class="tok-num">600</span> } <span class="tok-com">// hard ceiling, matching Nomad's 10-minute blocking-query cap</span>
+  }];
+  <span class="tok-kw">reserved</span> <span class="tok-num">6</span> to <span class="tok-num">10</span>;
+}
+
+<span class="tok-kw">message</span> ClaimNodeResponse {
+  Lease lease = <span class="tok-num">1</span>;                            <span class="tok-com">// unset =&gt; no work before poll_timeout</span>
+  google.protobuf.Duration retry_after = <span class="tok-num">2</span>;   <span class="tok-com">// optional server-side backoff hint (Buildbarn's next_synchronization_at, relative form)</span>
+}
+
+<span class="tok-kw">message</span> ExtendLeaseRequest {
+  <span class="tok-kw">bytes</span> task_token = <span class="tok-num">1</span> [(buf.validate.field).<span class="tok-kw">bytes</span>.min_len = <span class="tok-num">1</span>];
+  google.protobuf.Duration requested_extension = <span class="tok-num">2</span>;
+}
+
+<span class="tok-kw">message</span> ExtendLeaseResponse {
+  google.protobuf.Timestamp lease_expires_at = <span class="tok-num">1</span>;
+  <span class="tok-kw">bool</span> cancellation_requested = <span class="tok-num">2</span>; <span class="tok-com">// set when an operator called CancelNode while this lease was outstanding</span>
+}
+
+<span class="tok-kw">message</span> CompleteNodeRequest {
+  <span class="tok-kw">bytes</span> task_token = <span class="tok-num">1</span> [(buf.validate.field).<span class="tok-kw">bytes</span>.min_len = <span class="tok-num">1</span>];
+  <span class="tok-kw">bytes</span> result = <span class="tok-num">2</span>;
+}
+
+<span class="tok-kw">message</span> CompleteNodeResponse {
+  <span class="tok-kw">int64</span> revision = <span class="tok-num">1</span>;
+}
+
+<span class="tok-kw">message</span> FailNodeRequest {
+  <span class="tok-kw">bytes</span> task_token = <span class="tok-num">1</span> [(buf.validate.field).<span class="tok-kw">bytes</span>.min_len = <span class="tok-num">1</span>];
+  FailureKind kind = <span class="tok-num">2</span>;
+  <span class="tok-kw">string</span> <span class="tok-kw">message</span>   = <span class="tok-num">3</span>;
+  <span class="tok-kw">bool</span> retryable   = <span class="tok-num">4</span>; <span class="tok-com">// worker's opinion; the scope's retry policy has final say</span>
+}
+
+<span class="tok-kw">message</span> FailNodeResponse {
+  <span class="tok-kw">int64</span> revision = <span class="tok-num">1</span>;
+  <span class="tok-kw">bool</span> will_retry = <span class="tok-num">2</span>;
+  google.protobuf.Timestamp next_attempt_at = <span class="tok-num">3</span>; <span class="tok-com">// set iff will_retry</span>
+}
+
+<span class="tok-com">// ===========================================================================</span>
+<span class="tok-com">// ControlService — DAG mutation, inspection, and the event Watch stream.</span>
+<span class="tok-com">// This surface is never granted to worker credentials (see §11).</span>
+<span class="tok-com">// ===========================================================================</span>
+
+<span class="tok-kw">service</span> ControlService {
+  <span class="tok-kw">rpc</span> AddNodes(AddNodesRequest) <span class="tok-kw">returns</span> (AddNodesResponse);
+  <span class="tok-kw">rpc</span> AddEdges(AddEdgesRequest) <span class="tok-kw">returns</span> (AddEdgesResponse);
+  <span class="tok-kw">rpc</span> GetNode(GetNodeRequest) <span class="tok-kw">returns</span> (GetNodeResponse);
+  <span class="tok-kw">rpc</span> CancelNode(CancelNodeRequest) <span class="tok-kw">returns</span> (CancelNodeResponse);
+
+  <span class="tok-com">// Watch streams every status transition plus scope-wide WORK_AVAILABLE</span>
+  <span class="tok-com">// wake signals, bidirectionally, so one connection can multiplex several</span>
+  <span class="tok-com">// independent watches and cancel any one of them without tearing the</span>
+  <span class="tok-com">// whole stream down — etcd's Watch shape (§6), not a credit protocol (§4).</span>
+  <span class="tok-kw">rpc</span> Watch(<span class="tok-kw">stream</span> WatchRequest) <span class="tok-kw">returns</span> (<span class="tok-kw">stream</span> WatchResponse);
+}
+
+<span class="tok-kw">message</span> NewNode {
+  <span class="tok-kw">string</span> client_id = <span class="tok-num">1</span>; <span class="tok-com">// caller-chosen key, unique within this request only; resolves `edges` below</span>
+  <span class="tok-kw">bytes</span> payload     = <span class="tok-num">2</span>;
+  <span class="tok-kw">map</span>&lt;<span class="tok-kw">string</span>, <span class="tok-kw">string</span>&gt; labels = <span class="tok-num">3</span>;
+  <span class="tok-kw">int32</span> max_attempts = <span class="tok-num">4</span>;
+}
+
+<span class="tok-kw">message</span> NewEdge {
+  <span class="tok-kw">string</span> from_client_id = <span class="tok-num">1</span>; <span class="tok-com">// resolves against a NewNode.client_id in the SAME request, or an existing node_id</span>
+  <span class="tok-kw">string</span> to_client_id   = <span class="tok-num">2</span>;
+}
+
+<span class="tok-kw">message</span> AddNodesRequest {
+  <span class="tok-kw">string</span> scope = <span class="tok-num">1</span> [(buf.validate.field).<span class="tok-kw">string</span>.min_len = <span class="tok-num">1</span>];
+  <span class="tok-kw">repeated</span> NewNode nodes = <span class="tok-num">2</span> [(buf.validate.field).<span class="tok-kw">repeated</span>.min_items = <span class="tok-num">1</span>];
+  <span class="tok-com">// Optional: attach edges atomically with the nodes they connect, so no</span>
+  <span class="tok-com">// node is ever briefly visible as ready with a dependency edge missing —</span>
+  <span class="tok-com">// a real race if nodes and edges are two separate calls (see Open Questions).</span>
+  <span class="tok-kw">repeated</span> NewEdge edges = <span class="tok-num">3</span>;
+}
+
+<span class="tok-kw">message</span> AddNodesResponse {
+  <span class="tok-kw">repeated</span> Node nodes = <span class="tok-num">1</span>; <span class="tok-com">// same order as the request; id and revision filled in</span>
+}
+
+<span class="tok-kw">message</span> AddEdgesRequest {
+  <span class="tok-kw">string</span> scope = <span class="tok-num">1</span> [(buf.validate.field).<span class="tok-kw">string</span>.min_len = <span class="tok-num">1</span>];
+  <span class="tok-kw">repeated</span> Edge edges = <span class="tok-num">2</span> [(buf.validate.field).<span class="tok-kw">repeated</span>.min_items = <span class="tok-num">1</span>];
+}
+
+<span class="tok-kw">message</span> AddEdgesResponse {
+  <span class="tok-kw">int64</span> revision = <span class="tok-num">1</span>;
+}
+
+<span class="tok-kw">message</span> GetNodeRequest {
+  <span class="tok-kw">string</span> scope   = <span class="tok-num">1</span> [(buf.validate.field).<span class="tok-kw">string</span>.min_len = <span class="tok-num">1</span>];
+  <span class="tok-kw">string</span> node_id = <span class="tok-num">2</span> [(buf.validate.field).<span class="tok-kw">string</span>.min_len = <span class="tok-num">1</span>];
+}
+
+<span class="tok-kw">message</span> GetNodeResponse {
+  Node node = <span class="tok-num">1</span>;
+}
+
+<span class="tok-kw">message</span> CancelNodeRequest {
+  <span class="tok-kw">string</span> scope   = <span class="tok-num">1</span> [(buf.validate.field).<span class="tok-kw">string</span>.min_len = <span class="tok-num">1</span>];
+  <span class="tok-kw">string</span> node_id = <span class="tok-num">2</span> [(buf.validate.field).<span class="tok-kw">string</span>.min_len = <span class="tok-num">1</span>];
+  <span class="tok-kw">string</span> reason  = <span class="tok-num">3</span>;
+}
+
+<span class="tok-kw">message</span> CancelNodeResponse {
+  Node node = <span class="tok-num">1</span>;
+}
+
+<span class="tok-com">// --- Watch ------------------------------------------------------------</span>
+
+<span class="tok-kw">message</span> WatchEvent {
+  <span class="tok-kw">int64</span> revision              = <span class="tok-num">1</span>;
+  WatchEventKind kind          = <span class="tok-num">2</span>;
+  Node node                    = <span class="tok-num">3</span>; <span class="tok-com">// set iff kind == WATCH_EVENT_KIND_TRANSITION</span>
+  NodeStatus previous_status  = <span class="tok-num">4</span>;
+}
+
+<span class="tok-kw">message</span> WatchCreateRequest {
+  <span class="tok-kw">int64</span> watch_id  = <span class="tok-num">1</span>; <span class="tok-com">// client-assigned, unique on this stream; echoed on every response for demultiplexing</span>
+  <span class="tok-kw">string</span> scope     = <span class="tok-num">2</span> [(buf.validate.field).<span class="tok-kw">string</span>.min_len = <span class="tok-num">1</span>];
+  <span class="tok-kw">string</span> node_id_filter = <span class="tok-num">3</span>; <span class="tok-com">// optional: narrow to one node's transitions</span>
+  <span class="tok-kw">int64</span> start_revision  = <span class="tok-num">4</span>; <span class="tok-com">// 0 = "start now"; &gt;0 resumes from a prior cursor (§6)</span>
+  <span class="tok-kw">bool</span> progress_notify  = <span class="tok-num">5</span>; <span class="tok-com">// periodic empty WatchResponse so a quiet client can still advance its cursor</span>
+}
+
+<span class="tok-kw">message</span> WatchCancelRequest {
+  <span class="tok-kw">int64</span> watch_id = <span class="tok-num">1</span>;
+}
+
+<span class="tok-kw">message</span> WatchRequest {
+  <span class="tok-kw">oneof</span> request {
+    WatchCreateRequest create = <span class="tok-num">1</span>;
+    WatchCancelRequest cancel = <span class="tok-num">2</span>;
+  }
+}
+
+<span class="tok-kw">message</span> WatchResponse {
+  <span class="tok-kw">int64</span> watch_id            = <span class="tok-num">1</span>;
+  <span class="tok-kw">bool</span> created                = <span class="tok-num">2</span>;
+  <span class="tok-kw">bool</span> canceled                = <span class="tok-num">3</span>;
+  <span class="tok-kw">string</span> cancel_reason        = <span class="tok-num">4</span>;
+  <span class="tok-kw">int64</span> compacted_revision   = <span class="tok-num">5</span>; <span class="tok-com">// set iff canceled because start_revision was already compacted away</span>
+  <span class="tok-kw">repeated</span> WatchEvent events = <span class="tok-num">6</span>;
+}</code></pre>
+<p>Numbering discipline used throughout: fields 1–15 (single-byte varint tags) are reserved for
+values present on nearly every message of that type; <code>reserved</code> ranges are pre-declared on
+<code>Node</code> and <code>NodeStatus</code> so a future field/enum value never silently reuses a number a very old
+client cached; every RPC has its own <code>*Request</code>/<code>*Response</code> pair (never a shared <code>Empty</code>) so
+each can evolve independently — the exact discipline buf's <code>RPC_REQUEST_RESPONSE_UNIQUE</code> lint
+rule enforces (§13).</p>
+<hr>
+<h2 id="6-watch-resume-semantics-modeled-directly-on-etcd">6. Watch: resume semantics, modeled directly on etcd<a class="anchor" href="#6-watch-resume-semantics-modeled-directly-on-etcd" aria-label="Link to this section">#</a></h2>
+<p>etcd's <code>Watch</code> is the textbook version of "stream of changes with a resumable cursor," and
+dagworker's <code>Watch</code> borrows its shape field-for-field. The real etcd RPC
+(<a href="https://github.com/etcd-io/etcd/blob/main/api/etcdserverpb/rpc.proto" rel="noopener noreferrer"><code>etcdserverpb/rpc.proto</code></a>):</p>
+<pre><code class="language-protobuf"><span class="tok-kw">service</span> Watch { <span class="tok-kw">rpc</span> Watch(<span class="tok-kw">stream</span> WatchRequest) <span class="tok-kw">returns</span> (<span class="tok-kw">stream</span> WatchResponse); }
+
+<span class="tok-kw">message</span> WatchCreateRequest {
+  <span class="tok-kw">bytes</span> key = <span class="tok-num">1</span>; <span class="tok-kw">bytes</span> range_end = <span class="tok-num">2</span>;
+  <span class="tok-kw">int64</span> start_revision = <span class="tok-num">3</span>;   <span class="tok-com">// 0 = "watch from now"</span>
+  <span class="tok-kw">bool</span> progress_notify = <span class="tok-num">4</span>;
+  <span class="tok-kw">repeated</span> FilterType filters = <span class="tok-num">5</span>;
+  <span class="tok-kw">bool</span> prev_kv = <span class="tok-num">6</span>; <span class="tok-kw">int64</span> watch_id = <span class="tok-num">7</span>; <span class="tok-kw">bool</span> fragment = <span class="tok-num">8</span>;
+}
+<span class="tok-kw">message</span> WatchResponse {
+  ResponseHeader header = <span class="tok-num">1</span>; <span class="tok-kw">int64</span> watch_id = <span class="tok-num">2</span>;
+  <span class="tok-kw">bool</span> created = <span class="tok-num">3</span>; <span class="tok-kw">bool</span> canceled = <span class="tok-num">4</span>;
+  <span class="tok-kw">int64</span> compact_revision = <span class="tok-num">5</span>;   <span class="tok-com">// set + canceled=true iff start_revision was already compacted away</span>
+  <span class="tok-kw">string</span> cancel_reason = <span class="tok-num">6</span>; <span class="tok-kw">bool</span> fragment = <span class="tok-num">7</span>;
+  <span class="tok-kw">repeated</span> mvccpb.Event events = <span class="tok-num">11</span>;
+}</code></pre>
+<p>The resume protocol
+(<a href="https://etcd.io/docs/v3.5/learning/api/" rel="noopener noreferrer">etcd learning/api docs</a>,
+<a href="https://github.com/etcd-io/etcd/blob/main/api/etcdserverpb/rpc.proto" rel="noopener noreferrer">proto source</a>):</p>
+<ol>
+<li>A client tracks the last <code>revision</code> it successfully processed (from <code>events</code> or from a
+periodic <code>progress_notify</code> heartbeat response sent even when nothing changed, so a quiet
+watch's cursor still advances).</li>
+<li>On reconnect, it opens a fresh <code>Watch</code> stream and sends <code>WatchCreateRequest{start_revision:
+last_seen + 1}</code> — every event since that revision streams back, nothing is missed.</li>
+<li>If the server already compacted history past <code>start_revision</code> (it only retains a bounded
+window of old revisions), it responds <code>WatchResponse{canceled: true, compact_revision: N}</code>
+instead of events — the client cannot resume from where it left off and must fall back to a
+full resync (e.g. re-list current state, then watch from the fresh revision the list
+returned).</li>
+</ol>
+<p>dagworker's <code>WatchCreateRequest.start_revision</code> / <code>WatchResponse.compacted_revision</code> are a
+direct copy of this. The concrete mapping onto dagworker's storage: <code>Node.revision</code> plays the
+role of etcd's per-key <code>mod_revision</code>, and the <em>scope</em> needs one monotonically increasing
+counter (dagworker's equivalent of etcd's cluster-wide revision) that every mutation — a status
+transition, <code>AddNodes</code>, <code>AddEdges</code> — bumps, so <code>Watch</code> can order and gap-detect across
+different nodes within one scope, not just within one node's own history. <strong>Compaction</strong> for
+dagworker means: the in-memory/Redis/Postgres backend only retains a bounded ring/queue of
+recent transition events per scope (bounded by count or age, a config knob), and a <code>Watch</code>
+whose <code>start_revision</code> falls before the oldest retained event gets <code>canceled + compacted_revision</code>
+exactly like etcd, forcing the client through <code>GetNode</code> (or a bulk equivalent) to resync rather
+than silently missing history. This bound is what keeps the event log O(1)-ish per scope
+instead of an unbounded append log — consistent with the project's O(1)/O(log n) performance
+goal even at the 1M-node benchmark scale, since the <em>retained event window</em> is independent of
+total node count.</p>
+<p><code>progress_notify</code> matters specifically for a dagworker deployment with many idle scopes: a
+quiet scope's watchers would otherwise have no signal to distinguish "connection silently died"
+from "genuinely nothing happened in 20 minutes," which interacts directly with the keepalive
+discussion in §9 — a periodic empty <code>WatchResponse</code> is an <em>application-level</em> liveness signal
+layered on top of, not a replacement for, gRPC's own transport-level keepalive pings.</p>
+<hr>
+<h2 id="7-deadlines-and-cancellation-and-why-the-lease-deadline-must-be-its-own-thing">7. Deadlines and cancellation — and why the lease deadline must be its own thing<a class="anchor" href="#7-deadlines-and-cancellation-and-why-the-lease-deadline-must-be-its-own-thing" aria-label="Link to this section">#</a></h2>
+<p>gRPC deadlines are relative-then-absolute: a client sets a timeout, gRPC converts it to a wall
+clock deadline, and that deadline is what actually propagates on the wire (as
+<code>grpc-timeout</code>) — critically, <strong>gRPC converts the deadline to a timeout from which the already
+elapsed time is deducted</strong> before forwarding it to a downstream call, specifically to avoid
+clock-skew problems across hops (<a href="https://grpc.io/docs/guides/deadlines/" rel="noopener noreferrer">gRPC deadlines guide</a>).
+In Go, this propagation is automatic <em>if and only if</em> the downstream call reuses the same
+(or a <code>context.WithValue</code>-derived) <code>context.Context</code> — <code>context.WithTimeout</code>/<code>WithDeadline</code>
+carry the deadline; a fresh <code>context.Background()</code> does not
+(<a href="https://grpc.io/docs/guides/deadlines/" rel="noopener noreferrer">source</a>). When a deadline fires, the <em>server</em> gets
+told via <code>ctx.Done()</code>/<code>Err() == context.DeadlineExceeded</code>, and gRPC itself does <strong>not</strong> stop
+whatever work the handler spawned — "the server application is responsible for stopping any
+activity it has spawned to service the RPC"
+(<a href="https://grpc.io/docs/guides/deadlines/" rel="noopener noreferrer">source</a>). This last point is exactly why the
+<code>ClaimNode</code> handler must itself watch <code>ctx.Done()</code> inside its blocking wait rather than relying
+on gRPC to kill it (§8's graceful-shutdown handler reuses the identical pattern).</p>
+<p><strong>The load-bearing design rule: <code>poll_timeout</code> (a field inside <code>ClaimNodeRequest</code>, bounding how
+long the long poll itself may block) and <code>lease_duration</code>/<code>lease_expires_at</code> (how long the
+<em>resulting</em> lease is valid once a node is actually claimed) are two independent numbers that
+must never be derived from the same context.</strong> Concretely:</p>
+<pre><code class="language-go"><span class="tok-com">// WRONG: reuses the poll's context (and its ~30s deadline) for the whole job.</span>
+ctx, cancel := context.WithTimeout(context.Background(), <span class="tok-num">30</span>*time.Second)
+<span class="tok-kw">defer</span> cancel()
+lease, _ := worker.ClaimNode(ctx, &amp;pb.ClaimNodeRequest{PollTimeout: durationpb.New(<span class="tok-num">30</span> * time.Second)})
+<span class="tok-com">// ... 4 minutes of real work later ...</span>
+worker.CompleteNode(ctx, &amp;pb.CompleteNodeRequest{TaskToken: lease.TaskToken}) <span class="tok-com">// ctx is ALREADY EXPIRED</span>
+
+<span class="tok-com">// RIGHT: each RPC gets its own short-lived context; the lease's clock lives</span>
+<span class="tok-com">// only in dagworkerd's storage, keyed by task_token, never in any client ctx.</span>
+pollCtx, cancel := context.WithTimeout(context.Background(), <span class="tok-num">30</span>*time.Second)
+lease, _ := worker.ClaimNode(pollCtx, &amp;pb.ClaimNodeRequest{PollTimeout: durationpb.New(<span class="tok-num">30</span> * time.Second)})
+cancel()
+<span class="tok-com">// ... do the work, calling ExtendLease periodically on ITS OWN fresh short ctx ...</span>
+completeCtx, cancel := context.WithTimeout(context.Background(), <span class="tok-num">5</span>*time.Second)
+<span class="tok-kw">defer</span> cancel()
+worker.CompleteNode(completeCtx, &amp;pb.CompleteNodeRequest{TaskToken: lease.TaskToken})</code></pre>
+<p>The bug on the "WRONG" path is not hypothetical: sharing one context across a poll-then-work
+loop is the single most common mistake ported from naive HTTP client code, and it silently
+turns every job whose real runtime exceeds the poll timeout into a guaranteed <code>CompleteNode</code>
+failure. The RPC deadline governs <em>transport-level patience</em>; the lease deadline governs
+<em>correctness</em> (whether another worker is allowed to pick the node up) and is enforced entirely
+server-side against wall-clock time recorded in storage — it must survive the RPC that created
+it ending, the connection dropping, and even the specific <code>dagworkerd</code> replica that issued it
+being killed (§9). <code>ExtendLease</code>'s own RPC deadline should likewise be short (a few seconds) and
+independent of both — a slow heartbeat call timing out is a transient network hiccup to retry,
+not evidence the lease itself expired.</p>
+<p>Cancellation flows the other direction through <code>ExtendLeaseResponse.cancellation_requested</code>
+(§1.1's Temporal parallel): an operator calling <code>CancelNode</code> doesn't reach into the worker
+process at all (there is no way to, over a plain RPC protocol, without the worker itself
+polling or streaming) — it flips state in storage, and the <em>next</em> heartbeat the worker
+happens to send surfaces it. A worker that never heartbeats (a tight CPU-bound loop) will not
+see a cancellation until it finishes or its lease times out; this is a real, disclosed
+limitation, not a bug — heartbeat frequency is the resolution of dagworker's cancellation
+signal, exactly as it is Temporal's.</p>
+<hr>
+<h2 id="8-keepalive-the-setting-that-silently-breaks-long-polls">8. Keepalive — the setting that silently breaks long polls<a class="anchor" href="#8-keepalive-the-setting-that-silently-breaks-long-polls" aria-label="Link to this section">#</a></h2>
+<p>Long poll's entire value proposition (an idle-looking RPC that's actually still useful) is the
+exact shape gRPC's keepalive machinery was tuned to be suspicious of, and the defaults on
+<em>both</em> sides actively fight it if left alone.</p>
+<p><strong>Defaults</strong> (<a href="https://github.com/grpc/grpc-go/blob/master/keepalive/keepalive.go" rel="noopener noreferrer">grpc-go <code>keepalive.go</code></a>,
+<a href="https://grpc.io/docs/guides/keepalive/" rel="noopener noreferrer">grpc.io keepalive guide</a>,
+<a href="https://github.com/grpc/grpc/blob/master/doc/keepalive.md" rel="noopener noreferrer">grpc/grpc keepalive spec</a>):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Parameter</th><th>Client default</th><th>Server default</th></tr></thead>
+<tbody>
+<tr><td><code>Time</code> (ping interval)</td><td><code>INT_MAX</code> — pings <strong>disabled</strong></td><td>2 hours</td></tr>
+<tr><td><code>Timeout</code> (ping ack wait)</td><td>20s</td><td>20s</td></tr>
+<tr><td><code>PermitWithoutStream</code></td><td>false</td><td>false (<code>PERMIT_KEEPALIVE_WITHOUT_CALLS</code>)</td></tr>
+<tr><td><code>EnforcementPolicy.MinTime</code></td><td>—</td><td>5 minutes</td></tr>
+</tbody></table></div>
+<p>The failure mode this dossier was asked to study directly: if a client pings more often than
+the server's <code>MinTime</code> allows (or pings with <code>PermitWithoutStream</code> while the server disallows
+it), the server sends <strong><code>GOAWAY</code> with debug data <code>too_many_pings</code>, the HTTP/2
+<code>ENHANCE_YOUR_CALM</code> error code</strong> — the connection is torn down mid-flight, taking every
+in-progress <code>ClaimNode</code> long poll and <code>Watch</code> stream on it with it
+(<a href="https://grpc.io/docs/guides/keepalive/" rel="noopener noreferrer">grpc.io guide</a>,
+<a href="https://github.com/grpc/grpc/blob/master/doc/keepalive.md" rel="noopener noreferrer">grpc/grpc spec</a>). The grpc.io guide is
+blunt about the failure being self-inflicted: <strong>"it is recommended to avoid enabling keepalive
+without calls and for clients to avoid configuring their keepalive much below one minute"</strong> —
+and mismatched client/server settings (client <code>PermitWithoutStream=true</code> against a server that
+disallows it) is called out explicitly as a common trigger
+(<a href="https://grpc.io/docs/guides/keepalive/" rel="noopener noreferrer">source</a>).</p>
+<p>For dagworker, <code>PermitWithoutStream</code> is not optional — a worker parked in a <code>ClaimNode</code> long
+poll or an idle <code>Watch</code> has no other traffic on the connection to piggyback a liveness check
+on, so without it, a half-dead TCP connection (NAT box silently dropped state, a cloud LB
+recycled without an RST) is invisible until the <em>next</em> real call, which for a long poll could
+be tens of seconds to minutes away. Since dagworkerd controls both ends (it ships as a Go
+daemon <em>and</em> is the natural home for a reference client SDK), the fix is to ship matched,
+explicit settings on both sides rather than accept the client-disabled/server-2-hour defaults:</p>
+<pre><code class="language-go"><span class="tok-com">// dagworkerd server:</span>
+grpc.KeepaliveParams(keepalive.ServerParameters{
+    MaxConnectionIdle:     <span class="tok-num">0</span>,                <span class="tok-com">// idle IS the steady state for a parked long-poll worker</span>
+    MaxConnectionAge:      <span class="tok-num">30</span> * time.Minute, <span class="tok-com">// periodic forced GOAWAY — see §10 for why this is a feature, not a bug</span>
+    MaxConnectionAgeGrace: <span class="tok-num">5</span> * time.Minute,  <span class="tok-com">// let an in-flight ClaimNode/Watch drain before the hard close</span>
+    Time:                  <span class="tok-num">2</span> * time.Minute,  <span class="tok-com">// detect dead peers well under any sane lease_duration</span>
+    Timeout:               <span class="tok-num">20</span> * time.Second,
+}),
+grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+    MinTime:             <span class="tok-num">1</span> * time.Minute, <span class="tok-com">// &lt;= every client Time below, or legitimate client pings look abusive</span>
+    PermitWithoutStream: <span class="tok-kw">true</span>,
+}),
+
+<span class="tok-com">// reference worker SDK:</span>
+grpc.WithKeepaliveParams(keepalive.ClientParameters{
+    Time:                <span class="tok-num">1</span> * time.Minute,  <span class="tok-com">// &gt;= server MinTime, per the guide's own warning above</span>
+    Timeout:             <span class="tok-num">20</span> * time.Second,
+    PermitWithoutStream: <span class="tok-kw">true</span>,             <span class="tok-com">// a blocked long poll must still be pingable</span>
+}),</code></pre>
+<p>Independently of gRPC's own keepalive, <code>poll_timeout</code> should default well under common
+infrastructure idle-connection ceilings (many managed L4/L7 load balancers default to 60s;
+some cloud NAT gateways to ~350s) — 30–45s is a defensible default — as defense in depth <em>on
+top of</em> keepalive, not instead of it: keepalive detects a dead connection; a bounded
+<code>poll_timeout</code> guarantees the <em>application</em> re-evaluates readiness periodically even if nothing
+ever kills the transport, which also bounds how stale a worker's view of "is my scope even
+still valid" can get.</p>
+<hr>
+<h2 id="9-graceful-shutdown-and-draining">9. Graceful shutdown and draining<a class="anchor" href="#9-graceful-shutdown-and-draining" aria-label="Link to this section">#</a></h2>
+<p>grpc-go's server exposes two shutdown paths with genuinely different semantics
+(<a href="https://github.com/grpc/grpc-go/blob/master/server.go" rel="noopener noreferrer"><code>grpc-go/server.go</code></a>):</p>
+<ul>
+<li><strong><code>Stop()</code></strong>: <em>"immediately closes all open connections and listeners. It cancels all active
+RPCs on the server side and the corresponding pending RPCs on the client side will get
+notified by connection errors."</em> Every in-flight <code>ClaimNode</code> long poll and <code>Watch</code> stream
+dies with a transport error — a worker mid-poll sees <code>Unavailable</code>, not a clean "no work"
+response.</li>
+<li><strong><code>GracefulStop()</code></strong>: <em>"stops the server from accepting new connections and RPCs and blocks
+until all the pending RPCs are finished."</em> It sends <code>GOAWAY</code> (refusing new streams on
+existing connections) and then waits — with no built-in timeout — for every RPC already in
+flight to return on its own.</li>
+</ul>
+<p>The trap: <code>GracefulStop()</code>'s unbounded wait is exactly wrong for a service whose steady state
+<em>is</em> long-lived blocked RPCs — calling it naively means the daemon hangs for up to
+<code>poll_timeout</code> (or, for <code>Watch</code>, effectively forever, since nothing about a healthy watch ever
+"finishes" on its own) before a <code>SIGTERM</code> actually takes effect. The fix is for the <code>ClaimNode</code>
+and <code>Watch</code> handlers themselves to select on a shutdown broadcast alongside their normal wait
+condition, so they return promptly <em>as part of</em> the graceful drain instead of being waited out:</p>
+<pre><code class="language-go"><span class="tok-kw">func</span> (s *workerServer) ClaimNode(ctx context.Context, req *pb.ClaimNodeRequest) (*pb.ClaimNodeResponse, <span class="tok-kw">error</span>) {
+    deadline := time.Now().Add(req.PollTimeout.AsDuration())
+    <span class="tok-kw">for</span> {
+        <span class="tok-kw">if</span> lease, ok := s.store.TryClaim(ctx, req.Scope, req.LabelSelector); ok {
+            <span class="tok-kw">return</span> &amp;pb.ClaimNodeResponse{Lease: leaseToProto(lease)}, <span class="tok-kw">nil</span>
+        }
+        <span class="tok-kw">select</span> {
+        <span class="tok-kw">case</span> &lt;-ctx.Done():
+            <span class="tok-kw">return</span> <span class="tok-kw">nil</span>, status.FromContextError(ctx.Err()).Err() <span class="tok-com">// client-side cancel or its own deadline</span>
+        <span class="tok-kw">case</span> &lt;-s.shutdown:                                        <span class="tok-com">// daemon-wide drain signal</span>
+            <span class="tok-kw">return</span> &amp;pb.ClaimNodeResponse{}, <span class="tok-kw">nil</span>                   <span class="tok-com">// empty response: "no work", worker retries elsewhere</span>
+        <span class="tok-kw">case</span> &lt;-s.store.WakeSignal(req.Scope):                      <span class="tok-com">// pushed on AddNodes/status transitions; avoids busy-polling storage</span>
+        <span class="tok-kw">case</span> &lt;-time.After(time.Until(deadline)):
+            <span class="tok-kw">return</span> &amp;pb.ClaimNodeResponse{}, <span class="tok-kw">nil</span>
+        }
+    }
+}
+
+<span class="tok-kw">func</span> (d *Daemon) Shutdown(ctx context.Context) <span class="tok-kw">error</span> {
+    close(d.shutdown)          <span class="tok-com">// unblocks every parked ClaimNode/Watch handler immediately</span>
+    done := <span class="tok-kw">make</span>(<span class="tok-kw">chan</span> <span class="tok-kw">struct</span>{})
+    <span class="tok-kw">go</span> <span class="tok-kw">func</span>() { d.grpcServer.GracefulStop(); close(done) }()
+    <span class="tok-kw">select</span> {
+    <span class="tok-kw">case</span> &lt;-done:
+        <span class="tok-kw">return</span> <span class="tok-kw">nil</span>
+    <span class="tok-kw">case</span> &lt;-ctx.Done():
+        d.grpcServer.Stop()    <span class="tok-com">// last resort: hard-cancel anything that didn't drain in time</span>
+        <span class="tok-kw">return</span> ctx.Err()
+    }
+}</code></pre>
+<p>The single fact that makes any of this safe rather than merely convenient: <strong>a lease's state
+lives in shared storage (in-memory only for the single-process case; Redis/Postgres/memcached
+otherwise), never in the daemon process's own memory.</strong> Restarting <code>dagworkerd</code> — planned
+deploy, crash, OOM-kill — does <strong>not</strong> orphan any outstanding lease: <code>task_token</code> is not bound
+to a TCP connection or to the specific replica that issued it, so any other replica sharing the
+same storage backend can accept the eventual <code>ExtendLease</code>/<code>CompleteNode</code>/<code>FailNode</code> for that
+token, and if the worker never reaches <em>any</em> replica before <code>lease_expires_at</code>, the storage
+layer's own timeout sweep fails the node on schedule regardless of whether the issuing daemon
+process still exists. This is the direct payoff of putting lease state in storage rather than
+daemon RAM, structurally identical to why Temporal's Frontend/Matching services are stateless
+in front of a persisted History — restart the stateless tier freely, the durable tier is where
+correctness lives.</p>
+<hr>
+<h2 id="10-error-model-google-rpc-status-and-canonical-code-mapping">10. Error model: <code>google.rpc.Status</code> and canonical code mapping<a class="anchor" href="#10-error-model-google-rpc-status-and-canonical-code-mapping" aria-label="Link to this section">#</a></h2>
+<p>Every dagworker error is a <code>google.rpc.Status{code, message, details}</code> surfaced through gRPC's
+normal status/trailer mechanism, with <code>details</code> populated from the standard payloads in
+<a href="https://github.com/googleapis/googleapis/blob/master/google/rpc/error_details.proto" rel="noopener noreferrer"><code>google/rpc/error_details.proto</code></a>:</p>
+<ul>
+<li><strong><code>ErrorInfo{reason, domain, metadata}</code></strong> — AIP-193 makes this <strong>mandatory on every error</strong>:
+<code>reason</code> is a stable, <code>SCREAMING_SNAKE_CASE</code> machine-readable identifier (max 63 chars,
+<code>[A-Z][A-Z0-9_]+[A-Z0-9]</code>), <code>domain</code> is the owning service (<code>dagworker.v1</code>), <code>metadata</code> carries
+the dynamic, per-instance context (which <code>node_id</code>, which <code>scope</code>)
+(<a href="https://google.aip.dev/193" rel="noopener noreferrer">AIP-193</a>). The <code>(reason, domain)</code> pair is the actual stable
+contract across releases — <code>message</code> text is free to improve.</li>
+<li><strong><code>RetryInfo{retry_delay}</code></strong> — attached to <code>UNAVAILABLE</code>/<code>RESOURCE_EXHAUSTED</code> so a client
+knows how long to back off rather than guessing.</li>
+<li><strong><code>PreconditionFailure{violations: [{type, subject, description}]}</code></strong> — attached to
+<code>FAILED_PRECONDITION</code> (e.g. a rejected <code>AddEdges</code> call that would create a cycle).</li>
+<li><strong><code>QuotaFailure{violations: [{subject, quota_metric, quota_value}]}</code></strong> — attached to
+<code>RESOURCE_EXHAUSTED</code> when a scope hits an in-flight-node or claim-rate limit.</li>
+<li><strong><code>BadRequest{field_violations: [{field, description}]}</code></strong> — attached to <code>INVALID_ARGUMENT</code>,
+and in practice mostly produced automatically by the <code>protovalidate</code> interceptor (§13) before
+a request ever reaches business logic.</li>
+</ul>
+<div class="table-wrap"><table>
+<thead><tr><th>Condition</th><th>gRPC code</th><th><code>ErrorInfo.reason</code></th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>task_token</code> from an expired lease</td><td><code>NOT_FOUND</code></td><td><code>LEASE_EXPIRED</code></td><td>Same code Temporal uses for this whole family; a <em>new</em> <code>ClaimNode</code> is the only correct recovery, never a retry of the same token.</td></tr>
+<tr><td><code>task_token</code> already consumed by a prior <code>Complete</code>/<code>Fail</code></td><td><code>NOT_FOUND</code></td><td><code>ALREADY_COMPLETED</code></td><td>See idempotency caveat below — recommend making an <em>identical</em> retried <code>CompleteNode</code> a no-op success instead.</td></tr>
+<tr><td><code>task_token</code> never issued / garbage</td><td><code>NOT_FOUND</code></td><td><code>UNKNOWN_TASK_TOKEN</code></td><td></td></tr>
+<tr><td><code>AddEdges</code> would create a cycle</td><td><code>FAILED_PRECONDITION</code></td><td><code>CYCLE_DETECTED</code></td><td><code>PreconditionFailure{type: "DAG_ACYCLIC", subject: "&lt;from&gt;-&gt;&lt;to&gt;"}</code>.</td></tr>
+<tr><td><code>GetNode</code>/<code>CancelNode</code> on unknown <code>node_id</code></td><td><code>NOT_FOUND</code></td><td><code>NODE_NOT_FOUND</code></td><td></td></tr>
+<tr><td>Scope over its in-flight-node quota</td><td><code>RESOURCE_EXHAUSTED</code></td><td><code>SCOPE_QUOTA_EXCEEDED</code></td><td>+ <code>QuotaFailure</code>, + <code>RetryInfo</code>.</td></tr>
+<tr><td>Credential valid but wrong scope</td><td><code>PERMISSION_DENIED</code></td><td><code>SCOPE_FORBIDDEN</code></td><td>Raised by the authz interceptor, §11.</td></tr>
+<tr><td>No/invalid credential</td><td><code>UNAUTHENTICATED</code></td><td>—</td><td></td></tr>
+<tr><td>Daemon draining, redirect elsewhere</td><td><code>UNAVAILABLE</code></td><td><code>DRAINING</code></td><td>+ <code>RetryInfo{retry_delay: 1s}</code>; client-side LB (§12) should mark the peer down and reconnect.</td></tr>
+<tr><td>Malformed request (bad selector, negative duration)</td><td><code>INVALID_ARGUMENT</code></td><td>field-specific</td><td>Caught by <code>protovalidate</code>, never reaches storage.</td></tr>
+</tbody></table></div>
+<p><strong>Open call-out, not resolved by fiat here:</strong> Temporal collapses "already completed" into the
+same <code>NotFound</code> as a genuinely expired/garbage token, which is defensible for Temporal's
+workflow-replay model but is a sharper edge for dagworker, where a worker that completes real
+work, then times out waiting for <code>CompleteNode</code>'s <em>response</em> and retries the identical call, is
+a completely ordinary occurrence (not a bug) under at-least-once RPC semantics. Recommendation
+(§16): make <code>CompleteNode</code>/<code>FailNode</code> idempotent per <code>task_token</code> — a second call with the same
+token and equivalent payload returns the same success response instead of <code>NOT_FOUND</code>, and only
+a <em>different</em> payload (a genuinely conflicting completion) is treated as an error. This is a
+storage-layer decision (needs to remember the last outcome per token for a bounded window, not
+just the token's validity), flagged here rather than pre-decided.</p>
+<hr>
+<h2 id="11-authn-authz">11. AuthN / AuthZ<a class="anchor" href="#11-authn-authz" aria-label="Link to this section">#</a></h2>
+<p><strong>Transport</strong>: mTLS is the default for worker↔<code>dagworkerd</code> traffic — <code>credentials.NewTLS</code> with
+<code>tls.RequireAndVerifyClientCert</code> server-side; a worker's certificate SAN encodes its identity
+and, ideally, the scope(s) it's allowed to touch, so the <em>transport handshake itself</em> is the
+first authorization gate before any RPC-specific logic runs
+(<a href="https://grpc.io/docs/guides/auth/" rel="noopener noreferrer">gRPC auth guide</a>). For lighter-weight consumers (the
+HTTP/JSON adapter, or SDKs that can't easily manage client certs), gRPC's <code>PerRPCCredentials</code>
+interface attaches a bearer token as metadata on every call and composes with the transport
+credentials via <code>grpc.WithPerRPCCredentials</code>
+(<a href="https://grpc.io/docs/guides/auth/" rel="noopener noreferrer">source</a>) — dagworkerd should reject any <code>PerRPCCredentials</code>
+whose <code>RequireTransportSecurity()</code> returns false in production, so a bearer token is never sent
+in the clear.</p>
+<p><strong>Two services, two credential shapes</strong>: <code>WorkerService</code> and <code>ControlService</code> being separate
+gRPC services (§5) is what makes scope-level authorization tractable rather than
+best-effort — a worker's mTLS cert or bearer token should simply never carry a claim that maps
+to <code>ControlService</code> RPCs at all, so a compromised worker cannot mutate the DAG it's consuming
+from even if application-layer authz logic has a bug.</p>
+<p><strong>Scope-level authorization hook</strong>: a single unary+stream server interceptor, since every
+request message that touches a scope carries a <code>scope</code> field at position 1 or 2 by convention
+(§5):</p>
+<pre><code class="language-go"><span class="tok-kw">type</span> ScopedRequest <span class="tok-kw">interface</span>{ GetScope() <span class="tok-kw">string</span> }
+
+<span class="tok-kw">func</span> ScopeAuthzUnaryInterceptor(authz Authorizer) grpc.UnaryServerInterceptor {
+    <span class="tok-kw">return</span> <span class="tok-kw">func</span>(ctx context.Context, req <span class="tok-kw">interface</span>{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (<span class="tok-kw">interface</span>{}, <span class="tok-kw">error</span>) {
+        <span class="tok-kw">if</span> sr, ok := req.(ScopedRequest); ok {
+            <span class="tok-kw">if</span> !authz.AllowsScope(ctx, sr.GetScope()) { <span class="tok-com">// checks the mTLS SAN / verified bearer claims already on ctx</span>
+                st := status.New(codes.PermissionDenied, <span class="tok-str">"credential is not authorized for this scope"</span>)
+                st, _ = st.WithDetails(&amp;errdetails.ErrorInfo{
+                    Reason: <span class="tok-str">"SCOPE_FORBIDDEN"</span>, Domain: <span class="tok-str">"dagworker.v1"</span>,
+                    Metadata: <span class="tok-kw">map</span>[<span class="tok-kw">string</span>]<span class="tok-kw">string</span>{<span class="tok-str">"scope"</span>: sr.GetScope()},
+                })
+                <span class="tok-kw">return</span> <span class="tok-kw">nil</span>, st.Err()
+            }
+        }
+        <span class="tok-kw">return</span> handler(ctx, req)
+    }
+}</code></pre>
+<p>The identity itself is attached earlier in the chain by a separate authentication interceptor
+(peer cert inspection via <code>peer.FromContext(ctx).AuthInfo</code>, or bearer-token verification) —
+kept as two interceptors, not one, so authn and authz can be tested, replaced, and reasoned
+about independently (e.g. swapping mTLS for an external OIDC-token authenticator later touches
+only the first one).</p>
+<hr>
+<h2 id="12-observability">12. Observability<a class="anchor" href="#12-observability" aria-label="Link to this section">#</a></h2>
+<p><strong>Transport-level</strong>: register the OpenTelemetry <code>stats.Handler</code> implementation
+(<code>otelgrpc.NewServerHandler()</code> / <code>otelgrpc.NewClientHandler()</code>) via <code>grpc.StatsHandler(...)</code> at
+<code>grpc.NewServer</code>/dial time rather than writing interceptors for this — grpc-go's <code>stats.Handler</code>
+interface (<code>TagRPC</code>, <code>HandleRPC</code>, <code>TagConn</code>, <code>HandleConn</code>) is specifically the hook that also
+sees <code>ConnBegin</code>/<code>ConnEnd</code>
+(<a href="https://pkg.go.dev/google.golang.org/grpc/stats" rel="noopener noreferrer">pkg.go.dev grpc/stats</a>), which interceptors
+cannot — and connection-level visibility is exactly what §9's "are our long-poll connections
+actually spread across replicas" question needs. This emits the standard OpenTelemetry gRPC
+semantic-convention attributes: <code>rpc.system=grpc</code>, <code>rpc.service</code>, <code>rpc.method</code>,
+<code>rpc.grpc.status_code</code>/<code>rpc.response.status_code</code>, <code>server.address</code>/<code>server.port</code>,
+<code>network.peer.address</code>/<code>network.peer.port</code>
+(<a href="https://opentelemetry.io/docs/specs/semconv/rpc/grpc/" rel="noopener noreferrer">OTel gRPC semconv</a>).</p>
+<p><strong>The metric that generic RPC instrumentation gets wrong for this protocol</strong>: a standard
+"RPC duration" histogram on <code>ClaimNode</code> is close to meaningless by construction — a healthy call
+that waited the full <code>poll_timeout</code> because the scope was quiet and one that returned in 2ms
+because work was already queued are <em>both</em> correct, and a p99-latency dashboard built from the
+raw duration will look identically "bad" during a genuinely idle scope and during real
+overload. Emit two custom attributes/metrics instead: <code>dagworker.claim.outcome ∈
+{leased, empty, deadline_exceeded}</code> on every call, and a duration histogram <em>split by that
+outcome</em> — only the <code>empty</code> bucket's duration is informative about queue emptiness at all, and
+only <code>leased</code> duration (should be near-zero) is informative about scheduling latency.</p>
+<p><strong>Application-level span/metric attributes worth adding on top of the generic gRPC ones</strong>:
+<code>dagworker.scope</code>, <code>dagworker.node.attempt</code>, <code>dagworker.lease.fencing_token</code> (on
+<code>ExtendLease</code>/<code>CompleteNode</code>/<code>FailNode</code> spans, so a trace can be joined end-to-end across a
+node's entire claim→heartbeat×N→complete lifecycle even though each call is a separate RPC and,
+usually, a separate connection).</p>
+<hr>
+<h2 id="13-backwards-compatibility-buf-lint-buf-breaking-protovalidate">13. Backwards compatibility: buf lint, buf breaking, protovalidate<a class="anchor" href="#13-backwards-compatibility-buf-lint-buf-breaking-protovalidate" aria-label="Link to this section">#</a></h2>
+<p><strong>Lint</strong> — <code>buf.yaml</code>'s <code>lint.use: [STANDARD]</code> (the default) already enforces the naming
+discipline this proto follows: <code>SERVICE_PASCAL_CASE</code>, <code>RPC_PASCAL_CASE</code>,
+<code>RPC_REQUEST_STANDARD_NAME</code>/<code>RPC_RESPONSE_STANDARD_NAME</code> (every RPC's request/response is named
+<code>&lt;Method&gt;Request</code>/<code>&lt;Method&gt;Response</code>), <code>RPC_REQUEST_RESPONSE_UNIQUE</code> (no RPC may reuse another
+RPC's message, and — the reason <code>google.protobuf.Empty</code> is never used above — a shared <code>Empty</code>
+response can't evolve independently per-RPC later), plus <code>PACKAGE_DIRECTORY_MATCH</code> and
+<code>PACKAGE_VERSION_SUFFIX</code> for repo layout (§14)
+(<a href="https://buf.build/docs/lint/rules/" rel="noopener noreferrer">buf lint rules</a>). The stricter <code>COMMENTS</code> category (every
+message/field/RPC must be documented) is worth turning on for this specific proto given it's a
+cross-language public contract, even though the org default might not enable it everywhere.</p>
+<p><strong>Breaking-change detection</strong> — <code>buf breaking</code> has four strictness categories, from loosest to
+strictest: <code>WIRE</code> (binary wire compatibility only), <code>WIRE_JSON</code> (wire + JSON field-name
+compatibility — buf's own recommended floor), <code>PACKAGE</code> (also forbids moving generated symbols
+between packages), <code>FILE</code> (also forbids moving them between <em>files</em>, i.e. the strictest —
+matches "we commit generated code," §14, since a <code>FILE</code>-level break is the level most likely to
+also break the committed Go package's import structure)
+(<a href="https://buf.build/docs/breaking/rules/" rel="noopener noreferrer">buf breaking rules</a>). Recommendation: <code>FILE</code> category
+in <code>buf.yaml</code>, run in CI as <code>buf breaking --against '.git#branch=main'</code> on every PR touching
+<code>proto/</code>, with <code>EXTENSION_MESSAGE_NO_DELETE</code>-style narrow excepts only if a specific, reviewed
+migration needs one.</p>
+<p><strong>protovalidate</strong> — constraints are declared as field options
+(<code>(buf.validate.field).string.min_len</code>, <code>.bytes.min_len</code>, <code>.repeated.min_items</code>,
+<code>.duration.{gte,lte}</code>, as used throughout §5) and enforced by a runtime library
+(<code>protovalidate-go</code> for this project) rather than hand-written <code>if req.Scope == ""</code> checks
+scattered through handlers (<a href="https://github.com/bufbuild/protovalidate" rel="noopener noreferrer">protovalidate</a>). Wired
+as a single interceptor ahead of the authn/authz ones from §11:</p>
+<pre><code class="language-go">validator, _ := protovalidate.New()
+<span class="tok-kw">func</span> ValidationUnaryInterceptor(v protovalidate.Validator) grpc.UnaryServerInterceptor {
+    <span class="tok-kw">return</span> <span class="tok-kw">func</span>(ctx context.Context, req <span class="tok-kw">interface</span>{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (<span class="tok-kw">interface</span>{}, <span class="tok-kw">error</span>) {
+        <span class="tok-kw">if</span> pm, ok := req.(proto.Message); ok {
+            <span class="tok-kw">if</span> err := v.Validate(pm); err != <span class="tok-kw">nil</span> {
+                <span class="tok-kw">return</span> <span class="tok-kw">nil</span>, protovalidateToStatus(err) <span class="tok-com">// maps to INVALID_ARGUMENT + BadRequest.FieldViolation</span>
+            }
+        }
+        <span class="tok-kw">return</span> handler(ctx, req)
+    }
+}</code></pre>
+<p>This keeps <code>INVALID_ARGUMENT</code> handling in exactly one place and guarantees business logic never
+sees, e.g., a negative <code>poll_timeout</code> or an empty <code>scope</code> — the constraints are also visible
+directly in the <code>.proto</code> file, which doubles as living documentation for every non-Go SDK
+generated off the same schema (§14).</p>
+<hr>
+<h2 id="14-codegen-and-repo-layout">14. Codegen and repo layout<a class="anchor" href="#14-codegen-and-repo-layout" aria-label="Link to this section">#</a></h2>
+<p><strong>Proto directory layout.</strong> The single consolidated file in §5 is for legibility as a dossier
+centerpiece; the real repo splits it by resource, one small file per buf's
+<code>PACKAGE_DIRECTORY_MATCH</code>/<code>FILE</code>-category expectations (§13):</p>
+<pre><code>dagworker-proto/                       # separate repo (or a separate module within a monorepo) —
+├── buf.yaml                           # never imported by the dagworker core module (§16 item 8)
+├── buf.gen.yaml
+├── buf.lock
+└── proto/
+    └── dagworker/
+        └── v1/
+            ├── node.proto             # Node, Edge, Lease, NodeStatus, FailureKind
+            ├── worker_service.proto   # WorkerService + Claim/ExtendLease/Complete/Fail messages
+            ├── control_service.proto  # ControlService + AddNodes/AddEdges/GetNode/CancelNode messages
+            └── watch.proto            # Watch + WatchEvent/WatchCreateRequest/WatchCancelRequest</code></pre>
+<p><strong><code>buf.yaml</code> (v2)</strong> — <code>FILE</code>-category breaking checks (§13) and the <code>STANDARD</code> lint set, scoped
+to the one module:</p>
+<pre><code class="language-yaml">version: v2
+modules:
+  - path: proto
+    name: buf.build/specialistvlad/dagworker
+lint:
+  use: [STANDARD]
+breaking:
+  use: [FILE]
+deps:
+  - buf.build/bufbuild/protovalidate</code></pre>
+<p>(<a href="https://buf.build/docs/configuration/v2/buf-yaml/" rel="noopener noreferrer">buf.yaml v2 reference</a>)</p>
+<p><strong><code>buf.gen.yaml</code> (v2)</strong> — generates the committed Go package plus gRPC stubs; non-Go SDKs are
+produced separately via BSR remote generation (below), not by extending this file per language:</p>
+<pre><code class="language-yaml">version: v2
+managed:
+  enabled: <span class="tok-kw">true</span>
+  override:
+    - file_option: go_package_prefix
+      value: github.com/specialistvlad/dagworker/gen/go
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: gen/go
+    opt: [paths=source_relative]
+  - remote: buf.build/grpc/go
+    out: gen/go
+    opt: [paths=source_relative]
+inputs:
+  - directory: proto</code></pre>
+<p>(<a href="https://buf.build/docs/configuration/v2/buf-gen-yaml/" rel="noopener noreferrer">buf.gen.yaml v2 reference</a>)</p>
+<p><strong>Commit the generated Go code — yes.</strong> The counter-argument (generated code is a build
+artifact, don't commit build artifacts) is the right default for most codegen but wrong here,
+for reasons specific to what this package is: (1) it is a <strong>public, cross-language wire
+contract</strong>, and <code>go get github.com/specialistvlad/dagworker/gen/go/dagworker/v1</code> must work for
+every downstream Go consumer — a worker SDK author, a scheduler, a test harness — with zero
+local <code>buf</code>/<code>protoc</code> toolchain, zero plugin-version skew between contributors, and zero
+build-time codegen step to cache correctly in CI; (2) a proto field-numbering mistake or an
+accidental breaking rename becomes visible <strong>in the same PR diff</strong> as the generated Go it
+produces, rather than requiring a reviewer to mentally regenerate code to see the blast radius;
+(3) <code>buf breaking</code> in CI (§13) is what actually guards correctness here, not the act of
+regenerating — committing removes "did anyone remember to regenerate before merging" as a
+whole class of drift bug. The generated tree is still fully reproducible
+(<code>buf generate</code> from the pinned <code>buf.lock</code> reproduces it byte-for-byte), so nothing about
+committing it sacrifices the ability to regenerate — it only removes the <em>requirement</em> to.</p>
+<p><strong>Publishing to the Buf Schema Registry.</strong> CI pushes the module on every merge to <code>main</code>:</p>
+<pre><code>buf push --tag "$(git rev-parse --short HEAD)"</code></pre>
+<p>This is what actually delivers "Python/Node/Rust/Java workers can participate" (the assignment's
+framing goal), not the <code>.proto</code> files existing in a Git repo somewhere: a Python worker author
+runs <code>buf generate buf.build/specialistvlad/dagworker --template buf.gen.python.yaml</code> (or
+depends on BSR's remote-generated packages directly, for ecosystems BSR publishes to
+natively) without ever cloning this repo or installing <code>buf</code> themselves beyond the one <code>buf
+generate</code> invocation — the Go module stays hand-committed for the reasons above, while every
+other language rides on BSR's remote-generation path off the identical, versioned schema.</p>
+<h2 id="15-load-balancing-across-replicas-why-long-poll-an-l4-lb-is-a-trap">15. Load balancing across replicas — why long poll + an L4 LB is a trap<a class="anchor" href="#15-load-balancing-across-replicas-why-long-poll-an-l4-lb-is-a-trap" aria-label="Link to this section">#</a></h2>
+<p>gRPC/HTTP2 multiplexes many RPCs over one long-lived TCP connection; an L4 (TCP) load balancer
+only makes a placement decision <em>once, at connection setup</em> — after that, <strong>"all requests will
+get pinned to a single destination pod"</strong>
+(<a href="https://kubernetes.io/blog/2018/11/07/grpc-load-balancing-on-kubernetes-without-tears/" rel="noopener noreferrer">Kubernetes blog: gRPC Load Balancing on Kubernetes without Tears</a>).
+This is already a known gRPC problem for ordinary short unary RPCs behind a plain L4 VIP; it is
+<em>worse</em> for dagworker specifically, because a fleet of workers each holding a handful of very
+long-lived, mostly-idle connections (parked in <code>ClaimNode</code>/<code>Watch</code>) means an unlucky initial
+placement doesn't average out the way bursty, short-lived connections eventually would — a
+<code>dagworkerd</code> replica that happened to receive more connections at rollout time stays
+overloaded, potentially for the connection's entire multi-hour lifetime.</p>
+<p>Two real fixes, not one:</p>
+<ol>
+<li><strong>Client-side load balancing with real multi-address resolution.</strong> grpc-go's <code>pick_first</code>
+(the default) connects to the first resolved address and sticks with it — fine for a single
+backend, wrong for a fleet; <code>round_robin</code> opens a subchannel <em>per resolved address</em> and
+distributes successive RPCs across whichever are <code>READY</code>
+(<a href="https://github.com/grpc/grpc/blob/master/doc/load-balancing.md" rel="noopener noreferrer">grpc load-balancing doc</a>).
+This only works if the resolver actually returns multiple addresses — a headless Kubernetes
+<code>Service</code> (<code>dns:///dagworkerd.ns.svc.cluster.local</code>) or an xDS resolver, <strong>never</strong> a
+ClusterIP/VIP, which resolves to exactly one address and makes <code>round_robin</code> degenerate back
+to <code>pick_first</code>. Ship the worker SDK defaulting to:
+<pre><code class="language-go">grpc.NewClient(<span class="tok-str">"dns:///dagworkerd.dagworker.svc.cluster.local:9443"</span>,
+    grpc.WithDefaultServiceConfig(<span class="tok-str">`{"loadBalancingPolicy":"round_robin"}`</span>),
+    grpc.WithTransportCredentials(creds))</code></pre>
+</li>
+<li><strong><code>MaxConnectionAge</code> as a forced-rebalancing dial</strong>, independent of #1 — even a
+correctly-<code>round_robin</code>-configured client only rebalances <em>when it opens new connections</em>;
+a connection that's been <code>READY</code> for hours never moves. Server-side <code>MaxConnectionAge</code> (§8's
+30-minute example) periodically <code>GOAWAY</code>s every connection regardless of health, forcing
+every client to re-resolve and reconnect on a bounded cycle — cheap, general, and doesn't
+depend on the client having implemented anything beyond ordinary gRPC reconnect handling.
+<code>MaxConnectionAgeGrace</code> softens this into "stop accepting new streams now, finish what's
+in flight, then close" rather than a hard cut.</li>
+</ol>
+<p>A lookaside/L7 proxy (Envoy/Linkerd doing per-<em>stream</em>, not per-<em>connection</em>, balancing) is the
+production-grade alternative to both and is what the Kubernetes blog above ultimately
+recommends for service-mesh deployments — but it's an infrastructure choice orthogonal to the
+protocol itself, whereas #1 and #2 are protocol-level defaults dagworker's own SDK and daemon
+should ship regardless of what the deployer puts in front of them.</p>
+<hr>
+<h2 id="16-recommendations-for-dagworker">16. Recommendations for dagworker<a class="anchor" href="#16-recommendations-for-dagworker" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>Adopt the hybrid exactly as decided above ("Decision, up front") and in §4</strong>: <code>ClaimNode</code>/<code>ExtendLease</code>/<code>CompleteNode</code>/<code>FailNode</code>
+as unary long-poll + token RPCs (Temporal shape), <code>Watch</code> as a separate bidi etcd-shaped
+stream for events/wake signals — do not build a third, generic push-dispatch RPC; it solves
+a problem this workload doesn't have (§2, §4).</li>
+<li><strong>Ship the <code>.proto</code> in §5 as the literal starting point</strong>, split into <code>node.proto</code>,
+<code>worker_service.proto</code>, <code>control_service.proto</code>, <code>watch.proto</code> under <code>proto/dagworker/v1/</code>
+in the real repo (buf's <code>PACKAGE_DIRECTORY_MATCH</code> wants small, package-per-directory files;
+the single-file version here is for legibility as a dossier centerpiece only).</li>
+<li><strong>Make <code>CompleteNode</code>/<code>FailNode</code> idempotent per <code>task_token</code></strong> rather than copying Temporal's
+flat "already completed ⇒ NotFound" for that specific case (§10) — at-least-once RPC delivery
+makes a duplicate completion an expected event, not an error path, for this workload.</li>
+<li><strong>Put <code>MaxConcurrentStreams</code> and matched client/server keepalive params in the reference
+worker SDK's defaults, not just in docs</strong> (§8, §4) — the whole "HTTP/2 concurrency limit as
+the credit protocol" argument only holds if <code>dagworkerd</code> actually sets a deliberate limit
+instead of the effectively-unbounded default.</li>
+<li><strong>Default the worker SDK's dialer to <code>dns:///</code> + <code>round_robin</code>, never a bare
+<code>host:port</code>/ClusterIP</strong>, and set a <code>MaxConnectionAge</code> on the server out of the box (§15) —
+this is exactly the kind of footgun ("it works in dev with one replica, silently pins to one
+replica in prod with three") that should be closed by the SDK's defaults rather than left as
+an operator's homework.</li>
+<li><strong>Bound the Watch event-retention window per scope</strong> (a count or age cap, §6) and implement
+the <code>compacted_revision</code> reject path from day one, even before there's any realistic chance
+of hitting it at small scale — retrofitting "clients might have silently missed history" is
+much harder than shipping the resume-or-resync contract up front.</li>
+<li><strong>Split <code>WorkerService</code> and <code>ControlService</code> mTLS/token issuance from day one</strong> (§11) even if
+the very first deployment only has one caller wearing both hats — the credential boundary is
+cheap to establish now and expensive to retrofit once real worker fleets exist with
+long-lived certs already issued.</li>
+<li><strong>Split <code>dagworker-proto</code>/<code>dagworkerd</code> into their own Go module(s)</strong>, never a package
+subdirectory of the core <code>dagworker</code> module — a <code>go.mod</code> boundary is a build-time-enforced
+guarantee that <code>dagworker</code> core cannot accidentally gain a gRPC/<code>net/http</code> import edge,
+whereas an internal package boundary is only a lint convention someone can accidentally
+violate in a later PR.</li>
+<li><strong>Commit generated Go code</strong> (<code>gen/go/...</code>) to the repo (§14) and publish the module to the
+Buf Schema Registry for non-Go consumers on every merge to main — this is what actually
+delivers "Python/Node/Rust/Java workers can participate" rather than merely making it
+theoretically possible via a <code>.proto</code> file nobody outside the Go build can easily consume.</li>
+<li><strong>Emit <code>dagworker.claim.outcome</code>-partitioned metrics, not raw RPC-duration histograms, on
+<code>ClaimNode</code></strong> from the first observability pass (§12) — this is a one-line change to make
+now versus a confusing "why does p99 latency look terrible" incident investigation later
+that turns out to be a perfectly healthy idle scope.</li>
+</ol>
+<h2 id="open-questions">Open questions<a class="anchor" href="#open-questions" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>Exact <code>protovalidate</code> constraint DSL for <code>Duration</code> fields</strong> (<code>gte</code>/<code>lte</code> nesting as
+sketched in §5) should be checked against the currently-pinned <code>protovalidate</code> release before
+landing — the example reflects the library's general shape, not a copy-pasted verified
+snippet, since the specific <code>DurationRules</code> field names weren't independently confirmed here.</li>
+<li><strong>Should <code>AddNodes</code>' inline <code>edges</code> field</strong> (§5's atomicity rationale: attaching edges in the
+same call avoids a window where a node is briefly ready with a dependency missing) <strong>be the
+<em>only</em> way to add edges for newly-created nodes</strong>, with standalone <code>AddEdges</code> restricted to
+connecting already-existing nodes — or is a genuine cross-batch "add edges between two nodes
+that were each added in separate, already-committed <code>AddNodes</code> calls" a real enough use case
+to keep both paths equally supported? The proto in §5 allows both; the DAG-mutation ADR should
+pick a stance on which is the "blessed" path before client SDK ergonomics harden around it.</li>
+<li><strong>Where does the <code>Watch</code> event-retention bound live</strong> — a fixed global config, a per-scope
+setting, or something storage-backend-dependent (Redis Streams' own trimming vs. a
+hand-rolled ring in the in-memory backend vs. a Postgres table with a cron-vacuumed TTL)?
+Each backend choice in the project's storage matrix implies a different natural
+compaction mechanism, and picking one uniform contract across all four (in-memory, Redis,
+PostgreSQL, memcached) needs its own short spec pass.</li>
+<li><strong>Does <code>FailNodeResponse.will_retry</code>/<code>next_attempt_at</code> duplicate information a worker could
+otherwise get from a subsequent <code>GetNode</code> or <code>Watch</code> event</strong> — is exposing retry-scheduling
+outcome synchronously in the ack response worth the coupling to the retry-policy engine's
+internals, or should <code>FailNode</code> stay a pure ack and push retry visibility entirely through
+<code>Watch</code>?</li>
+<li><strong>HTTP/JSON transcoding surface</strong>: this dossier specifies the gRPC wire protocol only; whether
+the HTTP/JSON adapter is <code>grpc-gateway</code>-style REST transcoding of this exact proto (annotated
+with <code>google.api.http</code> options) or a deliberately smaller, hand-designed REST surface (likely
+excluding <code>ClaimNode</code>'s long-poll shape, which maps awkwardly onto plain HTTP long-polling
+without the keepalive tooling gRPC provides) is an open design question for a companion
+dossier, not resolved here.</li>
+</ul>
+<h2 id="sources">Sources<a class="anchor" href="#sources" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><a href="https://github.com/temporalio/api/blob/master/temporal/api/workflowservice/v1/service.proto" rel="noopener noreferrer">Temporal <code>workflowservice/v1/service.proto</code></a></li>
+<li><a href="https://github.com/temporalio/api/blob/master/temporal/api/workflowservice/v1/request_response.proto" rel="noopener noreferrer">Temporal <code>workflowservice/v1/request_response.proto</code></a></li>
+<li><a href="https://docs.temporal.io/encyclopedia/detecting-activity-failures" rel="noopener noreferrer">Temporal docs: Detecting Activity failures</a></li>
+<li><a href="https://etcd.io/docs/v3.5/learning/api/" rel="noopener noreferrer">etcd Learning: API</a></li>
+<li><a href="https://github.com/etcd-io/etcd/blob/main/api/etcdserverpb/rpc.proto" rel="noopener noreferrer">etcd <code>etcdserverpb/rpc.proto</code></a></li>
+<li><a href="https://developer.hashicorp.com/nomad/api-docs#blocking-queries" rel="noopener noreferrer">Nomad HTTP API: Blocking Queries</a></li>
+<li><a href="https://github.com/buildbarn/bb-remote-execution/blob/master/pkg/proto/remoteworker/remoteworker.proto" rel="noopener noreferrer">Buildbarn <code>remoteworker/remoteworker.proto</code></a></li>
+<li><a href="https://github.com/bazelbuild/remote-apis/blob/main/build/bazel/remote/execution/v2/remote_execution.proto" rel="noopener noreferrer">Bazel Remote Execution API v2 <code>remote_execution.proto</code></a></li>
+<li><a href="https://www.envoyproxy.io/docs/envoy/latest/api-docs/xds_protocol" rel="noopener noreferrer">Envoy xDS protocol docs (ADS)</a></li>
+<li><a href="https://github.com/kubernetes/cri-api/blob/master/pkg/apis/runtime/v1/api.proto" rel="noopener noreferrer">Kubernetes CRI <code>runtime/v1/api.proto</code></a></li>
+<li><a href="https://www.reactive-streams.org/" rel="noopener noreferrer">reactive-streams.org</a></li>
+<li><a href="https://grpc.io/docs/guides/deadlines/" rel="noopener noreferrer">grpc.io: Deadlines guide</a></li>
+<li><a href="https://grpc.io/docs/guides/keepalive/" rel="noopener noreferrer">grpc.io: Keepalive guide</a></li>
+<li><a href="https://github.com/grpc/grpc-go/blob/master/keepalive/keepalive.go" rel="noopener noreferrer">grpc-go <code>keepalive/keepalive.go</code></a></li>
+<li><a href="https://github.com/grpc/grpc/blob/master/doc/keepalive.md" rel="noopener noreferrer">grpc/grpc keepalive spec</a></li>
+<li><a href="https://github.com/grpc/grpc-go/blob/master/server.go" rel="noopener noreferrer">grpc-go <code>server.go</code></a> (<code>GracefulStop</code>/<code>Stop</code>)</li>
+<li><a href="https://github.com/googleapis/googleapis/blob/master/google/rpc/error_details.proto" rel="noopener noreferrer"><code>google/rpc/error_details.proto</code></a></li>
+<li><a href="https://google.aip.dev/193" rel="noopener noreferrer">AIP-193: Errors</a></li>
+<li><a href="https://google.aip.dev/190" rel="noopener noreferrer">AIP-190: Naming conventions</a></li>
+<li><a href="https://github.com/grpc/grpc/blob/master/doc/load-balancing.md" rel="noopener noreferrer">grpc/grpc: Load Balancing doc</a></li>
+<li><a href="https://kubernetes.io/blog/2018/11/07/grpc-load-balancing-on-kubernetes-without-tears/" rel="noopener noreferrer">Kubernetes blog: gRPC Load Balancing on Kubernetes without Tears</a></li>
+<li><a href="https://grpc.io/docs/guides/auth/" rel="noopener noreferrer">grpc.io: Authentication guide</a></li>
+<li><a href="https://opentelemetry.io/docs/specs/semconv/rpc/grpc/" rel="noopener noreferrer">OpenTelemetry Semantic Conventions: gRPC</a></li>
+<li><a href="https://pkg.go.dev/google.golang.org/grpc/stats" rel="noopener noreferrer">pkg.go.dev <code>google.golang.org/grpc/stats</code></a></li>
+<li><a href="https://buf.build/docs/breaking/rules/" rel="noopener noreferrer">buf.build: Breaking change rules</a></li>
+<li><a href="https://buf.build/docs/lint/rules/" rel="noopener noreferrer">buf.build: Lint rules</a></li>
+<li><a href="https://buf.build/docs/configuration/v2/buf-yaml/" rel="noopener noreferrer">buf.build: <code>buf.yaml</code> v2 configuration</a></li>
+<li><a href="https://buf.build/docs/configuration/v2/buf-gen-yaml/" rel="noopener noreferrer">buf.build: <code>buf.gen.yaml</code> v2 configuration</a></li>
+<li><a href="https://github.com/bufbuild/protovalidate" rel="noopener noreferrer">bufbuild/protovalidate</a></li>
+</ul>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/research/13-grpc-worker-protocol.md" rel="noopener noreferrer">View source: docs/research/13-grpc-worker-protocol.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

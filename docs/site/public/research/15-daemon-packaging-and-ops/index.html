@@ -1,0 +1,1679 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>15 — dagworkerd: optional daemon, module topology, and OSS project mechanics · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/research/15-daemon-packaging-and-ops/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#15-dagworkerd-optional-daemon-module-topology-and-oss-project-mechanics">15 — dagworkerd: optional daemon, module topology, and OSS project mechanics</a></li>
+<ul>
+<li><a href="#part-1-module-topology">Part 1 — Module topology</a></li>
+<ul>
+<li><a href="#1-1-the-three-options-stated-plainly">1.1 The three options, stated plainly</a></li>
+<li><a href="#1-2-what-go-s-own-doc-says-about-the-mechanics">1.2 What Go's own doc says about the mechanics</a></li>
+<li><a href="#1-3-go-work-the-local-dev-answer-that-replaces-replace">1.3 go.work: the local-dev answer that replaces replace</a></li>
+<li><a href="#1-4-case-studies">1.4 Case studies</a></li>
+<li><a href="#1-5-firm-recommendation-multi-module-monorepo-deliberately-not-lockstepped">1.5 Firm recommendation: multi-module monorepo, deliberately not lockstepped</a></li>
+<li><a href="#1-6-versioning-policy-independent-not-lockstepped-and-why">1.6 Versioning policy: independent, not lockstepped — and why</a></li>
+<li><a href="#1-7-the-go-get-ux-pain-named-explicitly">1.7 The go get UX pain, named explicitly</a></li>
+</ul>
+<li><a href="#part-2-the-daemon">Part 2 — The daemon</a></li>
+<ul>
+<li><a href="#2-1-configuration-flags-env-or-file-recommend-layered-env-primary-with-flag-override">2.1 Configuration: flags, env, or file — recommend layered, env-primary with flag override</a></li>
+<li><a href="#2-2-structured-logging-with-log-slog">2.2 Structured logging with log/slog</a></li>
+<li><a href="#2-3-health-vs-readiness-why-they-are-different-endpoints-sourced">2.3 Health vs readiness — why they are different endpoints, sourced</a></li>
+<li><a href="#2-4-graceful-shutdown-ordering-and-the-lease-specific-argument">2.4 Graceful shutdown ordering — and the lease-specific argument</a></li>
+<li><a href="#2-5-signal-handling-with-signal-notifycontext">2.5 Signal handling with signal.NotifyContext</a></li>
+<li><a href="#2-6-metrics-red-use-and-the-exact-set-for-a-work-dispatcher">2.6 Metrics: RED + USE, and the exact set for a work dispatcher</a></li>
+<li><a href="#2-7-pprof-behind-a-flag-on-a-separate-listener">2.7 pprof behind a flag, on a separate listener</a></li>
+<li><a href="#2-8-container-image-distroless-static-multi-arch">2.8 Container image: distroless, static, multi-arch</a></li>
+<li><a href="#2-9-multiple-replicas-behind-a-load-balancer">2.9 Multiple replicas behind a load balancer</a></li>
+</ul>
+<li><a href="#part-3-oss-project-mechanics">Part 3 — OSS project mechanics</a></li>
+<ul>
+<li><a href="#3-1-the-files-that-must-exist-and-why">3.1 The files that must exist, and why</a></li>
+<li><a href="#3-2-semantic-versioning-and-the-v0-escape-hatch">3.2 Semantic versioning and the v0 escape hatch</a></li>
+<li><a href="#3-3-conventional-commits-and-whether-to-automate-releases">3.3 Conventional Commits, and whether to automate releases</a></li>
+<li><a href="#3-4-changelog-md-exact-keep-a-changelog-template-per-module">3.4 CHANGELOG.md — exact Keep a Changelog template, per module</a></li>
+<li><a href="#3-5-pkg-go-dev-documentation-quality-doc-go-and-runnable-examples">3.5 pkg.go.dev documentation quality: doc.go and runnable Examples</a></li>
+<li><a href="#3-6-supply-chain-hygiene-scorecard-best-practices-badge-dependabot-codeql-govulncheck">3.6 Supply-chain hygiene: Scorecard, best-practices badge, Dependabot, CodeQL, govulncheck</a></li>
+<li><a href="#3-7-slsa-provenance-cosign-and-reproducible-builds-for-dagworkerd-releases-only">3.7 SLSA provenance, cosign, and reproducible builds — for dagworkerd releases only</a></li>
+<li><a href="#3-8-writing-a-readme-that-converts-a-skimmer-into-a-user-in-30-seconds">3.8 Writing a README that converts a skimmer into a user in 30 seconds</a></li>
+</ul>
+<li><a href="#install">Install</a></li>
+<li><a href="#features">Features</a></li>
+<li><a href="#how-it-works">How it works</a></li>
+<li><a href="#benchmarks">Benchmarks</a></li>
+<li><a href="#contributing">Contributing</a></li>
+<li><a href="#license">License</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="15-dagworkerd-optional-daemon-module-topology-and-oss-project-mechanics">15 — <code>dagworkerd</code>: optional daemon, module topology, and OSS project mechanics<a class="anchor" href="#15-dagworkerd-optional-daemon-module-topology-and-oss-project-mechanics" aria-label="Link to this section">#</a></h1>
+<p>Scope: (1) how to split the repository into Go modules so that <code>gRPC</code>, <code>net/http</code>, <code>redis</code>,
+<code>pgx</code>, and <code>memcached</code> never appear in the transitive dependency graph of a user who only wants
+the in-process API; (2) the design of the optional <code>dagworkerd</code> binary that hosts the two network
+adapters — config, logging, health, shutdown, signals, metrics, pprof, container image, multi-
+replica deployment; (3) the file-and-process furniture that makes an MIT Go library look and
+behave like a project worth depending on.</p>
+<p>Everything here is either a primary source (Go docs, RFCs/specs, vendor docs) or a live
+inspection of a real repository's <code>go.mod</code>/<code>README</code> at the URL cited. Where a fetch could not be
+completed (e.g. a dead blog link) the claim is dropped rather than asserted from memory.</p>
+<hr>
+<h2 id="part-1-module-topology">Part 1 — Module topology<a class="anchor" href="#part-1-module-topology" aria-label="Link to this section">#</a></h2>
+<h3 id="1-1-the-three-options-stated-plainly">1.1 The three options, stated plainly<a class="anchor" href="#1-1-the-three-options-stated-plainly" aria-label="Link to this section">#</a></h3>
+<p>For a repo that needs core (in-memory storage, engine, public API), three optional storage
+backends (Redis, PostgreSQL, memcached), two optional network adapters (gRPC, HTTP), and one
+optional daemon binary, there are exactly three ways to arrange <code>go.mod</code>:</p>
+<ol>
+<li><strong>Single module, single <code>go.mod</code>, accept the dependency weight.</strong> Every user's <code>go.sum</code>
+contains <code>google.golang.org/grpc</code>, <code>github.com/jackc/pgx/v5</code>, <code>github.com/redis/go-redis/v9</code>,
+and a memcached client, whether or not they use them. Build tags can <em>compile out</em> the code
+but cannot remove the entries from <code>go.sum</code> or the module graph that <code>go mod tidy</code> /
+dependency-scanners see, because <code>go.mod</code> requirements are resolved per module, not per build
+tag — the tag only guards which files the compiler visits (<a href="https://pkg.go.dev/go/build#hdr-Build_Constraints" rel="noopener noreferrer">Go build constraints
+docs</a> describe tags as a <em>file selection</em>
+mechanism, not a dependency-graph mechanism).</li>
+<li><strong>Single module, build tags gate the code.</strong> Same dependency-graph problem as (1), plus the
+ergonomic cost that users must remember <code>-tags redis,postgres</code> at build time or get silent
+no-op backends; CI must build the full matrix of tag combinations to catch breakage.</li>
+<li><strong>Multi-module monorepo: one <code>go.mod</code> per optional dependency edge.</strong> Each backend/adapter is
+its own Go module living in a subdirectory of the same repository, with its own <code>go.mod</code>,
+<code>go.sum</code>, version tags, and (optionally) release cadence. A user's <code>go.sum</code> only grows when
+they literally <code>import</code> that module.</li>
+</ol>
+<p>Go's own documentation is unambiguous about the default: <strong>"Multiple modules in a repository" is
+explicitly the exception, not the goal</strong> — the guidance is "In general, we recommend that each
+repository contain only one module, located at the root" and to reach for multiple modules only
+"if you have code in the repository that constitutes multiple, separately releasable versioned
+components" (<a href="https://go.dev/doc/modules/managing-source" rel="noopener noreferrer">go.dev/doc/modules/managing-source</a>).
+That single sentence is the entire test dagworker needs to apply: <strong>is <code>storage/redis</code>
+separately releasable and separately dependency-loaded from core?</strong> Yes — its whole reason to
+exist is that a core-only user must never resolve <code>github.com/redis/go-redis/v9</code>. That satisfies
+Go's own bar for splitting.</p>
+<h3 id="1-2-what-go-s-own-doc-says-about-the-mechanics">1.2 What Go's own doc says about the mechanics<a class="anchor" href="#1-2-what-go-s-own-doc-says-about-the-mechanics" aria-label="Link to this section">#</a></h3>
+<p>From the same page (<a href="https://go.dev/doc/modules/managing-source" rel="noopener noreferrer">go.dev/doc/modules/managing-source</a>):</p>
+<ul>
+<li>Each nested module gets its own <code>go.mod</code> in its own subdirectory root.</li>
+<li><strong>The version tag for a nested module must be prefixed with the subdirectory path</strong>: a module
+at <code>example.com/mymodules/module1</code> released as <code>v1.2.3</code> is tagged <code>module1/v1.2.3</code> in git, not
+bare <code>v1.2.3</code>. Git tags are global to the repo, so the prefix is what disambiguates which
+module a tag belongs to.</li>
+<li>Each module's initial commit is expected to carry its own <code>LICENSE</code>, <code>go.mod</code>, <code>go.sum</code>.</li>
+<li>Major version ≥2 additionally requires a <code>/v2</code> (etc.) suffix baked into the <strong>module path
+itself</strong> — this is Go's <em>import compatibility rule</em>: "If an old package and a new package have
+the same import path, the new package must be backwards compatible with the old package,"
+so an incompatible v2 needs a distinct import path
+(<a href="https://go.dev/ref/mod#go-mod-file-go" rel="noopener noreferrer">go.dev/ref/mod#go-mod-file-go</a>). For a nested module
+this composes with the subdirectory prefix: <code>golang.org/x/tools/gopls</code> at v2 would tag
+<code>gopls/v2.0.0</code> and either live in a <code>gopls/v2/</code> directory or stay in <code>gopls/</code> — Go's tooling
+reads the version from the <code>go.mod</code> <code>module</code> line, not the directory name, so the subdirectory
+move is optional (same source).</li>
+</ul>
+<h3 id="1-3-go-work-the-local-dev-answer-that-replaces-replace">1.3 <code>go.work</code>: the local-dev answer that replaces <code>replace</code><a class="anchor" href="#1-3-go-work-the-local-dev-answer-that-replaces-replace" aria-label="Link to this section">#</a></h3>
+<p>Historically, developing module <code>adapters/grpc</code> against an unreleased change in <code>core</code> required
+a <code>replace github.com/specialistvlad/dagworker =&gt; ../..</code> line in <code>adapters/grpc/go.mod</code> — which
+is exactly the kind of line that gets accidentally committed and breaks <code>go get</code> for downstream
+consumers (a <code>replace</code> with a local filesystem path is not resolvable outside the checkout).
+Go 1.18 added <strong>workspaces</strong> (<code>go.work</code>) precisely to kill that pattern for local development:</p>
+<blockquote>
+<p><code>go.work</code> "allows you to work with multiple Go modules in a single directory tree
+simultaneously... without requiring replace directives in individual go.mod files."
+(<a href="https://go.dev/doc/tutorial/workspaces" rel="noopener noreferrer">go.dev/doc/tutorial/workspaces</a>)</p>
+</blockquote>
+<p>Setup is two commands from the repo root:</p>
+<pre><code class="language-bash">go work init
+go work use . ./storage/redis ./storage/postgres ./storage/memcached ./adapters/grpc ./adapters/http ./cmd/dagworkerd</code></pre>
+<p>produces:</p>
+<pre><code>go 1.23
+
+use (
+	.
+	./storage/redis
+	./storage/postgres
+	./storage/memcached
+	./adapters/grpc
+	./adapters/http
+	./cmd/dagworkerd
+)</code></pre>
+<p><code>go.work</code> is resolved by the <code>go</code> command whenever it is present in the current directory or a
+parent, and it is <strong>never</strong> consumed by <code>go get</code>/module resolution for people depending on the
+module from outside the workspace — so it is safe (and idiomatic) to commit <code>go.work</code> and
+<code>go.work.sum</code> at the repo root for contributor convenience, while each module's own <code>go.mod</code>
+stays free of <code>replace</code> lines. <code>go work sync</code> pushes the workspace's resolved build list back
+into each member module's <code>go.mod</code>/<code>go.sum</code> before a release, which is the moment to run in CI
+before tagging (same tutorial page).</p>
+<h3 id="1-4-case-studies">1.4 Case studies<a class="anchor" href="#1-4-case-studies" aria-label="Link to this section">#</a></h3>
+<p><strong>opentelemetry-go / opentelemetry-go-contrib — many modules, forced version lockstep.</strong>
+The versioning policy is explicit and instructive as a cautionary tale of what <em>not</em> to copy
+wholesale:</p>
+<blockquote>
+<p>"All stable modules that use the same major version number will use the same entire version
+number." … "All stable contrib modules of the same major version with this project will use
+the same entire version as this project." … <strong>"No additional stable release in this project
+can be made until the contrib repository has a matching stable release."</strong>
+(<a href="https://github.com/open-telemetry/opentelemetry-go/blob/main/VERSIONING.md" rel="noopener noreferrer">open-telemetry/opentelemetry-go VERSIONING.md</a>)</p>
+</blockquote>
+<p>This buys API consistency across <code>otel</code>, <code>otel/trace</code>, <code>otel/metric</code>, and every contrib
+instrumentation package, but it couples two <em>separate repositories'</em> release trains together —
+a stable <code>opentelemetry-go</code> release is blocked on a matching contrib release landing, with no
+guaranteed turnaround. For a project with one core and independently-evolving storage backends,
+this lockstep model is the wrong template: dagworker's Redis backend changing does not need to
+force a version bump in core, and vice versa.</p>
+<p><strong>aws-sdk-go-v2 — module-per-service, deliberately not in lockstep.</strong>
+The repo root module (<code>github.com/aws/aws-sdk-go-v2</code>) carries only shared plumbing (config,
+credentials, retry, transport); every AWS service (<code>service/dynamodb</code>, <code>service/s3</code>, …) is its
+own nested module, each independently <code>go get</code>-able and independently versioned, so a consumer
+who only calls DynamoDB never resolves the S3 or SES client's dependency footprint. The published
+CHANGELOG is per-repository and release notes call out per-module version bumps
+(<a href="https://github.com/aws/aws-sdk-go-v2" rel="noopener noreferrer">github.com/aws/aws-sdk-go-v2</a>) — this is the "storage
+backend as a module" shape dagworker should copy for <code>storage/redis</code>, <code>storage/postgres</code>,
+<code>storage/memcached</code>.</p>
+<p><strong>grpc-go — single core module, but isolates <em>heavy-dependency</em> subtrees into their own
+modules.</strong> The main library is one module, but <code>examples/</code> and <code>gcp/observability/</code> are each
+separate modules with their own <code>go.mod</code> — confirmed directly:</p>
+<ul>
+<li><code>examples/go.mod</code> declares <code>module google.golang.org/grpc/examples</code>
+(<a href="https://github.com/grpc/grpc-go/blob/master/examples/go.mod" rel="noopener noreferrer">source</a>).</li>
+<li><code>gcp/observability/go.mod</code> declares <code>module google.golang.org/grpc/gcp/observability</code> and pulls
+in <code>cloud.google.com/go/logging</code>, <code>contrib.go.opencensus.io/exporter/stackdriver</code>,
+<code>go.opencensus.io</code>, <code>google.golang.org/api</code> — none of which appear in the root module's
+<code>go.mod</code> — with a local-dev <code>replace google.golang.org/grpc =&gt; ../..</code> committed in the
+submodule (grpc-go predates <code>go.work</code>; this is exactly the pattern <code>go.work</code> was built to make
+unnecessary going forward)
+(<a href="https://github.com/grpc/grpc-go/blob/master/gcp/observability/go.mod" rel="noopener noreferrer">source</a>).</li>
+</ul>
+<p>The lesson: you do not have to split <em>everything</em>; split precisely at the edges where an optional
+feature drags in a dependency tree the median user does not want. <code>examples/</code> and <code>interop/</code>
+exist purely so <code>go mod graph</code> on the <em>core</em> module stays clean of test/demo scaffolding.</p>
+<p><strong>gocloud.dev (Go CDK) — the negative example: one module, all providers, no escape hatch.</strong>
+Direct inspection of <code>go.mod</code> at the module root confirms <code>module gocloud.dev</code> with over fifty
+direct requires spanning <strong>all three</strong> cloud providers simultaneously — Firestore, Pub/Sub,
+Secret Manager and Cloud Storage clients for GCP; DynamoDB, S3, KMS, SNS/SQS, SSM clients for
+AWS; Service Bus, Blob Storage, Key Vault clients for Azure — plus OpenTelemetry exporters for
+each (<a href="https://raw.githubusercontent.com/google/go-cloud/master/go.mod" rel="noopener noreferrer">raw go.mod</a>). Importing
+<code>gocloud.dev/blob/s3blob</code> alone still resolves the whole module graph, which means <code>go.sum</code>
+carries GCP and Azure SDKs for a user who never touches those clouds. This is precisely the
+outcome dagworker must not reproduce for its storage backends: "vendor-neutral generic API" and
+"one module, pay for everything" are not compatible goals once one of the vendors has a large
+SDK.</p>
+<p><strong>testcontainers-go — module-per-integration, the closest structural analogue to dagworker's
+storage backends.</strong> Confirmed by direct fetch: <code>modules/postgres/go.mod</code> declares
+<code>module github.com/testcontainers/testcontainers-go/modules/postgres</code>, requires the core
+<code>testcontainers-go</code> module plus only its own driver deps (<code>jackc/pgx/v5</code>, <code>lib/pq</code>), and carries
+a <code>replace github.com/testcontainers/testcontainers-go =&gt; ../..</code> for the monorepo checkout
+(<a href="https://raw.githubusercontent.com/testcontainers/testcontainers-go/main/modules/postgres/go.mod" rel="noopener noreferrer">raw go.mod</a>).
+There is one <code>go.mod</code> per database/service integration (<code>modules/redis</code>, <code>modules/kafka</code>,
+<code>modules/localstack</code>, …), each independently tagged <code>modules/postgres/vX.Y.Z</code>, each with its own
+package name matching the directory (<code>package postgres</code>,
+<a href="https://raw.githubusercontent.com/testcontainers/testcontainers-go/main/modules/postgres/postgres.go" rel="noopener noreferrer">confirmed</a>).
+The project additionally ships a code-generation tool (<code>modulegen/</code>) whose job is scaffolding a
+new module's boilerplate (<code>go.mod</code>, README, CI matrix entry) so the marginal cost of adding
+module #40 stays low — worth copying for dagworker once there are 3+ storage backends.</p>
+<p><strong>sigs.k8s.io/controller-runtime — single module, version tied to an external release train.</strong>
+One <code>go.mod</code> for the whole project; semver stays at <code>0.x</code> indefinitely, with minor versions
+released in lockstep with each Kubernetes minor version, and the compatibility matrix (which
+<code>k8s.io/client-go</code> version each controller-runtime minor was tested against) published in the
+README rather than encoded as separate modules. Breaking changes are permitted between <em>minor</em>
+versions while <code>&lt;1.0.0</code> (consistent with semver's v0 clause, discussed in Part 3), and PRs are
+labeled 🐛/✨/⚠️ to flag patch/feature/breaking intent for changelog generation. This is the right
+shape for a project with <strong>one</strong> audience and <strong>one</strong> natural upstream cadence — it is not
+dagworker's shape, because dagworker has <em>several</em> independent optional dependency edges
+(storage backends × adapters), each with its own natural release cadence.</p>
+<h3 id="1-5-firm-recommendation-multi-module-monorepo-deliberately-not-lockstepped">1.5 Firm recommendation: multi-module monorepo, deliberately not lockstepped<a class="anchor" href="#1-5-firm-recommendation-multi-module-monorepo-deliberately-not-lockstepped" aria-label="Link to this section">#</a></h3>
+<p>Given the four case studies, dagworker should be a <strong>multi-module monorepo</strong> with these exact
+<code>go.mod</code> files:</p>
+<pre><code>dag-worker-go/                              (git repo root)
+├── go.mod                 module github.com/specialistvlad/dagworker
+├── go.work                (dev convenience only; not required by consumers)
+├── go.work.sum
+├── engine/, node/, lease/, event/, ...     (core packages, no adapters/redis/pgx/grpc/http)
+│
+├── storage/
+│   ├── redis/
+│   │   └── go.mod         module github.com/specialistvlad/dagworker/storage/redis
+│   ├── postgres/
+│   │   └── go.mod         module github.com/specialistvlad/dagworker/storage/postgres
+│   └── memcached/
+│       └── go.mod         module github.com/specialistvlad/dagworker/storage/memcached
+│
+├── adapters/
+│   ├── grpc/
+│   │   └── go.mod         module github.com/specialistvlad/dagworker/adapters/grpc
+│   │                      (imports core; net/http never appears here)
+│   └── http/
+│       └── go.mod         module github.com/specialistvlad/dagworker/adapters/http
+│                          (imports core; grpc never appears here)
+│
+├── cmd/
+│   └── dagworkerd/
+│       └── go.mod         module github.com/specialistvlad/dagworker/cmd/dagworkerd
+│                          (imports core + one storage backend of choice, at build time,
+│                           + both adapters — this is the ONLY module allowed to import
+│                           everything, and it is the only module most users never `go get`
+│                           as a library — they download a binary release instead)
+│
+├── examples/               (own go.mod, mirrors grpc-go's pattern — keeps demo deps
+│   └── go.mod              out of every real module's graph)
+│
+└── internal/testutil/       (shared by core module's own tests only; not a module)</code></pre>
+<p>Each <code>storage/*</code> and <code>adapters/*</code> module's <code>go.mod</code> should carry a <code>replace</code> back to the sibling
+core module <strong>only</strong> guarded to development via <code>go.work</code> — i.e. no <code>replace</code> line committed in
+any <code>go.mod</code> at all; <code>go.work</code> supplies the local wiring, and released modules resolve each other
+through the module proxy by version, exactly as external consumers do. This is the one place
+dagworker should <em>not</em> imitate the older grpc-go/testcontainers-go pattern of a committed
+<code>replace ... =&gt; ../..</code>: that pattern predates <code>go.work</code> (2022, Go 1.18) and both of those
+examples are older codebases carrying legacy pre-<code>go.work</code> conventions forward. A greenfield
+2026 repo has no reason to.</p>
+<p><strong>Root <code>go.mod</code> (core)</strong> — deliberately minimal, this is the file every "just give me the
+in-process API" user resolves:</p>
+<pre><code class="language-go">module github.com/specialistvlad/dagworker
+
+<span class="tok-kw">go</span> <span class="tok-num">1.23</span>
+
+require (
+	<span class="tok-com">// only stdlib-adjacent, zero-dependency, or near-zero-dependency packages here.</span>
+	<span class="tok-com">// e.g. a UUID/ULID lib, golang.org/x/sync for singleflight/errgroup — audited short list.</span>
+)</code></pre>
+<p><strong><code>storage/redis/go.mod</code>:</strong></p>
+<pre><code class="language-go">module github.com/specialistvlad/dagworker/storage/redis
+
+<span class="tok-kw">go</span> <span class="tok-num">1.23</span>
+
+require (
+	github.com/specialistvlad/dagworker v0<span class="tok-num">.4.0</span>
+	github.com/redis/<span class="tok-kw">go</span>-redis/v9 v9<span class="tok-num">.7.0</span>
+)</code></pre>
+<p><strong><code>adapters/grpc/go.mod</code>:</strong></p>
+<pre><code class="language-go">module github.com/specialistvlad/dagworker/adapters/grpc
+
+<span class="tok-kw">go</span> <span class="tok-num">1.23</span>
+
+require (
+	github.com/specialistvlad/dagworker v0<span class="tok-num">.4.0</span>
+	google.golang.org/grpc v1<span class="tok-num">.68.0</span>
+	google.golang.org/protobuf v1<span class="tok-num">.35.0</span>
+)</code></pre>
+<p><strong><code>cmd/dagworkerd/go.mod</code></strong> is the composition root and the only module allowed to <code>require</code>
+everything above, plus whichever storage backends it ships pre-wired:</p>
+<pre><code class="language-go">module github.com/specialistvlad/dagworker/cmd/dagworkerd
+
+<span class="tok-kw">go</span> <span class="tok-num">1.23</span>
+
+require (
+	github.com/specialistvlad/dagworker v0<span class="tok-num">.4.0</span>
+	github.com/specialistvlad/dagworker/storage/redis v0<span class="tok-num">.2.0</span>
+	github.com/specialistvlad/dagworker/storage/postgres v0<span class="tok-num">.2.0</span>
+	github.com/specialistvlad/dagworker/storage/memcached v0<span class="tok-num">.1.0</span>
+	github.com/specialistvlad/dagworker/adapters/grpc v0<span class="tok-num">.3.0</span>
+	github.com/specialistvlad/dagworker/adapters/http v0<span class="tok-num">.3.0</span>
+)</code></pre>
+<h3 id="1-6-versioning-policy-independent-not-lockstepped-and-why">1.6 Versioning policy: independent, not lockstepped — and why<a class="anchor" href="#1-6-versioning-policy-independent-not-lockstepped-and-why" aria-label="Link to this section">#</a></h3>
+<p>Reject the opentelemetry-go lockstep model. Core, each storage backend, and each adapter get
+<strong>independent semver counters</strong>. Rationale: lockstep exists in OTel because contrib packages
+call <em>unstable internal APIs</em> of the core SDK across a repo boundary, so a core-internal change
+can silently break every contrib package — forcing simultaneous release is a blunt fix for a
+tight coupling problem. dagworker's storage backends and adapters, by design, only call the
+<strong>public</strong> <code>Storage</code>/<code>Transport</code> interface contracts documented elsewhere in this research series
+— that is the whole point of the interface boundary. A public, versioned interface is exactly
+what makes independent versioning safe: <code>storage/redis</code> only needs a new major version when
+<em>dagworker core's <code>Storage</code> interface</em> makes a breaking change, and can otherwise release patch
+fixes for Redis-specific bugs on its own clock, same as <code>aws-sdk-go-v2</code>'s per-service modules.</p>
+<p><strong>Exact tag format</strong> (per <a href="https://go.dev/doc/modules/managing-source" rel="noopener noreferrer">go.dev/doc/modules/managing-source</a>):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Module</th><th>Tag example</th></tr></thead>
+<tbody>
+<tr><td>core (root)</td><td><code>v0.5.0</code></td></tr>
+<tr><td><code>storage/redis</code></td><td><code>storage/redis/v0.2.0</code></td></tr>
+<tr><td><code>storage/postgres</code></td><td><code>storage/postgres/v0.2.0</code></td></tr>
+<tr><td><code>storage/memcached</code></td><td><code>storage/memcached/v0.1.0</code></td></tr>
+<tr><td><code>adapters/grpc</code></td><td><code>adapters/grpc/v0.3.0</code></td></tr>
+<tr><td><code>adapters/http</code></td><td><code>adapters/http/v0.3.0</code></td></tr>
+<tr><td><code>cmd/dagworkerd</code> (binary releases, GoReleaser-driven, see Part 2)</td><td><code>dagworkerd/v0.3.0</code></td></tr>
+</tbody></table></div>
+<p><strong>Exact release procedure</strong> for a change confined to <code>storage/redis</code>:</p>
+<ol>
+<li>Land the PR on <code>main</code> with a Conventional Commit (<code>fix(storage/redis): ...</code> or
+<code>feat(storage/redis): ...</code>, see Part 3 §3.5) scoped to that module.</li>
+<li><code>cd storage/redis &amp;&amp; go test ./... &amp;&amp; go vet ./...</code> — CI already gated this on the PR.</li>
+<li><code>go work sync</code> at the repo root to make sure the workspace's resolved versions match what
+will be tagged (catches "I depended on an unreleased core change" mistakes before tagging).</li>
+<li>Tag: <code>git tag storage/redis/v0.2.1 &amp;&amp; git push origin storage/redis/v0.2.1</code>.</li>
+<li>The module proxy (<code>proxy.golang.org</code>) picks up the new tag automatically the first time
+anyone requests it; no separate publish step exists for Go modules (unlike npm/PyPI) —
+<code>go get github.com/specialistvlad/dagworker/storage/redis@v0.2.1</code> is the "publish."</li>
+<li>Update that module's own <code>CHANGELOG.md</code> (Part 3) in the same commit that gets tagged.</li>
+</ol>
+<p>For a <strong>core</strong> change that is a breaking change to the <code>Storage</code> interface, the sequence adds a
+compatibility step before any dependent module can move: tag core first (<code>v0.6.0</code> or <code>v1.0.0</code> if
+crossing the v0→v1 boundary, requiring the <code>/v2</code>-style path bump only from v2 onward per §1.2),
+then bump each storage/adapter module's <code>require</code> line for core and release <em>those</em> as their own
+next minor/patch, on their own schedule — there is no requirement that they all move the same
+day, unlike OTel.</p>
+<h3 id="1-7-the-go-get-ux-pain-named-explicitly">1.7 The <code>go get</code> UX pain, named explicitly<a class="anchor" href="#1-7-the-go-get-ux-pain-named-explicitly" aria-label="Link to this section">#</a></h3>
+<p>Because each nested module has an independent version, <code>go get github.com/specialistvlad/dagworker</code>
+<strong>only ever fetches the root/core module</strong> — it does not pull in storage or adapter modules,
+which is the intended effect but surprises first-time users who expect "the library" to be one
+<code>go get</code>. The README (Part 3) must show three copy-pasteable <code>go get</code> lines up front:</p>
+<pre><code class="language-bash">go get github.com/specialistvlad/dagworker                       <span class="tok-com"># core, always</span>
+go get github.com/specialistvlad/dagworker/storage/redis          <span class="tok-com"># only if using Redis storage</span>
+go get github.com/specialistvlad/dagworker/adapters/grpc           <span class="tok-com"># only if embedding the gRPC adapter yourself</span></code></pre>
+<p>A second, sharper pain: <code>go get ./...</code>-style "upgrade everything" workflows do not span module
+boundaries — a contributor inside the monorepo runs <code>go get -u</code> per module directory (or lets
+<code>go work sync</code> reconcile), and <code>go mod tidy</code> must be run <strong>inside each module directory</strong>
+separately in CI, not once at the repo root. The CI matrix should therefore be
+<code>for d in . storage/redis storage/postgres storage/memcached adapters/grpc adapters/http cmd/dagworkerd examples; do (cd $d &amp;&amp; go build ./... &amp;&amp; go vet ./... &amp;&amp; go test ./...); done</code>
+rather than a single root-level invocation — root-level <code>go test ./...</code> silently skips every
+nested module because each one is a separate main module Go's tool does not descend into.</p>
+<hr>
+<h2 id="part-2-the-daemon">Part 2 — The daemon<a class="anchor" href="#part-2-the-daemon" aria-label="Link to this section">#</a></h2>
+<p><code>dagworkerd</code> is a thin composition-root binary: parse config → construct a core <code>Engine</code> bound
+to one configured storage backend → attach the gRPC adapter and/or the HTTP adapter → serve →
+handle signals → shut down in order. Nothing adapter-specific belongs in core; nothing
+daemon-specific (flags, env parsing, <code>log/slog</code> handler wiring) belongs in the adapters, which
+should accept an already-constructed <code>*slog.Logger</code> and already-parsed config struct so they stay
+usable when embedded directly into someone else's binary without <code>dagworkerd</code> at all.</p>
+<h3 id="2-1-configuration-flags-env-or-file-recommend-layered-env-primary-with-flag-override">2.1 Configuration: flags, env, or file — recommend layered, env-primary with flag override<a class="anchor" href="#2-1-configuration-flags-env-or-file-recommend-layered-env-primary-with-flag-override" aria-label="Link to this section">#</a></h3>
+<p><strong>The 12-factor argument for env vars</strong>, stated by the source itself:</p>
+<blockquote>
+<p>"Env vars are a language- and OS-agnostic standard" … "Unlike config files, there is little
+chance of them being checked into the code repo accidentally" (<a href="https://12factor.net/config" rel="noopener noreferrer">12factor.net/config</a>)</p>
+</blockquote>
+<p>This is a strong argument specifically for <em>secrets and per-deployment values</em> (DB DSN, Redis
+address, log level) because it decouples the artifact (one container image) from the environment
+it runs in — the same image is promoted staging→prod by changing env, not by rebuilding with a
+different baked-in file.</p>
+<p><strong>The critique, sourced.</strong> The 12-factor argument is about deployment portability, not about
+security or structure, and both are real costs:</p>
+<ul>
+<li><strong>Structural</strong>: env vars are flat key=string; there is no native way to express "three
+configured storage backends with per-backend TTLs" without inventing a delimiter-encoded
+mini-language or numbered <code>BACKEND_0_KIND</code>, <code>BACKEND_1_KIND</code> env vars — exactly the kind of
+config dagworker needs (multiple named scopes, per-scope retry policy). A structured file
+(YAML/TOML) or repeated flags express this natively.</li>
+<li><strong>Security exposure, sourced from OWASP's Secrets Management Cheat Sheet</strong>: "environment
+variables are generally accessible to all processes and may be included in logs or system
+dumps. Using environment variables is therefore not recommended unless the other methods are
+not possible," and Docker-specific: "secrets themselves should never be hardcoded using docker
+ENV or docker ARG commands, as these can easily leak with the container definitions"
+(<a href="https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html" rel="noopener noreferrer">OWASP Secrets Management Cheat Sheet</a>).
+A process's full environment is legible to any co-located process with the right privilege
+(<code>/proc/&lt;pid&gt;/environ</code> on Linux), to <code>docker inspect</code>, and to crash-reporting tooling that
+dumps environment blocks by default — none of which is true of a value passed only as a CLI
+flag scoped to the process's own argv, and none of which is true of a file with restrictive
+filesystem permissions mounted read-only.</li>
+</ul>
+<p><strong>Recommendation for <code>dagworkerd</code>: three-layer precedence, flag &gt; env &gt; file &gt; built-in
+default</strong>, mirroring how Prometheus, etcd, and most well-regarded Go infra binaries actually
+ship (all three accept a <code>--config.file</code> plus env overrides plus flags, with flags winning):</p>
+<ol>
+<li><strong>File</strong> (<code>--config /etc/dagworkerd/config.yaml</code>, optional) carries the shape that has
+structure: named scopes, per-scope storage selection, retry policy, adapter enable/disable,
+TLS material paths. Loaded first, lowest precedence.</li>
+<li><strong>Environment variables</strong> (<code>DAGWORKERD_STORAGE_KIND=redis</code>, <code>DAGWORKERD_REDIS_ADDR=...</code>)
+override file values — this is what makes one built image portable across environments
+without a config-file diff per environment, honoring the 12-factor promotion argument.</li>
+<li><strong>Flags</strong> (<code>--storage-kind=redis</code>, <code>--grpc-addr=:9090</code>) override both — flags win because
+they are the most explicit, most visible-in-<code>ps</code>/systemd-unit-file expression of intent, and
+are what an operator types by hand when debugging ("just this once, use verbose logging":
+<code>--log-level=debug</code> should not require editing a file or exporting an env var).</li>
+</ol>
+<p>Concretely, use <code>flag.FlagSet</code> plus <code>os.LookupEnv</code> fallback per flag (no reflection-based env
+binding library needed at this scope — a ~15-flag surface does not justify a dependency), and a
+single <code>Config</code> struct with a <code>LoadFile(path string) (Config, error)</code> that a plain YAML decode
+populates before flags/env are applied on top. Secrets (DSNs, TLS keys) should be <strong>file-path
+flags/env</strong>, not value flags/env — <code>--redis-password-file=/run/secrets/redis_password</code> — so the
+secret itself never appears in <code>ps</code>, shell history, or the process environment block, addressing
+the OWASP concern directly rather than arguing it away.</p>
+<h3 id="2-2-structured-logging-with-log-slog">2.2 Structured logging with <code>log/slog</code><a class="anchor" href="#2-2-structured-logging-with-log-slog" aria-label="Link to this section">#</a></h3>
+<p><code>dagworkerd</code> should construct exactly one root <code>*slog.Logger</code> at startup from <code>--log-format</code>
+(<code>text</code>|<code>json</code>, default <code>json</code> for anything that isn't an interactive TTY) and <code>--log-level</code>
+(<code>debug</code>|<code>info</code>|<code>warn</code>|<code>error</code>), then pass it down explicitly — never <code>slog.SetDefault</code> inside a
+library package, only in <code>main()</code>. Every request/claim/lease-expiry log line should carry
+structured fields (<code>node_id</code>, <code>scope</code>, <code>fencing_token</code>, <code>worker_id</code>) via <code>slog.Group</code> or
+attached <code>slog.Attr</code>s so log aggregators can filter without regexing message strings — this is
+the entire reason <code>log/slog</code> exists over <code>log.Printf</code>. A per-request/per-claim
+<code>logger.With("trace_id", ...)</code> child logger threaded through <code>context.Context</code> (via a private
+context key, exposed by a <code>logctx.From(ctx)</code> helper) keeps call sites from re-stating fields.</p>
+<h3 id="2-3-health-vs-readiness-why-they-are-different-endpoints-sourced">2.3 Health vs readiness — why they are different endpoints, sourced<a class="anchor" href="#2-3-health-vs-readiness-why-they-are-different-endpoints-sourced" aria-label="Link to this section">#</a></h3>
+<p>Kubernetes (and any sane LB health-check config) treats these as answering different questions
+with different consequences on failure:</p>
+<blockquote>
+<p>Liveness: "detect and remedy" a container stuck in "broken states [that] cannot recover except
+by being restarted" — <strong>failure restarts the container.</strong>
+Readiness: determines "if the container is ready to accept traffic" — <strong>failure removes the
+Pod from Service endpoints without restarting it.</strong>
+(<a href="https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/" rel="noopener noreferrer">kubernetes.io — configure liveness/readiness/startup probes</a>)</p>
+</blockquote>
+<p>Concretely for <code>dagworkerd</code>:</p>
+<ul>
+<li><code>GET /healthz</code> (liveness) should check only "is the process's own event loop alive" —
+essentially a no-op 200 unless a goroutine deadlock/panic-recovery counter has tripped a
+circuit. It must <strong>not</strong> depend on the storage backend being reachable — if Redis is briefly
+down, restarting <code>dagworkerd</code> fixes nothing and just causes a crash-loop; the process itself is
+fine.</li>
+<li><code>GET /readyz</code> (readiness) <strong>should</strong> depend on storage reachability (a cheap <code>PING</code>/roundtrip
+against the configured backend) plus "has this replica finished its startup subscribe-to-event-
+bus handshake." Failing <code>/readyz</code> pulls the replica out of the load-balancer rotation for gRPC/
+HTTP claim traffic without killing the process, so it stops being handed new claims while
+letting existing leases it holds continue to be tracked.</li>
+<li>For the gRPC adapter specifically, implement the <strong>standard gRPC health checking protocol</strong>
+(<code>grpc.health.v1.Health</code>) rather than a bespoke health RPC, because that is what
+gRPC-aware load balancers and service meshes (Envoy, Linkerd, gRPC's own client-side LB) know
+how to call natively: a unary <code>Check(service string) ServingStatus</code> plus a streaming <code>Watch</code>
+that "immediately send[s] back a message indicating the current serving status" and pushes
+updates thereafter, with <code>ServingStatus</code> ∈ <code>{UNKNOWN, SERVING, NOT_SERVING, SERVICE_UNKNOWN}</code>
+(<a href="https://github.com/grpc/grpc/blob/master/doc/health-checking.md" rel="noopener noreferrer">grpc/grpc health-checking.md</a>).
+Register the dagworker gRPC service name against this and flip it to <code>NOT_SERVING</code> in lockstep
+with <code>/readyz</code> failing on the HTTP side, from one shared internal readiness flag.</li>
+<li>A concrete real precedent for keeping liveness/readiness as separate named checker sets inside
+one process is <code>sigs.k8s.io/controller-runtime</code>'s manager: a <code>Checker</code> is just
+<code>func(req *http.Request) error</code>, and the manager mounts distinct <code>Handler</code>s — "often referred
+to as healthz and readyz" — each aggregating its own named checkers
+(<a href="https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/healthz" rel="noopener noreferrer">pkg.go.dev/.../pkg/healthz</a>).
+Copy that shape: <code>dagworkerd</code> registers named checkers (<code>"storage"</code>, <code>"eventbus"</code>) into a
+readiness aggregator, and a trivial always-true (or panic-recovery-gated) checker into liveness.</li>
+</ul>
+<h3 id="2-4-graceful-shutdown-ordering-and-the-lease-specific-argument">2.4 Graceful shutdown ordering — and the lease-specific argument<a class="anchor" href="#2-4-graceful-shutdown-ordering-and-the-lease-specific-argument" aria-label="Link to this section">#</a></h3>
+<p><code>net/http.Server.Shutdown</code> defines the textbook order for the HTTP side: "first closing all open
+listeners, then closing all idle connections, and then waiting indefinitely for connections to
+return to idle" (<a href="https://pkg.go.dev/net/http#Server.Shutdown" rel="noopener noreferrer">pkg.go.dev/net/http#Server.Shutdown</a>) —
+i.e. <strong>stop accepting new work before draining existing work</strong>, never the reverse (draining first
+would let new connections race in while old ones finish, and shutdown never converges). gRPC's
+<code>GracefulStop</code> follows the identical shape. dagworkerd's shutdown sequence should be, in order:</p>
+<ol>
+<li><strong>Flip <code>/readyz</code> to failing immediately</strong> on receipt of the shutdown signal — this is a
+cheap, instant "stop routing new traffic to me" signal to the load balancer that happens
+<em>before</em> anything else, because LB health-check polling intervals (typically 2-10s) mean
+there is a window between "readiness fails" and "LB actually stops sending," so starting this
+clock first is free latency-hiding for every later step.</li>
+<li><strong>Stop accepting new CLAIM RPCs/HTTP requests</strong> — call <code>grpcServer.GracefulStop()</code> and
+<code>httpServer.Shutdown(ctx)</code> for the claim-issuing endpoints specifically (not the health
+endpoint, which must keep answering <code>/healthz</code>=alive/<code>/readyz</code>=not-ready during the drain so
+the orchestrator doesn't kill the process mid-drain thinking it's dead).</li>
+<li><strong>Let in-flight claim/ack/heartbeat RPCs already accepted finish naturally</strong> — these are
+short (single round-trip), bounded by the adapter's own request timeout, and forcibly cutting
+them mid-flight would turn a clean ack into a lost ack, needlessly triggering the lease-
+timeout failure path for a worker that in fact succeeded.</li>
+<li><strong>Explicitly release (not merely stop tracking) any leases this replica currently holds
+ownership bookkeeping for, within the shutdown grace window — do not just let them ride out
+to their natural lease-timeout expiry.</strong> This is the one dagworker-specific decision this
+dossier takes a firm position on, and the reasoning is:
+<ul>
+<li>A lease's timeout is sized for <em>worker</em> stalls (seconds to minutes, chosen by the workload),
+not for <em>dagworkerd replica</em> restarts, which orchestrators budget in a much shorter, fixed
+window: Kubernetes' default <code>terminationGracePeriodSeconds</code> is 30 seconds, after which
+SIGKILL is sent regardless of process state (<a href="https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/#pod-termination" rel="noopener noreferrer">kubernetes.io — pod lifecycle: pod
+termination</a>).
+If lease timeouts are typically longer than 30s (a very plausible worst case for e.g. a
+lease sized for a slow batch job), passively waiting for lease-timeout expiry means the node
+sits <strong>claimed-but-orphaned</strong> for the full lease duration after the replica is already gone
+— that's dead time no other replica can claim the node in, directly hurting the "work is
+available" latency the whole subscriber design exists to minimize (see event-bus research).</li>
+<li>The daemon already knows, in memory, exactly which fencing tokens/nodes it is the lease-
+holder of record for (or can ask the storage backend "leases fenced by instance ID X").
+Actively transitioning those nodes back to claimable — the same code path the lease-timeout
+background sweep already uses — during the shutdown grace window converts an unbounded
+"wait for the passive timeout" cost into a bounded "wait up to
+<code>min(shutdownGracePeriod, remaining-lease-time)</code> cost, which is strictly better for cluster
+availability and costs nothing extra: it is calling code that already exists.</li>
+<li>The one caveat this recommendation must carry: only release a lease if the replica can
+prove the worker's in-flight ack is <em>not</em> about to land — i.e. run step 3 (drain in-flight
+RPCs) to completion <strong>before</strong> step 4 (release remaining leases), so a worker's ack that was
+already accepted and is in flight gets to complete and mark the node success/error normally,
+and only the leases with <strong>no</strong> in-flight ack at drain-completion get force-released. Get
+the ordering (3 then 4) wrong and you'll release a lease out from under a worker's ack that
+was about to land, handing the fencing token to a second claimant while the first worker's
+ack is still traveling — that's the exact double-claim scenario the fencing token exists to
+prevent (see the leases/fencing research file for the full argument).</li>
+</ul>
+</li>
+<li><strong>Close the storage client / event-bus subscription</strong> last, after 1-4, so the release calls
+in step 4 can actually reach storage.</li>
+<li><strong>Call <code>stop()</code></strong> on the <code>signal.NotifyContext</code> cancel func to restore default OS signal
+handling before exit, releasing the resource (idiomatic per the stdlib doc, "should be called
+as soon as [it is] no longer needed").</li>
+</ol>
+<h3 id="2-5-signal-handling-with-signal-notifycontext">2.5 Signal handling with <code>signal.NotifyContext</code><a class="anchor" href="#2-5-signal-handling-with-signal-notifycontext" aria-label="Link to this section">#</a></h3>
+<p>Exact stdlib signature and behavior:</p>
+<pre><code class="language-go"><span class="tok-kw">func</span> NotifyContext(parent context.Context, signals ...os.Signal) (ctx context.Context, stop context.CancelFunc)</code></pre>
+<p>"returns a copy of the parent context that is marked done ... when one of the listed signals
+arrives, when the returned stop function is called, or when the parent context's Done channel is
+closed, whichever happens first" (<a href="https://pkg.go.dev/os/signal#NotifyContext" rel="noopener noreferrer">pkg.go.dev/os/signal#NotifyContext</a>).
+Wire it as the top of <code>main()</code>:</p>
+<pre><code class="language-go">ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+<span class="tok-kw">defer</span> stop()
+
+srv := newServer(cfg, logger)
+<span class="tok-kw">go</span> <span class="tok-kw">func</span>() {
+    <span class="tok-kw">if</span> err := srv.Run(ctx); err != <span class="tok-kw">nil</span> {
+        logger.Error(<span class="tok-str">"server exited with error"</span>, <span class="tok-str">"err"</span>, err)
+    }
+}()
+
+&lt;-ctx.Done()
+stop() <span class="tok-com">// restore default signal behavior so a second SIGTERM/SIGINT force-kills</span>
+shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownGracePeriod)
+<span class="tok-kw">defer</span> cancel()
+srv.Shutdown(shutdownCtx) <span class="tok-com">// runs the ordered sequence in §2.4</span></code></pre>
+<p>Note the <code>stop()</code> call the moment <code>ctx.Done()</code> fires, before starting the bounded shutdown
+timer — this deliberately restores default signal disposition so that an operator's <em>second</em>
+Ctrl-C/SIGTERM (impatience, or a stuck shutdown) terminates the process immediately instead of
+being silently absorbed by a context that's already cancelled — a well-known rough edge of naive
+"cancel on signal" code that only registers the handler once.</p>
+<h3 id="2-6-metrics-red-use-and-the-exact-set-for-a-work-dispatcher">2.6 Metrics: RED + USE, and the exact set for a work dispatcher<a class="anchor" href="#2-6-metrics-red-use-and-the-exact-set-for-a-work-dispatcher" aria-label="Link to this section">#</a></h3>
+<p><strong>RED method</strong> (for anything that serves requests — dagworkerd's claim/ack RPCs): <strong>R</strong>ate,
+<strong>E</strong>rrors, <strong>D</strong>uration — per Tom Wilkie's formulation, tracking these three per request type
+gives you the leading indicator of user-facing service health.</p>
+<p><strong>USE method</strong> (for the resources dagworkerd's request handling depends on — CPU, the ready-set,
+lease bookkeeping): <strong>U</strong>tilization ("the average time that the resource was busy"),
+<strong>S</strong>aturation ("the degree to which a resource has ... work it cannot immediately service,"
+typically a queue length), <strong>E</strong>rrors ("the count of error events")
+(<a href="https://www.brendangregg.com/usemethod.html" rel="noopener noreferrer">brendangregg.com/usemethod.html</a>). USE is the
+right lens specifically for the ready-set and the lease-expiry sweep because both are
+queue-shaped resources, not request-shaped ones.</p>
+<p><strong>Exact metric set to expose</strong> (Prometheus naming rules applied throughout: base unit <code>seconds</code>
+not <code>ms</code>, <code>_total</code> suffix on every monotonic counter, ratios in <code>[0,1]</code> not percent, no label
+baked into the metric name — "Do not put the label names in the metric name... use labels" per
+<a href="https://prometheus.io/docs/practices/naming/" rel="noopener noreferrer">prometheus.io/docs/practices/naming</a>):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Metric</th><th>Type</th><th>Labels</th><th>Method</th></tr></thead>
+<tbody>
+<tr><td><code>dagworkerd_claims_total</code></td><td>Counter</td><td><code>scope</code>, <code>outcome={claimed,empty,error}</code></td><td>RED-Rate/Errors</td></tr>
+<tr><td><code>dagworkerd_acks_total</code></td><td>Counter</td><td><code>scope</code>, <code>outcome={success,error,timeout}</code></td><td>RED-Rate/Errors</td></tr>
+<tr><td><code>dagworkerd_claim_duration_seconds</code></td><td>Histogram</td><td><code>scope</code>, <code>transport={grpc,http}</code></td><td>RED-Duration</td></tr>
+<tr><td><code>dagworkerd_ack_duration_seconds</code></td><td>Histogram</td><td><code>scope</code>, <code>transport</code></td><td>RED-Duration</td></tr>
+<tr><td><code>dagworkerd_rpc_requests_total</code></td><td>Counter</td><td><code>rpc</code>, <code>code</code> (gRPC status / HTTP status class)</td><td>RED (transport-level)</td></tr>
+<tr><td><code>dagworkerd_ready_set_size</code></td><td>Gauge</td><td><code>scope</code></td><td>USE-Saturation (ready-set depth)</td></tr>
+<tr><td><code>dagworkerd_queue_depth</code></td><td>Gauge</td><td><code>scope</code>, <code>state={pending,blocked-by-deps}</code></td><td>USE-Saturation</td></tr>
+<tr><td><code>dagworkerd_lease_expiries_total</code></td><td>Counter</td><td><code>scope</code>, <code>reason={timeout,released-on-shutdown}</code></td><td>USE-Errors (a lease expiry is a failure mode)</td></tr>
+<tr><td><code>dagworkerd_oldest_ready_node_age_seconds</code></td><td>Gauge</td><td><code>scope</code></td><td>USE-Saturation, leading indicator of worker starvation</td></tr>
+<tr><td><code>dagworkerd_storage_op_duration_seconds</code></td><td>Histogram</td><td><code>op</code>, <code>backend</code></td><td>USE-Utilization proxy for the storage dependency</td></tr>
+<tr><td><code>dagworkerd_active_leases</code></td><td>Gauge</td><td><code>scope</code></td><td>USE-Utilization (how much of the "in-flight capacity" is occupied)</td></tr>
+<tr><td><code>dagworkerd_up</code></td><td>Gauge (1/0)</td><td>—</td><td>trivial liveness-as-metric for dashboards, mirrors <code>/healthz</code></td></tr>
+</tbody></table></div>
+<p>A <strong>Histogram</strong>, not a Summary, for durations: Prometheus histograms expose
+<code>&lt;name&gt;_bucket{le="..."}</code>, <code>&lt;name&gt;_sum</code>, <code>&lt;name&gt;_count</code> and support <code>histogram_quantile()</code>
+aggregation <em>across replicas</em> server-side at query time, whereas a Summary's φ-quantiles are
+computed client-side per-process and <strong>cannot be meaningfully averaged/aggregated across
+instances</strong> (<a href="https://prometheus.io/docs/concepts/metric_types/" rel="noopener noreferrer">prometheus.io/docs/concepts/metric_types</a>)
+— with N replicas of <code>dagworkerd</code> behind a load balancer (the deployment model this whole daemon
+targets, §2.9), histogram is the only correct choice for latency SLO dashboards.</p>
+<p>Register via <code>prometheus/client_golang</code>'s <code>promauto</code>, expose on <code>GET /metrics</code> on the <strong>same</strong>
+internal-only admin port as <code>/healthz</code>/<code>/readyz</code>/<code>pprof</code> (§2.7) — never the public claim-serving
+port, both to keep the public wire surface minimal and because metrics scraping should not
+compete with worker traffic for the same listener's accept queue.</p>
+<p>OpenTelemetry's own metric-naming guidance generalizes the same principle across vendors:
+dot-namespaced hierarchical names, units carried in instrument metadata rather than jammed into
+the name when the framework already tracks units, and counters/histograms/gauges chosen by what
+the value semantically is, not by what's convenient to compute
+(<a href="https://opentelemetry.io/docs/specs/semconv/general/metrics/" rel="noopener noreferrer">opentelemetry.io semantic conventions — general metrics</a>).
+If dagworkerd ships an OTel exporter, that's naming discipline is <code>dagworker.claims</code>
+(counter, unit <code>{claim}</code>) / <code>dagworker.claim.duration</code> (histogram, unit <code>s</code>) etc., but Prometheus
+exposition format remains the pragmatic default given the operator ecosystem this daemon targets.</p>
+<h3 id="2-7-pprof-behind-a-flag-on-a-separate-listener">2.7 pprof behind a flag, on a separate listener<a class="anchor" href="#2-7-pprof-behind-a-flag-on-a-separate-listener" aria-label="Link to this section">#</a></h3>
+<p><code>net/http/pprof</code>'s own doc states it "is typically only imported for the side effect of
+registering its HTTP handlers" on <code>http.DefaultServeMux</code>
+(<a href="https://pkg.go.dev/net/http/pprof" rel="noopener noreferrer">pkg.go.dev/net/http/pprof</a>) — which is exactly the trap to
+avoid: importing it for side effects anywhere near the binary's main package silently exposes
+<code>/debug/pprof/*</code> (including a 30-second blocking CPU profile trigger, and full heap dumps that
+can leak sensitive data resident in memory) on whatever port <code>DefaultServeMux</code> happens to be
+served on. Correct pattern for dagworkerd:</p>
+<pre><code class="language-go"><span class="tok-com">// admin.go — never imports net/http/pprof at package scope unconditionally</span>
+<span class="tok-kw">func</span> newAdminMux(cfg Config) *http.ServeMux {
+    mux := http.NewServeMux()
+    mux.HandleFunc(<span class="tok-str">"/healthz"</span>, healthzHandler)
+    mux.HandleFunc(<span class="tok-str">"/readyz"</span>, readyzHandler)
+    mux.Handle(<span class="tok-str">"/metrics"</span>, promhttp.Handler())
+    <span class="tok-kw">if</span> cfg.PprofEnabled { <span class="tok-com">// --admin-pprof=true, default false</span>
+        mux.HandleFunc(<span class="tok-str">"/debug/pprof/"</span>, pprof.Index)
+        mux.HandleFunc(<span class="tok-str">"/debug/pprof/cmdline"</span>, pprof.Cmdline)
+        mux.HandleFunc(<span class="tok-str">"/debug/pprof/profile"</span>, pprof.Profile)
+        mux.HandleFunc(<span class="tok-str">"/debug/pprof/symbol"</span>, pprof.Symbol)
+        mux.HandleFunc(<span class="tok-str">"/debug/pprof/trace"</span>, pprof.Trace)
+    }
+    <span class="tok-kw">return</span> mux
+}</code></pre>
+<p>served on a distinct <code>--admin-addr</code> (default <code>127.0.0.1:9091</code>, deliberately loopback-only by
+default so a misconfigured <code>0.0.0.0</code> bind requires an explicit operator choice) — separate from
+<code>--grpc-addr</code>/<code>--http-addr</code>, which is the whole point: the admin surface's threat model and
+audience (operators, Prometheus scraper, the orchestrator's health checker) is different from the
+claim-serving surface's (arbitrary worker processes, potentially cross-network, cross-org for the
+"casual HTTP consumers" the assignment explicitly names).</p>
+<h3 id="2-8-container-image-distroless-static-multi-arch">2.8 Container image: distroless, static, multi-arch<a class="anchor" href="#2-8-container-image-distroless-static-multi-arch" aria-label="Link to this section">#</a></h3>
+<p>Build fully static (no libc dependency at all, so <code>scratch</code>/<code>distroless/static</code> both work):</p>
+<pre><code class="language-dockerfile"># syntax=docker/dockerfile:1
+FROM --platform=$BUILDPLATFORM golang:1.23 AS build
+ARG TARGETOS TARGETARCH
+WORKDIR /src
+COPY . .
+RUN cd cmd/dagworkerd &amp;&amp; \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w" -o /out/dagworkerd .
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/dagworkerd /dagworkerd
+USER nonroot:nonroot
+ENTRYPOINT ["/dagworkerd"]</code></pre>
+<ul>
+<li><code>CGO_ENABLED=0</code> guarantees a statically-linked binary with no glibc/musl dynamic dependency —
+required for both <code>scratch</code> and <code>distroless/static</code> to work at all, since neither image ships a
+dynamic linker.</li>
+<li><code>-trimpath</code>: "remove all file system paths from the resulting executable... the recorded file
+names will begin [with] a module path@version... instead of absolute file system paths" —
+both a reproducibility win (build path no longer leaks into the binary, so two builds on two
+different checkout directories produce identical bytes) and a minor information-disclosure
+closure (no local username/directory structure embedded in stack traces)
+(<a href="https://pkg.go.dev/cmd/go" rel="noopener noreferrer">pkg.go.dev/cmd/go</a>).</li>
+<li><code>distroless/static-debian12</code> over bare <code>scratch</code>: distroless additionally ships CA certificates
+and <code>/etc/passwd</code> with a <code>nonroot</code> (UID 65532) entry pre-defined, needed the moment dagworkerd
+dials out over TLS (to a managed Redis/Postgres) or the operator wants to run as non-root by
+name rather than raw UID — <code>scratch</code> has neither, at roughly 2MB vs distroless's similarly tiny
+footprint (documented as "very small... roughly 50% of alpine's size"). Only drop to bare
+<code>scratch</code> if the deployment never needs outbound TLS and never needs a shell for <code>kubectl exec</code>
+debugging (distroless intentionally ships no shell either, but has a <code>:debug</code> variant with
+busybox for exactly that need — use <code>distroless/static-debian12:debug</code> in a
+troubleshooting-tagged image if this bites operators)
+(<a href="https://github.com/GoogleContainerTools/distroless" rel="noopener noreferrer">GoogleContainerTools/distroless</a>).</li>
+<li>Multi-arch via <code>docker buildx build --platform linux/amd64,linux/arm64 -t ... --push .</code>, or
+equivalently via goreleaser's Docker pipeline, which "creates a manifest that intelligently
+serves the correct image based on the client's platform" through <code>docker_manifests</code>, and can
+drive <code>buildx</code> directly (<code>backend: buildx</code>) rather than the classic <code>docker build</code>
+(<a href="https://goreleaser.com/customization/docker/" rel="noopener noreferrer">goreleaser.com/customization/docker</a>).</li>
+<li><code>-buildvcs=auto</code> (the default) stamps VCS revision info into the binary
+automatically whenever the build directory is a clean checkout of the module's own repo
+(<a href="https://pkg.go.dev/cmd/go" rel="noopener noreferrer">pkg.go.dev/cmd/go</a>) — leave this on for release builds (it's what
+<code>dagworkerd --version</code> should print), but note it is orthogonal to <code>-trimpath</code> (paths are
+still trimmed; only the VCS <em>revision string</em>, not filesystem paths, is embedded).</li>
+</ul>
+<h3 id="2-9-multiple-replicas-behind-a-load-balancer">2.9 Multiple replicas behind a load balancer<a class="anchor" href="#2-9-multiple-replicas-behind-a-load-balancer" aria-label="Link to this section">#</a></h3>
+<p>Because leases and the ready-set live in shared storage (not in-process), <code>dagworkerd</code> replicas
+are stateless from the load balancer's point of view and horizontally scale trivially:</p>
+<ul>
+<li><strong>gRPC</strong>: prefer client-side or proxy-based load balancing (Envoy/Linkerd/gRPC's own
+<code>round_robin</code> resolver) over an L4/TCP load balancer, since a single long-lived HTTP/2
+connection multiplexes many RPCs and an L4 LB would pin all of one worker's claims to whichever
+replica it first connected to — defeating the point of running N replicas. The gRPC health
+protocol from §2.3 is what a gRPC-aware LB polls to pull a draining replica out of rotation.</li>
+<li><strong>HTTP/JSON</strong>: a conventional L7 LB (ALB/NLB/Envoy/nginx) with <code>/readyz</code> as the health-check
+path works directly — HTTP/1.1 or short-lived HTTP/2 requests don't have gRPC's connection-
+pinning problem.</li>
+<li>Both transports' replicas should share one <code>--admin-addr</code> convention but each replica's
+<code>/metrics</code> needs distinct instance identity (a <code>instance</code> label, typically pod name/hostname)
+in the scrape config so Prometheus can distinguish replicas — every gauge in §2.6's table
+should be read per-instance and summed/maxed at query time (<code>sum by (scope) (...)</code> for
+<code>dagworkerd_ready_set_size</code> since it reflects shared storage state, not per-instance state —
+actually most of these gauges reflect <strong>shared</strong> storage-backed truth, so scraping N replicas
+will show the <em>same</em> value N times for scope-level gauges like ready-set size; only
+<code>dagworkerd_active_leases</code> and RPC-rate counters are genuinely per-instance. Document this
+distinction in the metrics doc so nobody double-counts a shared gauge across replicas.)</li>
+</ul>
+<hr>
+<h2 id="part-3-oss-project-mechanics">Part 3 — OSS project mechanics<a class="anchor" href="#part-3-oss-project-mechanics" aria-label="Link to this section">#</a></h2>
+<h3 id="3-1-the-files-that-must-exist-and-why">3.1 The files that must exist, and why<a class="anchor" href="#3-1-the-files-that-must-exist-and-why" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>File</th><th>Purpose</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>LICENSE</code></td><td>MIT text, unmodified</td><td>Copyright line <code>Copyright (c) 2026 &lt;name&gt;</code></td></tr>
+<tr><td><code>README.md</code></td><td>Converts a skimmer to a user (§3.8)</td><td>Root, always rendered first on GitHub/pkg.go.dev</td></tr>
+<tr><td><code>CONTRIBUTING.md</code></td><td>How to build/test/PR</td><td>Link from README, don't duplicate</td></tr>
+<tr><td><code>CODE_OF_CONDUCT.md</code></td><td>Contributor Covenant v2.1, unmodified except contact email</td><td>Sections: Our Pledge, Our Standards, Enforcement Responsibilities, Scope, Enforcement, Enforcement Guidelines (4-tier: Correction/Warning/Temporary Ban/Permanent Ban), Attribution (<a href="https://www.contributor-covenant.org/version/2/1/code_of_conduct/" rel="noopener noreferrer">contributor-covenant.org/version/2/1</a>)</td></tr>
+<tr><td><code>SECURITY.md</code></td><td>Private vulnerability-reporting channel</td><td>GitHub surfaces this under the repo's Security tab → "Security policy," and can auto-populate a stub via the UI (<a href="https://docs.github.com/en/code-security/getting-started/adding-a-security-policy-to-your-repository" rel="noopener noreferrer">docs.github.com — adding a security policy</a>); enable GitHub's <strong>private vulnerability reporting</strong> feature so reporters don't have to email anything</td></tr>
+<tr><td><code>CHANGELOG.md</code> (one per module, per §1.6)</td><td>Human-readable release history</td><td>Keep a Changelog format exactly (§3.4)</td></tr>
+<tr><td><code>.editorconfig</code></td><td>Cross-editor whitespace consistency</td><td>See exact contents below</td></tr>
+<tr><td><code>CODEOWNERS</code> (in <code>.github/</code>)</td><td>Auto-request reviewers per path</td><td>gitignore-style patterns, last match wins, no negation/char-ranges support (<a href="https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners" rel="noopener noreferrer">docs.github.com — about code owners</a>)</td></tr>
+<tr><td><code>.github/ISSUE_TEMPLATE/bug_report.yml</code>, <code>feature_request.yml</code></td><td>Structured intake</td><td>YAML form templates render as a real form, not free-text markdown</td></tr>
+<tr><td><code>.github/PULL_REQUEST_TEMPLATE.md</code></td><td>Checklist: tests added, CHANGELOG updated, ADR updated if behavior changed</td><td></td></tr>
+<tr><td><code>.github/dependabot.yml</code></td><td>Automated dependency PRs</td><td>One entry per module directory (§3.6)</td></tr>
+<tr><td><code>.github/workflows/{ci,codeql,scorecard,release}.yml</code></td><td>CI, static analysis, supply-chain scoring, release automation</td><td>§3.6-3.9</td></tr>
+<tr><td><code>doc.go</code> (per package)</td><td>Package-level godoc</td><td>§3.7</td></tr>
+</tbody></table></div>
+<p><strong>Exact <code>.editorconfig</code>:</strong></p>
+<pre><code class="language-ini">root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.go]
+indent_style = tab
+
+[*.{yml,yaml,json,md}]
+indent_style = space
+indent_size = 2</code></pre>
+<p>(<a href="https://editorconfig.org/" rel="noopener noreferrer">editorconfig.org</a> for the format; tab indentation for <code>.go</code> matches
+<code>gofmt</code>'s own output so the file never fights the formatter.)</p>
+<p><strong>Example <code>CODEOWNERS</code>:</strong></p>
+<pre><code># Default owners for everything
+*                          @specialistvlad
+
+# Storage backends can be owned by different people as the project grows
+/storage/redis/            @specialistvlad
+/storage/postgres/         @specialistvlad
+/adapters/grpc/            @specialistvlad
+/adapters/http/            @specialistvlad
+
+# Release/CI plumbing needs the maintainer's eyes always
+/.github/                  @specialistvlad</code></pre>
+<h3 id="3-2-semantic-versioning-and-the-v0-escape-hatch">3.2 Semantic versioning and the v0 escape hatch<a class="anchor" href="#3-2-semantic-versioning-and-the-v0-escape-hatch" aria-label="Link to this section">#</a></h3>
+<p>Ship <code>v0.x.y</code> from day one and say so loudly in the README: SemVer's own spec sanctions this
+explicitly — <strong>"Major version zero (0.y.z) is for initial development. Anything MAY change at
+any time. The public API SHOULD NOT be considered stable"</strong> (<a href="https://semver.org/" rel="noopener noreferrer">semver.org</a>).
+This is not a cop-out; it is the correct signal for a library whose <code>Storage</code>/<code>Transport</code>
+interface boundaries (the whole point of Part 1's module split) are still being validated against
+real Redis/Postgres/memcached backends and two network protocols. Commit to <code>v1.0.0</code> only once
+those interfaces have shipped at least one full backend + one full adapter each without a
+breaking change for, as a rule of thumb, two consecutive minor releases — that's the empirical
+signal the interface has stopped moving, not a calendar date.</p>
+<h3 id="3-3-conventional-commits-and-whether-to-automate-releases">3.3 Conventional Commits, and whether to automate releases<a class="anchor" href="#3-3-conventional-commits-and-whether-to-automate-releases" aria-label="Link to this section">#</a></h3>
+<p><strong>Format</strong>, per spec: <code>&lt;type&gt;[optional scope]: &lt;description&gt;</code>, body, footer(s); <code>feat</code> → MINOR,
+<code>fix</code> → PATCH, a <code>BREAKING CHANGE:</code> footer or a <code>!</code> immediately before the colon (<code>feat!:</code>,
+<code>feat(storage/redis)!:</code>) → MAJOR regardless of type
+(<a href="https://www.conventionalcommits.org/en/v1.0.0/" rel="noopener noreferrer">conventionalcommits.org/en/v1.0.0</a>). Given
+Part 1's per-module tagging, <strong>every commit that touches a nested module's directory should carry
+that module as its scope</strong> (<code>fix(storage/redis): ...</code>) — this is what makes automated per-module
+changelog generation possible at all; an unscoped <code>fix: ...</code> touching <code>storage/redis/client.go</code>
+is a lint failure the CI commit-lint step should catch (<code>commitlint</code> config restricting scopes to
+the known module list, or <code>.golangci.yml</code>-adjacent tooling; this is one of few places a Node
+dev-dependency, <code>@commitlint/cli</code>, is defensible purely as a CI-time lint, never a runtime or
+build dependency of any Go module).</p>
+<p><strong>Automation recommendation: <code>release-please</code>, one config entry per module, over <code>goreleaser</code>
+for versioning and over fully manual tags.</strong> Reasoning:</p>
+<ul>
+<li><code>release-please</code> "parses commits for prefixes like fix:, feat:, and breaking changes...opens
+a release PR that automatically updates CHANGELOG.md [and] bumps the version"; merging that PR
+makes it "finalize changelog and version file updates, tag the commit... and create a GitHub
+Release" (<a href="https://github.com/googleapis/release-please" rel="noopener noreferrer">googleapis/release-please</a>) — this
+directly automates the exact per-module tag-with-prefix workflow Part 1 specifies, because
+<code>release-please</code>'s manifest mode supports <strong>multiple release units in one repo</strong>, each with its
+own <code>component</code> (map cleanly to <code>storage/redis</code>, <code>adapters/grpc</code>, etc.) and its own tag prefix.</li>
+<li><strong><code>goreleaser</code> still has a job — just a different one</strong>: it does not decide <em>what version
+number</em> to cut (that's a human/<code>release-please</code> decision informed by commit history); it
+consumes an already-created tag and turns it into build artifacts — cross-compiled binaries,
+the multi-arch container image (§2.8), checksums, and (§3.9) signed/provenanced release
+assets. Use both: <code>release-please</code> owns versioning + CHANGELOG + tagging for <strong>every</strong> module;
+a <code>goreleaser</code>-driven workflow triggers <strong>only</strong> on <code>dagworkerd/v*</code> tags to build/publish the
+binary + image, since the library modules (<code>storage/*</code>, <code>adapters/*</code>, core) have no build
+artifact beyond the tagged source itself — Go's module proxy <em>is</em> their distribution mechanism.</li>
+<li><strong>Fully manual tags</strong> are the wrong default for a multi-module repo specifically because the
+tag-prefix discipline in §1.6's table is easy to typo by hand (<code>storage-redis/v0.2.0</code> vs the
+required <code>storage/redis/v0.2.0</code>) and manual CHANGELOG editing drifts from actual commit history
+within a few releases — automation earns its keep exactly where the process has this many
+small, repeatable, easy-to-typo steps.</li>
+</ul>
+<h3 id="3-4-changelog-md-exact-keep-a-changelog-template-per-module">3.4 <code>CHANGELOG.md</code> — exact Keep a Changelog template, per module<a class="anchor" href="#3-4-changelog-md-exact-keep-a-changelog-template-per-module" aria-label="Link to this section">#</a></h3>
+<pre><code class="language-markdown"># Changelog
+All notable changes to this module are documented here.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.2.1] - 2026-08-22
+### Fixed
+- Reconnect loop no longer busy-spins when Redis returns CLUSTERDOWN.
+
+## [0.2.0] - 2026-07-30
+### Added
+- Support for Redis Cluster topology discovery.
+### Changed
+- Default dial timeout lowered from 5s to 2s.
+
+[Unreleased]: https://github.com/specialistvlad/dagworker/compare/storage/redis/v0.2.1...HEAD
+[0.2.1]: https://github.com/specialistvlad/dagworker/compare/storage/redis/v0.2.0...storage/redis/v0.2.1
+[0.2.0]: https://github.com/specialistvlad/dagworker/releases/tag/storage/redis/v0.2.0</code></pre>
+<p>Section vocabulary is fixed: <code>Added</code>, <code>Changed</code>, <code>Deprecated</code>, <code>Removed</code>, <code>Fixed</code>, <code>Security</code>;
+keep an <code>Unreleased</code> section permanently at the top so <code>release-please</code> (or a human) has
+somewhere to append entries between releases; compare-links at the bottom make every version
+range one click away on GitHub (<a href="https://keepachangelog.com/en/1.1.0/" rel="noopener noreferrer">keepachangelog.com/en/1.1.0</a>).</p>
+<h3 id="3-5-pkg-go-dev-documentation-quality-doc-go-and-runnable-examples">3.5 pkg.go.dev documentation quality: <code>doc.go</code> and runnable Examples<a class="anchor" href="#3-5-pkg-go-dev-documentation-quality-doc-go-and-runnable-examples" aria-label="Link to this section">#</a></h3>
+<p>Every module's root package needs a <code>doc.go</code> (no other declarations, just the package comment)
+so <code>go doc</code> and pkg.go.dev render a real overview rather than the top comment of whatever file
+happens to sort first alphabetically:</p>
+<pre><code class="language-go"><span class="tok-com">// Package dagworker provides a dynamic-DAG work scheduler: nodes are claimed</span>
+<span class="tok-com">// under a fenced lease by external workers, acknowledged success or error,</span>
+<span class="tok-com">// and automatically retried or timed out according to a per-scope retry</span>
+<span class="tok-com">// policy. See the top-level README for the network-adapter daemon</span>
+<span class="tok-com">// (dagworkerd) if you need non-Go workers; this package alone is a</span>
+<span class="tok-com">// zero-network-dependency, in-process API.</span>
+<span class="tok-kw">package</span> dagworker</code></pre>
+<p><strong>Runnable Examples</strong> are the highest-leverage pkg.go.dev investment available: an
+<code>ExampleEngine_Claim</code> function in <code>example_test.go</code> renders <strong>inline, right next to the <code>Claim</code>
+method's own doc</strong> on pkg.go.dev, and — critically — is compiled and executed by <code>go test</code> if it
+carries an <code>// Output:</code> comment, so it can never silently rot out of sync with the real API the
+way a markdown code fence in a README can:</p>
+<blockquote>
+<p>"the testing framework runs an example, it captures data written to standard output and then
+compares the output against the example's 'Output:' comment. The test passes if the test's
+output matches" (<a href="https://go.dev/blog/examples" rel="noopener noreferrer">go.dev/blog/examples</a>)</p>
+</blockquote>
+<p>Naming: <code>ExampleEngine_Claim</code> documents the <code>Claim</code> method on type <code>Engine</code>; a bare <code>Example()</code>
+documents the whole package (goes on the package's own doc page); multiple examples for one
+identifier get an <code>_lowercase</code> suffix (<code>ExampleEngine_Claim_withTimeout</code>). For a full end-to-end
+flow needing more scaffolding than a doc comment wants, use a "whole file example" — a
+<code>_test.go</code> file containing exactly one Example function plus supporting declarations, which
+pkg.go.dev renders as one collapsible block including the supporting code (same source). At
+minimum, dagworker's core module needs runnable examples for: constructing an <code>Engine</code>, claiming
+a node, acking success, acking error, and subscribing to status transitions — these five double
+as the smoke-test suite for the public API's ergonomics.</p>
+<p><strong>Badge set</strong> for the README header (each links to a live, re-checked status, not a static
+image): CI status (GitHub Actions), <code>pkg.go.dev</code> reference link/badge, <code>goreportcard.com</code> grade,
+license (MIT, static but conventional), OpenSSF Scorecard score (§3.6), and Go version support
+(<code>go.mod</code>'s <code>go</code> directive, shown as a badge generated from that same file so it can't drift).</p>
+<h3 id="3-6-supply-chain-hygiene-scorecard-best-practices-badge-dependabot-codeql-govulncheck">3.6 Supply-chain hygiene: Scorecard, best-practices badge, Dependabot, CodeQL, govulncheck<a class="anchor" href="#3-6-supply-chain-hygiene-scorecard-best-practices-badge-dependabot-codeql-govulncheck" aria-label="Link to this section">#</a></h3>
+<p><strong>OpenSSF Scorecard</strong> — 18 automated checks across "holistic security practices, source code risk
+assessment, and build process risk assessment," each scored 0-10
+(<a href="https://securityscorecards.dev/" rel="noopener noreferrer">securityscorecards.dev</a>); wire it as a scheduled GitHub Action
+(the <a href="https://github.com/marketplace/actions/ossf-scorecard-action" rel="noopener noreferrer">official <code>ossf/scorecard-action</code></a>)
+publishing results to the repo's code-scanning tab and a badge:</p>
+<pre><code class="language-yaml"><span class="tok-com"># .github/workflows/scorecard.yml</span>
+name: Scorecard
+on:
+  branch_protection_rule:
+  schedule: [{cron: <span class="tok-str">'30 1 * * 6'</span>}]
+  push: {branches: [main]}
+permissions: read-all
+jobs:
+  analysis:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ossf/scorecard-action@v2
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: <span class="tok-kw">true</span>
+      - uses: github/codeql-action/upload-sarif@v3
+        with: {sarif_file: results.sarif}</code></pre>
+<p><strong>OpenSSF Best Practices badge</strong> is a <em>self-certification</em> form (BadgeApp) against six criteria
+categories — Basics, Change Control, Reporting, Quality, Security, Analysis
+(<a href="https://www.bestpractices.dev/en/criteria/0" rel="noopener noreferrer">bestpractices.dev/en/criteria/0</a>) — cross-checked
+by the community; most of the "passing" tier criteria (public git repo, unique version IDs per
+release, documented bug/vulnerability reporting process, at least one automated test suite,
+static analysis before releases) are already satisfied by everything else in this section, so
+filling out the form is close to a checklist exercise once CI/SECURITY.md/CHANGELOG exist.</p>
+<p><strong>Dependabot</strong> (<code>.github/dependabot.yml</code>), one entry <strong>per module directory</strong> because Dependabot
+resolves each <code>go.mod</code> independently and won't discover nested modules from a single root entry:</p>
+<pre><code class="language-yaml">version: <span class="tok-num">2</span>
+updates:
+  - package-ecosystem: gomod
+    directory: <span class="tok-str">"/"</span>
+    schedule: {interval: weekly}
+  - package-ecosystem: gomod
+    directory: <span class="tok-str">"/storage/redis"</span>
+    schedule: {interval: weekly}
+  - package-ecosystem: gomod
+    directory: <span class="tok-str">"/storage/postgres"</span>
+    schedule: {interval: weekly}
+  - package-ecosystem: gomod
+    directory: <span class="tok-str">"/storage/memcached"</span>
+    schedule: {interval: weekly}
+  - package-ecosystem: gomod
+    directory: <span class="tok-str">"/adapters/grpc"</span>
+    schedule: {interval: weekly}
+  - package-ecosystem: gomod
+    directory: <span class="tok-str">"/adapters/http"</span>
+    schedule: {interval: weekly}
+  - package-ecosystem: gomod
+    directory: <span class="tok-str">"/cmd/dagworkerd"</span>
+    schedule: {interval: weekly}
+  - package-ecosystem: github-actions
+    directory: <span class="tok-str">"/"</span>
+    schedule: {interval: weekly}</code></pre>
+<p>(config options and the <code>github-actions</code> ecosystem's own workflow-directory scanning behavior per
+<a href="https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file" rel="noopener noreferrer">docs.github.com — dependabot.yml options</a>).
+Renovate is a legitimate alternative with better cross-ecosystem grouping and a <code>postUpdateOptions:
+[gomodTidy]</code> that runs <code>go mod tidy</code> automatically after a bump (Dependabot cannot do this for Go
+without an extra workflow step) — recommend Renovate over Dependabot specifically <strong>because</strong> of
+the multi-module layout, where a bare version bump without <code>go mod tidy</code> across 7 <code>go.mod</code> files
+is a recurring paper-cut Dependabot doesn't solve natively.</p>
+<p><strong>CodeQL</strong>: <code>github/codeql-action</code> with <code>languages: go</code>; Go's own build is fast/deterministic
+enough that <code>build-mode: autobuild</code> is fine unless it fails, in which case fall back to explicit
+<code>go build ./...</code> per module directory in a manual build step
+(<a href="https://docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/codeql-code-scanning-for-compiled-languages" rel="noopener noreferrer">docs.github.com — CodeQL for compiled languages</a>).</p>
+<p><strong><code>govulncheck</code></strong> in CI, one invocation per module directory (its call-graph analysis is
+module-scoped): "analyzes your codebase and only surfaces vulnerabilities that actually affect
+you, based on which functions in your code are transitively calling vulnerable functions" —
+meaningfully more precise than <code>go list -m all | grep CVE</code>-style dependency-only scanning because
+a vulnerable function that's present in a dependency but never called by your code does not fire
+(<a href="https://go.dev/blog/vuln" rel="noopener noreferrer">go.dev/blog/vuln</a>):</p>
+<pre><code class="language-bash">go install golang.org/x/vuln/cmd/govulncheck@latest
+<span class="tok-kw">for</span> d <span class="tok-kw">in</span> . storage/redis storage/postgres storage/memcached adapters/grpc adapters/http cmd/dagworkerd; <span class="tok-kw">do</span>
+  (cd <span class="tok-str">"$d"</span> &amp;&amp; govulncheck ./...)
+<span class="tok-kw">done</span></code></pre>
+<h3 id="3-7-slsa-provenance-cosign-and-reproducible-builds-for-dagworkerd-releases-only">3.7 SLSA provenance, cosign, and reproducible builds — for <code>dagworkerd</code> releases only<a class="anchor" href="#3-7-slsa-provenance-cosign-and-reproducible-builds-for-dagworkerd-releases-only" aria-label="Link to this section">#</a></h3>
+<p>This applies to <code>cmd/dagworkerd</code>'s binary/image releases, not to the library modules (which have
+no build artifact beyond source, per §3.3).</p>
+<ul>
+<li><strong>SLSA build levels</strong>: L0 no guarantees; <strong>L1</strong> "provenance showing how it was built" but
+unsigned/untamperproofed; <strong>L2</strong> the same provenance <strong>signed</strong> by a hosted build platform;
+<strong>L3</strong> additionally hardens the build platform itself so "secret material used to sign the
+provenance" is inaccessible even to the build's own user-defined steps
+(<a href="https://slsa.dev/spec/v1.0/levels" rel="noopener noreferrer">slsa.dev/spec/v1.0/levels</a>). <strong>Recommendation: target
+SLSA Build L3 via the official reusable workflow</strong> rather than hand-rolling provenance
+generation — <code>slsa-framework/slsa-github-generator</code> ships a <strong>Go Builder</strong> reusable workflow
+referenced as <code>slsa-framework/slsa-github-generator/.github/workflows/builder_go_slsa3.yml@vX.Y.Z</code>
+(pinned to a full semver tag) that "builds and generates provenance for Go projects" meeting
+L3's isolation requirements out of the box, verifiable downstream with <code>slsa-verifier</code>
+(<a href="https://github.com/slsa-framework/slsa-github-generator" rel="noopener noreferrer">slsa-framework/slsa-github-generator</a>) —
+this is strictly less work and more trustworthy than a bespoke workflow claiming L3, since L3's
+hard part is exactly the build-isolation guarantee a hand-rolled Action runner cannot credibly
+self-attest.</li>
+<li><strong><code>cosign</code> keyless signing</strong>: sign the release binaries/images with GitHub Actions' own OIDC
+token via Sigstore's Fulcio, no long-lived signing key to rotate or leak — "an ephemeral
+public/private keypair is created in memory," Fulcio "issues a short-lived certificate binding
+[it] to an OpenID Connect identity," the private key is destroyed immediately after signing, and
+the event is recorded in the Rekor transparency log for anyone to audit later
+(<a href="https://docs.sigstore.dev/cosign/signing/overview/" rel="noopener noreferrer">docs.sigstore.dev/cosign/signing/overview</a>).
+In CI: <code>cosign sign-blob --yes dagworkerd_linux_amd64</code> for binaries and
+<code>cosign sign --yes $IMAGE_DIGEST</code> for the container image, both inside the same
+<code>id-token: write</code>-permissioned job as the SLSA generator step. Document the verify command in
+the README's install section so a downstream user can actually exercise the trust chain:
+<code>cosign verify-blob --certificate-identity-regexp '...' --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' ...</code>.</li>
+<li><strong>Reproducible builds</strong>: <code>-trimpath</code> (removes filesystem paths, §2.8) plus a pinned
+<code>go</code> toolchain version (the <code>go</code> and <code>toolchain</code> directives in each <code>go.mod</code>, respected by
+Go 1.21+'s toolchain-management feature) are the two levers that make two independent builds of
+the same tag byte-identical; goreleaser's default build config already sets <code>-trimpath</code> and a
+deterministic <code>mod_timestamp</code> from the tag's commit time rather than wall-clock build time,
+which is the other common source of build irreproducibility (embedded build timestamps).</li>
+</ul>
+<h3 id="3-8-writing-a-readme-that-converts-a-skimmer-into-a-user-in-30-seconds">3.8 Writing a README that converts a skimmer into a user in 30 seconds<a class="anchor" href="#3-8-writing-a-readme-that-converts-a-skimmer-into-a-user-in-30-seconds" aria-label="Link to this section">#</a></h3>
+<p>Four widely-used Go library READMEs, live-fetched and structurally compared:</p>
+<ul>
+<li><strong>cobra</strong>: opens with "Cobra is a library for creating powerful modern CLI applications" plus
+an immediate name-drop of who trusts it (Kubernetes, Hugo, GitHub CLI) <em>before</em> any
+installation instructions — social proof precedes the pitch
+(<a href="https://raw.githubusercontent.com/spf13/cobra/main/README.md" rel="noopener noreferrer">spf13/cobra README</a>).</li>
+<li><strong>zap</strong>: opens with a single-sentence tagline, "Blazing fast, structured, leveled logging in
+Go," then goes straight to <strong>two copy-pasteable code blocks</strong> (Logger and SugaredLogger usage)
+before any prose explanation, then backs the "blazing fast" claim with actual benchmark tables
+comparing itself against alternatives — the claim in the tagline is proven with numbers, not
+asserted (<a href="https://raw.githubusercontent.com/uber-go/zap/master/README.md" rel="noopener noreferrer">uber-go/zap README</a>).</li>
+<li><strong>chi</strong>: opens with what it is and, in the same paragraph, <em>why</em>: "especially good at helping
+you write large REST API services that are kept maintainable as your project grows" — the pitch
+targets a specific pain (maintainability at scale) rather than a generic feature list
+(<a href="https://raw.githubusercontent.com/go-chi/chi/master/README.md" rel="noopener noreferrer">go-chi/chi README</a>).</li>
+<li><strong>testify</strong>: (well-known structure, not separately re-fetched here beyond general knowledge)
+leads with an assertion-usage code block within the first screen, mirroring zap's
+"show, don't tell" ordering.</li>
+</ul>
+<p><strong>The extracted structure, all four share this skeleton, in this order:</strong></p>
+<ol>
+<li>One-sentence tagline that states <em>what</em> the library is and, ideally, <em>for what pain</em>.</li>
+<li>Badges (build status, godoc, report card, license) — proof-of-diligence signals, small, no
+prose.</li>
+<li>A <strong>runnable code block</strong> within the first screen — before "Features," before "Installation"
+prose paragraphs. The reader should see real, working code using the actual public API before
+anything else.</li>
+<li><code>go get</code> line.</li>
+<li>Feature list / concept explanation, only <em>after</em> the reader has already seen it work.</li>
+<li>Anything comparative (benchmarks, "why not X") — earns its place only once the reader is
+already convinced enough to be evaluating alternatives.</li>
+<li>Contributing/license footer.</li>
+</ol>
+<p><strong>Recommended README skeleton for dagworker's root module</strong>, applying that structure to this
+specific project's shape (a library with an optional daemon, which the skimmer must understand is
+optional in the very first screen or they'll wrongly assume gRPC/HTTP are required):</p>
+<pre><code class="language-markdown"># dagworker
+
+Dynamic-DAG work scheduling for Go: claim ready nodes under a fenced lease, ack success
+or error, and let dagworker handle retries, timeouts, and "work is available" notifications
+across every process sharing your storage backend.
+
+[![CI](badge)](link) [![Go Reference](badge)](link) [![Go Report Card](badge)](link)
+[![OpenSSF Scorecard](badge)](link) [![License: MIT](badge)](link)
+
+```go
+eng, _ := dagworker.New(ctx, memstore.New())
+eng.AddNode(ctx, "scope", dagworker.Node{ID: "build", Deps: nil})
+
+claim, _ := eng.Claim(ctx, "scope")           // blocks/polls until a node is ready
+defer claim.Release(ctx)                       // safety net if we forget to Ack
+
+// ... do the work ...
+claim.Ack(ctx, dagworker.Success)</code></pre>
+<h2 id="install">Install<a class="anchor" href="#install" aria-label="Link to this section">#</a></h2>
+<p>    go get github.com/specialistvlad/dagworker</p>
+<p>Need a storage backend other than the built-in in-memory one? Each backend is its own module,
+so you only pull in what you use:</p>
+<p>    go get github.com/specialistvlad/dagworker/storage/redis</p>
+<p>Need non-Go workers (Python, Node, Rust, Java)? Run the optional <code>dagworkerd</code> daemon, which
+hosts a gRPC and an HTTP/JSON adapter over the same core engine — see <a href="https://github.com/specialistvlad/dagworker/tree/main/link" rel="noopener noreferrer">cmd/dagworkerd</a>.
+<strong>The core library above has zero dependency on gRPC or net/http; you only pay for the
+daemon if you run it.</strong></p>
+<h2 id="features">Features<a class="anchor" href="#features" aria-label="Link to this section">#</a></h2>
+<p>...</p>
+<h2 id="how-it-works">How it works<a class="anchor" href="#how-it-works" aria-label="Link to this section">#</a></h2>
+<p>...</p>
+<h2 id="benchmarks">Benchmarks<a class="anchor" href="#benchmarks" aria-label="Link to this section">#</a></h2>
+<p>...</p>
+<h2 id="contributing">Contributing<a class="anchor" href="#contributing" aria-label="Link to this section">#</a></h2>
+<p>See <a href="/dagworker/contributing/">CONTRIBUTING.md</a>. Please review our <a href="https://github.com/specialistvlad/dagworker/blob/main/CODE_OF_CONDUCT.md" rel="noopener noreferrer">Code of Conduct</a>.</p>
+<h2 id="license">License<a class="anchor" href="#license" aria-label="Link to this section">#</a></h2>
+<p>MIT — see <a href="https://github.com/specialistvlad/dagworker/tree/main/LICENSE" rel="noopener noreferrer">LICENSE</a>.</p>
+<pre><code>
+The single bolded sentence after the `dagworkerd` mention is the load-bearing one: it's the exact
+place a skimmer decides whether Part 1's whole module-split investment mattered to them.
+
+---
+
+## Recommendations for dagworker
+
+1. **Multi-module monorepo**, split exactly at dependency edges: core (root), `storage/redis`,
+   `storage/postgres`, `storage/memcached`, `adapters/grpc`, `adapters/http`, `cmd/dagworkerd`,
+   `examples` — seven-plus `go.mod` files, per §1.5, following the aws-sdk-go-v2/testcontainers-go
+   pattern, explicitly rejecting gocloud.dev's one-module-for-everything shape.
+2. **Independent semver per module**, not opentelemetry-go's lockstep — core and each backend/
+   adapter release on their own clock, coupled only by the public interface contract's own
+   version, per §1.6.
+3. Commit `go.work`/`go.work.sum` at the repo root for contributor convenience; commit **zero**
+   `replace` directives in any released `go.mod` — `go.work` fully replaces that older pattern.
+4. Tag format `\{module-subdir\}/vX.Y.Z`; per-module CI loop (`for d in ...; do (cd $d &amp;&amp; go
+   test ./...); done`), since root-level `go test ./...` silently skips nested modules.
+5. Config precedence **flag &gt; env &gt; file &gt; default**; secrets as file-path flags/env, never
+   value flags/env, per the OWASP-documented `/proc`/`docker inspect`/log-leakage exposure of
+   plain env vars.
+6. `/healthz` = process-alive only; `/readyz` = storage+eventbus reachable, gated on the gRPC
+   standard health protocol too; both on a separate admin listener with `/metrics` and
+   flag-gated `pprof`, never on the claim-serving port.
+7. Shutdown order: fail readiness → stop accepting new claims → drain in-flight acks → **actively
+   release this replica's remaining leases** (don't passively wait out the lease timeout) → close
+   storage → restore signal handling. The active-release step is the one dagworker-specific
+   design decision this dossier argues for over the more common "let it ride" default.
+8. RED metrics for claim/ack RPCs, USE metrics for the ready-set/queue/lease-expiry sweep;
+   histograms (not summaries) for every duration, since replicas run behind a load balancer and
+   only histograms aggregate correctly across instances at query time.
+9. Container: `CGO_ENABLED=0`, `-trimpath`, `distroless/static-debian12:nonroot` base,
+   `buildx`/goreleaser for multi-arch, `-buildvcs=auto` for a real `--version` string.
+10. Release automation: `release-please` in manifest mode (one component per module) for
+    versioning/CHANGELOG/tagging everywhere; `goreleaser` triggered only on `dagworkerd/v*` tags
+    for binary/image builds; both feeding a `cosign`-signed, SLSA L3-provenanced release via the
+    official `slsa-github-generator` Go builder.
+11. README structure: tagline → badges → runnable code block **before** any prose → `go get` →
+    the one bolded "core has zero gRPC/HTTP dependency" sentence → features → benchmarks →
+    contributing/license, mirroring cobra/zap/chi's shared skeleton.
+
+## Open questions
+
+- Should `storage/redis`, `storage/postgres`, `storage/memcached` share one `storage/testsuite`
+  module of conformance tests (a la testcontainers-go's own test helpers), or should each backend
+  vendor its own copy of the same test table? A shared module adds an eighth `go.mod` and its own
+  versioning burden; not sharing risks the three backends' conformance tests drifting apart.
+- Is `release-please`'s manifest mode's per-component config expressive enough to encode "core's
+  breaking change must land and be tagged before any dependent module's next release," or does
+  that ordering constraint need a manual gate (a required-reviewers rule on the storage/adapter
+  release PRs) layered on top?
+- Does the gRPC adapter's health-protocol `ServingStatus` need a third state beyond
+  SERVING/NOT_SERVING for "draining — finishing in-flight but not accepting new," or is
+  NOT_SERVING plus the ordering in §2.4 sufficient signal for LBs in practice?
+- For the admin listener (§2.7-2.9), should `--admin-addr` default to loopback-only even inside a
+  container (where loopback-only means "unreachable from outside the pod network namespace,"
+  effectively disabling Prometheus scraping unless the operator explicitly rebinds) — or should
+  the container image's default flip to `0.0.0.0:9091` with the loopback default reserved for
+  bare-metal/systemd deployments? The two deployment targets want opposite defaults.
+- Should the SLSA L3 + cosign signing pipeline (§3.7) also cover the **library modules'** tagged
+  source (e.g. signing the git tag itself via `git tag -s` and a `gitsign`-based commit signing
+  policy), given that most consumers of `storage/redis` etc. never download a build artifact at
+  all — only `go get` the source through the module proxy, which already carries its own checksum
+  database (`sum.golang.org`) guarantee?
+</code></pre>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/research/15-daemon-packaging-and-ops.md" rel="noopener noreferrer">View source: docs/research/15-daemon-packaging-and-ops.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

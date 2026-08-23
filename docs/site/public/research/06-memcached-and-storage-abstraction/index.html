@@ -1,0 +1,1541 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memcached as a Backend, and the Storage Abstraction Itself · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/research/06-memcached-and-storage-abstraction/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#memcached-as-a-backend-and-the-storage-abstraction-itself">Memcached as a Backend, and the Storage Abstraction Itself</a></li>
+<ul>
+<li><a href="#part-a-memcached-as-a-backend">Part A — Memcached as a backend</a></li>
+<ul>
+<li><a href="#a-1-the-primitive-set-exactly">A.1 The primitive set, exactly</a></li>
+<li><a href="#a-2-what-is-fundamentally-absent">A.2 What is fundamentally absent</a></li>
+<li><a href="#a-3-the-meta-protocol-changes-the-shape-of-the-problem-not-the-ceiling">A.3 The meta protocol changes the shape of the problem, not the ceiling</a></li>
+<li><a href="#a-4-what-memcached-looks-like-next-to-kv-stores-that-actually-support-cas-shaped-correctness">A.4 What memcached looks like next to KV stores that actually support CAS-shaped correctness</a></li>
+<li><a href="#a-5-exactly-what-can-and-cannot-be-honored">A.5 Exactly what CAN and CANNOT be honored</a></li>
+<li><a href="#a-6-the-recommendation-read-through-write-behind-cache-tier-never-the-system-of-record">A.6 The recommendation: read-through/write-behind cache tier, never the system of record</a></li>
+<li><a href="#a-7-the-cas-retry-loop-with-backoff-and-the-aba-safety-argument">A.7 The CAS-retry loop, with backoff, and the ABA-safety argument</a></li>
+<li><a href="#a-8-the-general-technique-lock-free-structures-on-a-cas-only-kv-api">A.8 The general technique: lock-free structures on a CAS-only KV API</a></li>
+</ul>
+<li><a href="#part-b-the-storage-abstraction-itself">Part B — The storage abstraction itself</a></li>
+<ul>
+<li><a href="#b-1-design-goals-restated-as-constraints">B.1 Design goals, restated as constraints</a></li>
+<li><a href="#b-2-prior-art-survey">B.2 Prior art survey</a></li>
+<li><a href="#b-3-the-proposed-interface-set-for-dag-worker-go">B.3 The proposed interface set for dag-worker-go</a></li>
+<li><a href="#b-4-what-each-backend-guarantees-to-pass-conformance">B.4 What each backend guarantees, to pass conformance</a></li>
+<li><a href="#b-5-the-conformance-suite-sketched">B.5 The conformance suite, sketched</a></li>
+</ul>
+<li><a href="#recommendations-for-dag-worker-go">Recommendations for dag-worker-go</a></li>
+<li><a href="#open-questions">Open questions</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="memcached-as-a-backend-and-the-storage-abstraction-itself">Memcached as a Backend, and the Storage Abstraction Itself<a class="anchor" href="#memcached-as-a-backend-and-the-storage-abstraction-itself" aria-label="Link to this section">#</a></h1>
+<p>Two linked questions for dag-worker-go: (A) can memcached honestly be a storage backend for a
+dynamic DAG with per-node optimistic concurrency, and if not fully, what tier of participation
+is honest; (B) what does the <code>Store</code> interface set look like so that a new backend is a few
+hundred lines, Redis/Postgres get to use their native atomics instead of emulating someone
+else's, and the interface never lies about what a backend can guarantee.</p>
+<hr>
+<h2 id="part-a-memcached-as-a-backend">Part A — Memcached as a backend<a class="anchor" href="#part-a-memcached-as-a-backend" aria-label="Link to this section">#</a></h2>
+<h3 id="a-1-the-primitive-set-exactly">A.1 The primitive set, exactly<a class="anchor" href="#a-1-the-primitive-set-exactly" aria-label="Link to this section">#</a></h3>
+<p>Memcached's classic (non-meta) text protocol gives you eleven operations. Everything else in
+every memcached client library is built out of these. The authoritative source is the protocol
+spec shipped in the memcached repo itself:</p>
+<ul>
+<li><code>set/add/replace &lt;key&gt; &lt;flags&gt; &lt;exptime&gt; &lt;bytes&gt; [noreply]\r\n&lt;data&gt;\r\n</code> — <code>add</code> fails with
+<code>NOT_STORED</code> if the key exists, <code>replace</code> fails with <code>NOT_STORED</code> if it doesn't
+(<a href="https://github.com/memcached/memcached/blob/master/doc/protocol.txt" rel="noopener noreferrer">protocol.txt</a>).</li>
+<li><code>append/prepend &lt;key&gt; &lt;flags&gt; &lt;exptime&gt; &lt;bytes&gt; [noreply]\r\n&lt;data&gt;\r\n</code> — "The append and
+prepend commands do not accept flags or exptime. They update existing data portions, and
+ignore new flag and exptime settings" — i.e. these mutate the value blob only, atomically,
+but cannot touch metadata (<a href="https://github.com/memcached/memcached/blob/master/doc/protocol.txt" rel="noopener noreferrer">protocol.txt</a>).</li>
+<li><code>cas &lt;key&gt; &lt;flags&gt; &lt;exptime&gt; &lt;bytes&gt; &lt;cas unique&gt; [noreply]\r\n&lt;data&gt;\r\n</code> — stores only if
+the server's current CAS token for that key still equals <code>&lt;cas unique&gt;</code>. Returns <code>STORED</code>,
+<code>EXISTS</code> (token stale — someone else wrote first), or <code>NOT_FOUND</code> (key evicted or never
+existed) (<a href="https://github.com/memcached/memcached/blob/master/doc/protocol.txt" rel="noopener noreferrer">protocol.txt</a>).</li>
+<li><code>gets &lt;key&gt;*\r\n</code> — like <code>get</code> but each <code>VALUE</code> line carries the current CAS token: <code>VALUE
+&lt;key&gt; &lt;flags&gt; &lt;bytes&gt; &lt;cas unique&gt;\r\n&lt;data&gt;\r\n</code>. This is the <em>only</em> way to obtain a
+writable CAS token.</li>
+<li><code>delete &lt;key&gt; [noreply]\r\n</code> — unconditional; there is no delete-if-CAS-matches in the
+classic protocol (<code>EX</code>/<code>C</code> on <code>md</code> fixes this in the meta protocol, below).</li>
+<li><code>incr/decr &lt;key&gt; &lt;value&gt; [noreply]\r\n</code> — "the item must already exist for incr/decr to
+work; these commands won't pretend that a non-existent key exists with value 0; instead,
+they will fail" — data is treated as a decimal ASCII 64-bit unsigned integer; <code>decr</code>
+underflow clamps to <code>0</code> rather than wrapping (<a href="https://github.com/memcached/memcached/blob/master/doc/protocol.txt" rel="noopener noreferrer">protocol.txt</a>).
+Each is a single atomic server-side operation — no read-modify-write round trip, no lost
+updates between concurrent incrementers.</li>
+<li><code>touch &lt;key&gt; &lt;exptime&gt; [noreply]\r\n</code> and <code>gat</code>/<code>gats &lt;exptime&gt; &lt;key&gt;*\r\n</code> — update-TTL and
+get-and-touch. <code>gats</code> also returns the CAS token, so it's the efficient way to combine a
+read with a TTL refresh.</li>
+</ul>
+<p>Every one of these is scoped to <strong>exactly one key</strong>. There is no verb in the classic protocol
+that touches two keys atomically. <code>get &lt;key&gt;*</code> retrieves several keys in one round trip but
+that is a batched read, not a transaction — nothing stops another client's write from landing
+between two of the keys you fetched. That single fact — no multi-key atomicity, ever, at any
+protocol version — is the fact that shapes every subsequent conclusion in this section.</p>
+<p>Practical ceiling: the default max item size is 1 MiB, raised with <code>-I</code> up to 1 GiB, but the
+memcached team's own guidance is "setting item max size above 1MB is not recommended" because
+it wrecks slab memory efficiency
+(<a href="https://github.com/memcached/memcached/discussions/1066" rel="noopener noreferrer">GitHub discussion #1066</a>;
+<a href="https://github.com/memcached/memcached/issues/473" rel="noopener noreferrer">max-item-size issue #473</a>). A node record
+with a moderate payload (status, edges, small metadata blob) fits easily; a node that embeds
+large arbitrary work-item payloads does not, and should store payloads elsewhere and keep only
+a pointer in the node record regardless of backend.</p>
+<h3 id="a-2-what-is-fundamentally-absent">A.2 What is fundamentally absent<a class="anchor" href="#a-2-what-is-fundamentally-absent" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Missing capability</th><th>Why it matters for dag-worker-go</th><th>Source</th></tr></thead>
+<tbody>
+<tr><td><strong>Multi-key atomic ops</strong></td><td>Adding an edge means touching two node records (successor's dependency count, predecessor's fan-out list) plus a scope index — memcached cannot make that one atomic unit under any circumstance.</td><td><a href="https://github.com/memcached/memcached/blob/master/doc/protocol.txt" rel="noopener noreferrer">protocol.txt</a> — every verb takes one key</td></tr>
+<tr><td><strong>Sorted/ordered structures</strong></td><td>No ZSET equivalent for "ready queue ordered by priority/enqueue-time" or "nodes with pending timeout ordered by deadline."</td><td>absent from the entire protocol.txt and meta spec</td></tr>
+<tr><td><strong>Scan-by-index / enumerate keys</strong></td><td>You cannot ask memcached "give me all node keys under scope X." There is no <code>KEYS</code>, no cursor-based <code>SCAN</code>. A per-scope index must be a value you maintain yourself (e.g. a JSON/bitset blob under one key), and <em>that</em> index is itself subject to the multi-key-atomicity problem above the moment more than one writer touches it.</td><td>absent from protocol.txt; contrast with Redis <code>SCAN</code>, which does at least guarantee "if an element is inside the collection when a full iteration starts, and is still there when the iteration terminates, then at some point SCAN returned it" — memcached offers no analogous cursor at all (<a href="https://redis-doc-test.readthedocs.io/en/latest/commands/scan/" rel="noopener noreferrer">Redis SCAN guarantees</a>)</td></tr>
+<tr><td><strong>Persistence</strong></td><td>None, by design. <code>extstore</code> extends the <em>value</em> store onto flash but explicitly does not make the cache crash-safe: "Data stored with extstore is not durable — if the Memcached process crashes, data cannot be recovered," and a restart clears the flash store entirely (<a href="https://docs.memcached.org/features/flashstorage/" rel="noopener noreferrer">memcached flash storage docs</a>). Memcached's own "warm restart" feature preserves data across a <em>graceful</em> process restart on the same host only, not across crashes, not across hosts (<a href="https://docs.memcached.org/features/restart/" rel="noopener noreferrer">Warm Restart docs</a>).</td><td></td></tr>
+<tr><td><strong>Eviction under memory pressure is silent and adversarial to correctness</strong></td><td>LRU eviction is slab-class-local: an item can be evicted while plenty of RAM sits unused in other slab classes (<a href="https://github.com/memcached/memcached/blob/master/doc/new_lru.txt" rel="noopener noreferrer">new_lru.txt</a>; <a href="https://medium.com/@ivaramme/memcached-and-unexpected-evictions-a3a50a239108" rel="noopener noreferrer">"Memcached and unexpected evictions"</a>). With extstore specifically, if the disk writer lags, memcached evicts from the LRU tail <em>in RAM</em> rather than block, "even when there is available space on disk" (<a href="https://github.com/memcached/memcached/issues/922" rel="noopener noreferrer">extstore eviction issue #922</a>; <a href="https://github.com/memcached/memcached/issues/881" rel="noopener noreferrer">#881</a>). For dag-worker-go this means a node record — including its edges and status — can vanish out from under an in-progress DAG at any time with no notification and no way to distinguish "evicted" from "never existed" or "deleted."</td><td></td></tr>
+<tr><td><strong>CAS token uniqueness is only a same-process, same-lifetime guarantee</strong></td><td>The spec's own language is thin: "cas unique&gt; is a unique 64-bit value of an existing entry" (<a href="https://github.com/memcached/memcached/blob/master/doc/protocol.txt" rel="noopener noreferrer">protocol.txt</a>) — it does not claim the token space survives a restart, and warm-restart aside, a plain process restart or an evict-then-recreate cycle can reissue a numerically identical token to a semantically different item. This is exactly the ABA problem (§A.5) and it is not solved for you at the protocol layer.</td><td></td></tr>
+</tbody></table></div>
+<h3 id="a-3-the-meta-protocol-changes-the-shape-of-the-problem-not-the-ceiling">A.3 The meta protocol changes the shape of the problem, not the ceiling<a class="anchor" href="#a-3-the-meta-protocol-changes-the-shape-of-the-problem-not-the-ceiling" aria-label="Link to this section">#</a></h3>
+<p>Memcached 1.6+ ships a binary-oriented but still text-framed <em>meta protocol</em> — <code>mg</code> (meta get),
+<code>ms</code> (meta set), <code>md</code> (meta delete), <code>ma</code> (meta arithmetic) — built for byte-efficiency and to
+expose internal item state that the classic protocol hid
+(<a href="https://docs.memcached.org/protocols/meta/" rel="noopener noreferrer">Meta Text Protocol docs</a>;
+<a href="https://github.com/memcached/memcached/wiki/MetaCommands/962ecdc4af4eaef72d42f1c1816bb7fb1f2d6044" rel="noopener noreferrer">MetaCommands wiki</a>).
+Structurally: "Commands are 2 characters, followed by key, flags, and tokens requested by
+flags" — and critically, <strong><code>mg</code> explicitly takes only one key</strong>: "Unlike 'get' metaget can only
+take a single key" (<a href="https://github.com/memcached/memcached/blob/master/doc/protocol.txt" rel="noopener noreferrer">protocol.txt</a>).
+So the meta protocol does not lift the single-key ceiling; it makes single-key operations
+richer.</p>
+<p><strong>Relevant flags for CAS-based concurrency control:</strong></p>
+<div class="table-wrap"><table>
+<thead><tr><th>Flag</th><th>Command</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>c</code></td><td><code>mg</code></td><td>Return the item's CAS token in the response</td></tr>
+<tr><td><code>C&lt;token&gt;</code></td><td><code>ms</code>, <code>md</code></td><td>Conditional operation: only proceed if the item's current CAS equals <code>&lt;token&gt;</code>; server returns <code>EX</code> (exists/mismatch) otherwise</td></tr>
+<tr><td><code>E&lt;token&gt;</code></td><td><code>ms</code></td><td>Override the CAS token the server will assign after a successful set, letting the client impose its own version numbering scheme (e.g. a monotonic logical clock) instead of trusting the server's internal counter</td></tr>
+<tr><td><code>N&lt;seconds&gt;</code></td><td><code>mg</code></td><td>Autovivify: if the key is missing, atomically create it with the given TTL as a placeholder, and tell <em>this</em> client it "won" the right to populate it — the mechanism behind stampede-safe cache-fill</td></tr>
+<tr><td><code>T&lt;seconds&gt;</code></td><td><code>mg</code>, <code>ms</code></td><td>Set/refresh TTL</td></tr>
+<tr><td><code>I</code></td><td><code>ms</code>, <code>md</code></td><td>Invalidate rather than delete: mark the item stale (bump its "win" epoch) but keep the bytes, so the next reader gets a <code>W</code>/<code>Z</code> signal instead of a hard miss</td></tr>
+<tr><td><code>q</code></td><td>all</td><td>Quiet: suppress the nominal-success response, only speak up on error — halves round-trip chatter in pipelined batches</td></tr>
+<tr><td><code>O&lt;token&gt;</code></td><td>all</td><td>Opaque application token, reflected back verbatim — used to correlate pipelined requests</td></tr>
+<tr><td><code>k</code></td><td><code>mg</code></td><td>Reflect the key back in the response</td></tr>
+<tr><td><code>b</code></td><td>all</td><td>Key is base64-encoded (needed for binary/non-ASCII keys)</td></tr>
+</tbody></table></div>
+<p><strong>Response codes:</strong> <code>HD</code> (success, header only, no value), <code>VA &lt;size&gt; &lt;flags...&gt;</code> (success with
+value attached), <code>EN</code>/<code>NF</code> (miss/not found), <code>NS</code> (not stored — <code>add</code>-style condition failed),
+<code>EX</code> (CAS/condition mismatch), <code>MN</code> (meta no-op, used to flush a pipeline).</p>
+<p><strong>The stampede-control flags (<code>N</code>/<code>W</code>/<code>Z</code>/<code>X</code>)</strong> are the meta protocol's most sophisticated
+piece of state machinery and worth naming precisely because they are the closest thing
+memcached has to a lease:</p>
+<ul>
+<li><code>mg key N30 v c</code> on a miss atomically creates a stub item with 30s TTL and returns the
+requester a <strong><code>W</code> (won)</strong> flag: "you own repopulating this."</li>
+<li>Any other concurrent <code>mg</code> with the same <code>N</code> flag against the same still-stub key gets a
+<strong><code>Z</code> (lost)</strong> flag instead, and should <em>not</em> try to populate — it should wait and retry
+the plain read.</li>
+<li><code>md key I</code> marks an item <strong>stale</strong> (<code>X</code>) instead of deleting it, so readers still get the
+old value plus an <code>X</code> flag meaning "this is stale, exactly one of you should refresh it,"
+with the same W/Z race resolution as above.</li>
+</ul>
+<p>This is a real, working single-flight/lease primitive scoped to <strong>one key</strong>. It is not a
+general distributed lock, it is not a scheduling primitive across many keys, and it has no
+concept of "this lease's holder crashed, someone else should be able to steal it before the
+TTL passes" beyond the plain TTL expiry itself — there is no fencing token attached to <code>W</code>, so
+if the item is deleted and recreated (or evicted and refilled) while the original winner is
+mid-flight, nothing keys the winner's write to a specific "epoch" the way etcd's or ZooKeeper's
+version-and-fencing model does (see §A.4).</p>
+<p>Client library reality check for Go: the venerable <code>bradfitz/gomemcache</code> fork family speaks
+only the classic ASCII protocol. Meta-protocol support exists but is comparatively young —
+<code>pior/memcache/meta</code> and <code>QuangTung97/go-memcache</code> implement mg/ms/md/ma directly
+(<a href="https://pkg.go.dev/github.com/pior/memcache" rel="noopener noreferrer">pior/memcache</a>,
+<a href="https://github.com/QuangTung97/go-memcache" rel="noopener noreferrer">QuangTung97/go-memcache</a>) — so a memcached
+backend for dag-worker-go that wants meta-protocol CAS tokens is committing to a narrower,
+newer dependency, not the ecosystem default.</p>
+<h3 id="a-4-what-memcached-looks-like-next-to-kv-stores-that-actually-support-cas-shaped-correctness">A.4 What memcached looks like next to KV stores that actually support CAS-shaped correctness<a class="anchor" href="#a-4-what-memcached-looks-like-next-to-kv-stores-that-actually-support-cas-shaped-correctness" aria-label="Link to this section">#</a></h3>
+<p>The brutal comparison, because "memcached has CAS" invites the wrong mental model if you don't
+also know what real CAS-capable stores offer:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Store</th><th>Atomic unit</th><th>Multi-key?</th><th>Fencing/version model</th></tr></thead>
+<tbody>
+<tr><td><strong>Memcached (classic + meta)</strong></td><td>One key</td><td>No</td><td>64-bit CAS token per item, no cross-restart or cross-eviction guarantee</td></tr>
+<tr><td><strong>etcd</strong></td><td><code>Txn{Compare, Success, Failure}</code></td><td>Yes — a single <code>Txn</code> can compare N keys' <code>value</code>/<code>version</code>/<code>mod_revision</code>/<code>create_revision</code> and conditionally apply a batch of puts/deletes across all of them in one round trip, "etcd does not allow multiple changes to the same key in a TXN [but] the store's revision is incremented only once for the transaction" (<a href="https://etcd.io/docs/v3.5/learning/api/" rel="noopener noreferrer">etcd API docs</a>; <a href="https://etcd.io/docs/v3.5/tutorials/how-to-transactional-write/" rel="noopener noreferrer">transactional write tutorial</a>)</td><td></td></tr>
+<tr><td><strong>DynamoDB</strong></td><td><code>TransactWriteItems</code></td><td>Yes — up to 100 items, each with its own <code>ConditionExpression</code>, or a <code>ConditionCheck</code> action that asserts a condition on an item without writing it; "the actions are completed atomically so that either all of them succeed, or all of them fail" (<a href="https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TransactWriteItems.html" rel="noopener noreferrer">AWS docs</a>)</td><td></td></tr>
+<tr><td><strong>Cassandra</strong></td><td>One partition, via Paxos-backed LWT (<code>IF</code>/<code>IF NOT EXISTS</code>)</td><td>Only within one partition, and it costs 4 replica round trips minimum — "LWTs are 4-10x slower than regular writes" (<a href="https://axonops.com/blog/paxos-v2-and-lightweight-transactions/" rel="noopener noreferrer">AxonOps on Paxos v2</a>; <a href="https://cassandra.apache.org/doc/latest/cassandra/architecture/guarantees.html" rel="noopener noreferrer">Cassandra guarantees docs</a>)</td><td></td></tr>
+</tbody></table></div>
+<p>The pattern across every genuinely CAS-capable distributed store is the same: <strong>the atomic
+unit is either widened to cover several keys (etcd, DynamoDB) or the version/CAS token is
+explicitly tied to a durable, monotonic revision number that survives process restarts</strong> (etcd
+<code>mod_revision</code>, DynamoDB item versions backed by durable storage). Memcached gives you neither
+widening nor durability of the version space — it gives you a single-key, single-process-
+lifetime CAS token and nothing else. That is a strictly weaker primitive than every other store
+this project is asked to support, and weaker in a way that matters specifically for a DAG,
+where "add an edge" is inherently a two-record operation (dependant + dependency, or
+dependant + scope index).</p>
+<h3 id="a-5-exactly-what-can-and-cannot-be-honored">A.5 Exactly what CAN and CANNOT be honored<a class="anchor" href="#a-5-exactly-what-can-and-cannot-be-honored" aria-label="Link to this section">#</a></h3>
+<p><strong>CAN be honored, faithfully, no asterisks:</strong></p>
+<ul>
+<li><strong>Optimistic concurrency on a single node record.</strong> <code>gets nodekey</code> → mutate the decoded
+struct → <code>cas nodekey ... &lt;token&gt;</code> (or <code>mg nodekey c v</code> → <code>ms nodekey C&lt;token&gt; ...</code> on the
+meta protocol) is a textbook single-item CAS loop and memcached does this as well as any
+store on the list.</li>
+<li><strong>Idempotent status writes that don't need to observe fan-out.</strong> A worker ack that only
+needs to flip <em>its own</em> node's status, with no requirement to atomically wake up
+dependents in the same operation, is a plain CAS write.</li>
+<li><strong>Best-effort TTL-based lease on a single node</strong>, using the meta protocol's <code>N</code>/<code>W</code>/<code>Z</code>
+stampede tokens as a "who gets to process this node" hint — with the caveat in §A.3 that
+there is no fencing token, so a slow/stalled worker that wins a lease and then pauses (GC,
+scheduler preemption) can still write after a second worker has taken over, unless the
+write itself is additionally CAS-guarded against the node's own version (which brings you
+back to the single-key CAS loop, not the lease flags).</li>
+</ul>
+<p><strong>CANNOT be honored, at any protocol version, full stop:</strong></p>
+<ul>
+<li><strong>A scannable per-scope index.</strong> You can maintain a value under <code>scope:X:index</code> that lists
+member node keys, but (a) it is itself subject to the same-eviction-anytime and
+no-multi-key-atomicity problems as everything else, and (b) once it grows past ~1 MiB it
+cannot be stored at all without client-side sharding of the index itself, which is a
+research project of its own.</li>
+<li><strong>Atomic multi-node mutations</strong> — adding an edge, decrementing a dependency counter on N
+successors when a node completes, or any operation that must leave two or more keys in a
+jointly-consistent state. There is no <code>Txn</code>, no Lua-equivalent server-side script, no
+MULTI/EXEC. (Memcached deliberately has no server-side scripting akin to Redis Lua or
+Redis Functions — that door does not exist.)
+<ul>
+<li><em>A less obvious form of the same problem</em>: even the "atomic increment" of <code>incr</code>/<code>decr</code>
+cannot be composed with a check on a <em>different</em> key. You can atomically decrement a
+successor's pending-dependency counter, but you cannot atomically decrement it <strong>and</strong>
+verify it's the specific worker's turn to enqueue the successor when it hits zero — that
+requires either a second CAS round trip (introducing a race window between the <code>incr</code>
+reply and the follow-up <code>cas</code>) or accepting at-least-once semantics on the enqueue.</li>
+</ul>
+</li>
+<li><strong>A reliable timeout sweep.</strong> Sweeping "which nodes have been in-progress past their
+worker-timeout" requires either a sorted index by deadline (absent) or a full key
+enumeration (absent — no <code>SCAN</code>, no <code>KEYS</code>). The best available substitute is relying on
+the item's own memcached TTL as the timeout and reacting only reactively, on the next
+<code>gets</code>/<code>mg</code> of that exact key by someone else — there is no proactive sweep, no push
+notification, and nothing analogous to Redis keyspace-notification events on expiry.</li>
+<li><strong>A durable audit trail / replay of status transitions.</strong> Nothing memcached stores survives
+a crash, an LRU eviction, or an extstore-under-pressure eviction
+(<a href="https://docs.memcached.org/features/flashstorage/" rel="noopener noreferrer">extstore durability caveat</a>). A
+library whose headline promise is "every node status transition is observable" cannot make
+that promise durable on this backend, only best-effort-while-the-item-is-resident.</li>
+</ul>
+<h3 id="a-6-the-recommendation-read-through-write-behind-cache-tier-never-the-system-of-record">A.6 The recommendation: read-through/write-behind cache tier, never the system of record<a class="anchor" href="#a-6-the-recommendation-read-through-write-behind-cache-tier-never-the-system-of-record" aria-label="Link to this section">#</a></h3>
+<p>Three options were on the table; here is why the third wins outright.</p>
+<ol>
+<li><strong>"Offer a reduced-capability tier"</strong> — implement <code>Store</code> with the mandatory methods and
+simply return <code>ErrCapabilityUnsupported</code> (or fail conformance) for <code>Scanner</code>,
+<code>AtomicIndexer</code>, and <code>TimeoutSweeper</code>. This is honest about <em>what</em> is missing but dishonest
+about <em>durability</em>: a caller who only uses the "supported" surface (single-node CAS writes,
+single-node reads) would still silently lose data on eviction/restart with zero API signal
+that anything went wrong. Reduced capability without a durability disclaimer is a trap.</li>
+<li><strong>"Refuse to be the durable store"</strong> — have the backend registration explicitly declare
+<code>Durable() bool</code> returning <code>false</code>, and let the host program decide what to do with that.
+This is honest, but it leaves an entire tier of the contract (the scope index, the timeout
+sweep, the DAG topology itself) with no home at all if memcached is the only backend
+configured — the library would have to refuse to start, which is a hard "no" the project
+brief didn't ask for.</li>
+<li><strong>Read-through/write-behind cache in front of a real backend</strong> — memcached is registered
+as a <code>CacheLayer</code> that wraps a durable <code>Store</code> (Redis, Postgres, or even the in-memory
+backend shared inside one process): reads try memcached first via <code>mg key c v</code>, miss falls
+through to the durable store and repopulates memcached with <code>ms key C0 ...</code> (CAS-<code>0</code> means
+"only set if absent," memcached's <code>add</code>-equivalent, so two racing repopulations don't
+stomp each other with stale data); writes go to the durable store first and then
+<em>invalidate</em> (not update) the memcached copy — invalidate-on-write is strictly safer than
+update-on-write against a store with memcached's silent-eviction-and-eventual-consistency
+character, because a delayed or dropped invalidation just means a future read is one round
+trip slower, never that a client observes a value older than the one it just wrote through
+a different path.</li>
+</ol>
+<p><strong>This dossier recommends option 3, unconditionally.</strong> Concretely: <code>memcached</code> should not
+implement <code>dagstore.Store</code> at all. It should implement a separate, smaller
+<code>dagstore.NodeCache</code> interface (get/set-if-absent/invalidate on the single node-record blob
+keyed by <code>scope+nodeID</code>) that any <code>Store</code> decorator can compose in front of, with the single
+job of shaving read latency and read amplification off the hot path (repeatedly re-fetching a
+node that hasn't changed while its dependents are still running). Every write-path guarantee —
+CAS ordering, the scope index, the timeout sweep, the transition log — stays entirely on the
+durable backend. This also sidesteps the ABA hazard in §A.5 entirely: since memcached never
+holds the authoritative CAS token, a stale or wrapped token in the cache can only ever cause an
+extra cache miss, never a lost or corrupted write.</p>
+<h3 id="a-7-the-cas-retry-loop-with-backoff-and-the-aba-safety-argument">A.7 The CAS-retry loop, with backoff, and the ABA-safety argument<a class="anchor" href="#a-7-the-cas-retry-loop-with-backoff-and-the-aba-safety-argument" aria-label="Link to this section">#</a></h3>
+<p>Even confined to <code>NodeCache</code>, the single-flight fill-on-miss path benefits from a genuine CAS
+retry loop (for the "populate memcached with the value I just read from Postgres" step, so two
+concurrent cache-fills after a miss converge instead of duplicating writes indefinitely under
+load). Here is the loop, targeting the meta protocol so the CAS token travels with <code>mg</code>/<code>ms</code>
+directly:</p>
+<pre><code class="language-go"><span class="tok-kw">package</span> memcache
+
+<span class="tok-kw">import</span> (
+	<span class="tok-str">"context"</span>
+	<span class="tok-str">"errors"</span>
+	<span class="tok-str">"math/rand"</span>
+	<span class="tok-str">"time"</span>
+)
+
+<span class="tok-com">// ErrCASConflict is returned by the underlying client when an ms C&lt;token&gt;</span>
+<span class="tok-com">// request comes back EX (the item's CAS token no longer matches).</span>
+<span class="tok-kw">var</span> ErrCASConflict = errors.New(<span class="tok-str">"memcache: cas conflict"</span>)
+
+<span class="tok-com">// ErrGone is returned when the item disappeared between read and write —</span>
+<span class="tok-com">// eviction, expiry, or a concurrent unconditional delete.</span>
+<span class="tok-kw">var</span> ErrGone = errors.New(<span class="tok-str">"memcache: item missing"</span>)
+
+<span class="tok-com">// casRetryConfig bounds the loop so a hot key under heavy contention degrades</span>
+<span class="tok-com">// to "give up and let the durable read serve this request" instead of</span>
+<span class="tok-com">// spinning forever.</span>
+<span class="tok-kw">type</span> casRetryConfig <span class="tok-kw">struct</span> {
+	MaxAttempts <span class="tok-kw">int</span>           <span class="tok-com">// e.g. 5</span>
+	BaseDelay   time.Duration <span class="tok-com">// e.g. 2ms</span>
+	MaxDelay    time.Duration <span class="tok-com">// e.g. 50ms</span>
+}
+
+<span class="tok-com">// mutateWithCAS reads the current value+token via mg (v c), applies fn, and</span>
+<span class="tok-com">// writes it back via ms C&lt;token&gt;. On EX it re-reads and retries with</span>
+<span class="tok-com">// exponential backoff + full jitter, per the AWS backoff-and-jitter guidance</span>
+<span class="tok-com">// (https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/).</span>
+<span class="tok-kw">func</span> (c *Client) mutateWithCAS(
+	ctx context.Context,
+	key <span class="tok-kw">string</span>,
+	fn <span class="tok-kw">func</span>(current []<span class="tok-kw">byte</span>, found <span class="tok-kw">bool</span>) (next []<span class="tok-kw">byte</span>, skip <span class="tok-kw">bool</span>),
+	cfg casRetryConfig,
+) <span class="tok-kw">error</span> {
+	delay := cfg.BaseDelay
+
+	<span class="tok-kw">for</span> attempt := <span class="tok-num">0</span>; attempt &lt; cfg.MaxAttempts; attempt++ {
+		cur, token, found, err := c.metaGet(ctx, key) <span class="tok-com">// mg key c v</span>
+		<span class="tok-kw">if</span> err != <span class="tok-kw">nil</span> {
+			<span class="tok-kw">return</span> err
+		}
+
+		next, skip := fn(cur, found)
+		<span class="tok-kw">if</span> skip {
+			<span class="tok-kw">return</span> <span class="tok-kw">nil</span> <span class="tok-com">// caller decided no write is needed</span>
+		}
+
+		<span class="tok-kw">var</span> storeErr <span class="tok-kw">error</span>
+		<span class="tok-kw">if</span> found {
+			storeErr = c.metaSet(ctx, key, next, withCASToken(token)) <span class="tok-com">// ms key C&lt;token&gt;</span>
+		} <span class="tok-kw">else</span> {
+			storeErr = c.metaSet(ctx, key, next, withAddOnly()) <span class="tok-com">// ms key ME (add-if-absent)</span>
+		}
+
+		<span class="tok-kw">switch</span> {
+		<span class="tok-kw">case</span> storeErr == <span class="tok-kw">nil</span>:
+			<span class="tok-kw">return</span> <span class="tok-kw">nil</span>
+		<span class="tok-kw">case</span> errors.Is(storeErr, ErrCASConflict):
+			<span class="tok-com">// Someone else wrote first. Loop and re-read — this is the</span>
+			<span class="tok-com">// detection half of "detect, don't prevent" optimistic</span>
+			<span class="tok-com">// concurrency: https://redis.antirez.com/fundamental/atomic-updates.html</span>
+		<span class="tok-kw">case</span> errors.Is(storeErr, ErrGone):
+			found = <span class="tok-kw">false</span> <span class="tok-com">// fall through to add-if-absent path next loop</span>
+		<span class="tok-kw">default</span>:
+			<span class="tok-kw">return</span> storeErr <span class="tok-com">// a real transport/server error — do not retry blindly</span>
+		}
+
+		<span class="tok-com">// Exponential backoff with full jitter, capped, and ctx-aware sleep.</span>
+		jittered := time.Duration(rand.Int63n(<span class="tok-kw">int64</span>(delay) + <span class="tok-num">1</span>))
+		<span class="tok-kw">select</span> {
+		<span class="tok-kw">case</span> &lt;-time.After(jittered):
+		<span class="tok-kw">case</span> &lt;-ctx.Done():
+			<span class="tok-kw">return</span> ctx.Err()
+		}
+		<span class="tok-kw">if</span> delay *= <span class="tok-num">2</span>; delay &gt; cfg.MaxDelay {
+			delay = cfg.MaxDelay
+		}
+	}
+	<span class="tok-kw">return</span> errors.New(<span class="tok-str">"memcache: exhausted CAS retry attempts"</span>)
+}</code></pre>
+<p><strong>ABA-safety argument.</strong> The classic ABA hazard is: thread reads value <code>A</code> with token <code>t1</code>,
+gets preempted; another thread changes <code>A</code>→<code>B</code>→<code>A</code> again, and if the second <code>A</code> happens to
+carry the <em>same</em> token <code>t1</code> (e.g. after the item was deleted and independently recreated with
+the server's counter having wrapped or been reset), the first thread's CAS on <code>t1</code> would
+wrongly succeed even though the intervening <code>B</code> write should have invalidated it
+(<a href="https://www.stroustrup.com/isorc2010.pdf" rel="noopener noreferrer">Understanding and Effectively Preventing the ABA Problem, Stroustrup et al.</a>;
+<a href="https://users.fmi.uni-jena.de/~nwk/LockFree.pdf" rel="noopener noreferrer">Lock-Free Concurrent Data Structures, CAS and the ABA-Problem</a>).
+The general fixes in the lock-free literature are (1) tagged/versioned pointers that carry an
+ever-incrementing generation counter alongside the value so a wraparound back to <code>A</code> is
+distinguishable from the original <code>A</code> by generation, and (2) safe-memory-reclamation schemes
+(hazard pointers, epoch-based reclamation) that prevent a slot from being reused at all while
+any thread might still be holding a stale reference to it.</p>
+<p>Applied here: because <code>NodeCache</code> is <em>never</em> the source of truth, the ABA hazard is
+structurally defanged rather than solved. The only consequence of a stale-but-numerically-equal
+CAS token succeeding on a wrongly-matched write is that the <strong>cache</strong> ends up holding a value
+that is wrong for at most until the next invalidation-on-write from the durable path arrives —
+and per §A.6, every write to the durable store unconditionally invalidates (not merges into)
+the cache entry regardless of what the cache's own CAS state says. So the true fix is not a
+tagging scheme inside memcached at all: it's that memcached's CAS token is never treated as an
+authoritative version — it is only ever a local optimization to avoid a thundering-herd
+refill, and the actual version of record (the row's <code>xmin</code>/<code>updated_at</code> in Postgres, or the
+Redis Lua script's read of the field it's about to write) is what every correctness argument
+rests on. This is the same principle etcd, DynamoDB, and Cassandra apply by construction (their
+CAS tokens are tied to a durable, monotonic revision — see §A.4); memcached-as-cache adopts it
+by <em>policy</em> instead, since the store itself cannot provide it.</p>
+<h3 id="a-8-the-general-technique-lock-free-structures-on-a-cas-only-kv-api">A.8 The general technique: lock-free structures on a CAS-only KV API<a class="anchor" href="#a-8-the-general-technique-lock-free-structures-on-a-cas-only-kv-api" aria-label="Link to this section">#</a></h3>
+<p>The literature on hardware CAS (single memory word, compare-and-swap, ABA via tagged pointers
+or hazard pointers — Michael &amp; Scott's queue, Treiber's stack) transfers to a <strong>CAS-only KV
+API</strong> with one structural change: there are no pointers, only <em>keys</em>, and "swap" means
+"replace the entire value blob for that key." The recipe used by every production
+CAS-only-KV structure (ZooKeeper znode versions, etcd's revision-gated writes, and this
+project's own <code>NodeCache</code> argument above) is:</p>
+<ol>
+<li><strong>Every mutable record carries its own logical version</strong>, stored <em>inside</em> the value blob
+(not just relying on the store's opaque CAS token, which — per §A.5/A.7 — may not survive
+restarts or evictions). A <code>uint64 Version</code> field bumped on every successful write is
+sufficient; it plays the role of the ABA-safe tagged pointer.</li>
+<li><strong>A multi-record structure (queue, index, DAG edge list) built on a single-key-CAS store is
+built as a value that names other values</strong>, and every operation that must span records is
+decomposed into an ordered sequence of single-key CAS writes such that <strong>any prefix of the
+sequence, observed by another actor, is itself a valid state</strong> — i.e. the structure has no
+moment where it's illegal for a crashed writer to have stopped. This is the same
+discipline as lock-free linked-list insertion (link the new node in with one CAS on the
+predecessor's pointer, in a specific order that keeps the list valid at every step) — see
+the classic treatment in the <a href="https://users.fmi.uni-jena.de/~nwk/LockFree.pdf" rel="noopener noreferrer">ABA-problem lock-free lecture notes</a>.
+Concretely for a DAG edge: write the new edge as a <em>pending</em> entry under the successor's
+key first (CAS), then flip the predecessor's fan-out list to reference it (CAS) — a reader
+that only sees step one treats the edge as not-yet-effective; a reader that sees both has a
+consistent edge; there is no state in between that is wrong, only "not yet finished."</li>
+<li><strong>Where a store offers genuine multi-key atomicity (etcd <code>Txn</code>, DynamoDB
+<code>TransactWriteItems</code>, a Postgres transaction), skip the decomposition entirely</strong> — the
+whole reason to have a capability-negotiated storage interface (Part B) is that this
+multi-step, ABA-aware, retry-driven dance is <em>only</em> needed on backends that lack the native
+primitive, and forcing every backend through it (the "lowest common denominator" trap)
+throws away exactly the atomics the brief calls out as something Redis/Postgres should get
+to use natively.</li>
+<li><strong>Never build a lock-free stack/queue directly on memcached-style CAS.</strong> Michael &amp; Scott's
+MS-queue and Treiber's stack are shaped around linking a <em>node</em> into the structure via CAS
+on the <em>predecessor's next-pointer</em> — but that requires the predecessor to be discoverable
+at a stable address (the "head" pointer). A KV CAS store has no equivalent of atomically
+swapping "head" among an unbounded, dynamically-named set of candidate nodes without an
+external allocator for node identity, and memcached additionally has none of the safe
+memory reclamation machinery (hazard pointers, epochs) that real lock-free structures
+depend on to keep a concurrently-freed node's memory valid long enough for another thread
+to finish dereferencing it — an evicted memcached key is simply <em>gone</em>, there is no
+reclamation deferral. This is the mechanical reason memcached cannot host the DAG's ready
+queue, only cache single node reads.</li>
+</ol>
+<hr>
+<h2 id="part-b-the-storage-abstraction-itself">Part B — The storage abstraction itself<a class="anchor" href="#part-b-the-storage-abstraction-itself" aria-label="Link to this section">#</a></h2>
+<h3 id="b-1-design-goals-restated-as-constraints">B.1 Design goals, restated as constraints<a class="anchor" href="#b-1-design-goals-restated-as-constraints" aria-label="Link to this section">#</a></h3>
+<ol>
+<li><strong>Narrow core.</strong> A conforming backend must implement one interface with roughly a dozen
+methods; "a new backend is a few hundred lines" (per the brief) is only achievable if the
+mandatory surface is genuinely small and everything backend-specific is optional.</li>
+<li><strong>Capability-rich when the backend allows it.</strong> Redis gets <code>ZADD</code>/<code>BZPOPMIN</code>-class ready
+queues and Lua-scripted atomic transitions; Postgres gets <code>SELECT ... FOR UPDATE SKIP
+LOCKED</code> and <code>LISTEN</code>/<code>NOTIFY</code>; neither should be forced through a lowest-common-denominator
+emulation of the other's primitive.</li>
+<li><strong>Honest about capabilities.</strong> A caller must be able to ask, at runtime, "does this backend
+support atomic multi-successor fan-out?" and get a real answer, not silently degrade or
+silently emulate with a warning buried in a doc comment.</li>
+</ol>
+<h3 id="b-2-prior-art-survey">B.2 Prior art survey<a class="anchor" href="#b-2-prior-art-survey" aria-label="Link to this section">#</a></h3>
+<p><strong>containerd — narrow core + orthogonal facets.</strong> <code>content.Store</code> decomposes into <code>Ingester</code>
+(begin a write, identified by ref), <code>Provider</code> (read by digest once committed), <code>Manager</code>
+(<code>Info</code>/<code>Update</code>/<code>Walk</code> over committed metadata), and <code>IngestManager</code> (list/abort in-flight
+writes) — "until ingestion is complete, its content is not visible through Provider or
+Manager. Once ingestion is complete, it is no longer exposed through IngestManager"
+(<a href="https://pkg.go.dev/github.com/containerd/containerd/content" rel="noopener noreferrer">containerd content package</a>).
+The <code>Snapshotter</code> interface is similarly narrow — nine methods (<code>Stat</code>, <code>Update</code>, <code>Usage</code>,
+<code>Mounts</code>, <code>Prepare</code>, <code>View</code>, <code>Commit</code>, <code>Remove</code>, <code>Walk</code>, <code>Close</code>) covering an entire
+filesystem-layering backend, with <code>Info{Kind, Name, Parent, Labels, Created, Updated}</code> as the
+one shared metadata shape every driver returns
+(<a href="https://github.com/containerd/containerd/blob/main/core/snapshots/snapshotter.go" rel="noopener noreferrer">snapshotter.go</a>).
+Lesson: separate "the mutation lifecycle" (begin/commit/abort) from "the read/query surface"
+into different small interfaces rather than one large one.</p>
+<p><strong>Terraform — capability split via a second interface, not a flag.</strong> <code>backend.Backend</code> is six
+methods total: config schema/validation/configure, <code>StateMgr(workspace) (statemgr.Full,
+diags)</code>, <code>Workspaces()</code>, <code>DeleteWorkspace()</code>
+(<a href="https://github.com/hashicorp/terraform/blob/main/internal/backend/backend.go" rel="noopener noreferrer">backend.go</a>).
+Locking is <em>not</em> part of <code>Backend</code> — it's a separate <code>statemgr.Locker</code> interface (<code>Lock(info
+*LockInfo) (string, error)</code>, <code>Unlock(id string) error</code>) that a <code>StateMgr</code> result may or may not
+also satisfy, checked with a type assertion at the call site, and the documentation is explicit
+that "not all backends support locking." <code>LockInfo</code> carries <code>ID</code>, <code>Operation</code>, <code>Info</code>, <code>Who</code>,
+<code>Version</code>, <code>Created</code>, <code>Path</code> — enough to render "who is holding this and since when" in an
+error message without the backend needing to know anything about presentation
+(<a href="https://github.com/hashicorp/terraform/blob/main/internal/states/statemgr/locker.go" rel="noopener noreferrer">statemgr locker.go</a>;
+<a href="https://developer.hashicorp.com/terraform/language/state/locking" rel="noopener noreferrer">Terraform state locking docs</a>).
+Lesson: locking is optional and independently type-asserted, never a boolean flag on the core
+interface.</p>
+<p><strong>gocloud.dev — driver package hides the portable API, <code>As</code> escapes it.</strong> The pattern
+throughout blob/pubsub/docstore is: a <code>driver</code> sub-package defines the low-level interface
+implementors write against, the top-level package wraps it in a friendlier, uniform,
+provider-agnostic API, and every wrapped type carries an <code>As(interface{}) bool</code> escape hatch
+that does a provider-specific type assertion so power users can reach the underlying S3/GCS/
+Mongo client when the portable API doesn't cover something. <code>docstore/driver.Collection</code>
+centers on <code>RunActions(ctx, actions []Action, opts)</code>, <code>Key(Document) interface{}</code>, and
+<code>RevisionField() string</code> — optimistic concurrency is modeled as a named revision field the
+driver reads/writes/compares, converted to/from an opaque <code>[]byte</code> via
+<code>RevisionToBytes</code>/<code>BytesToRevision</code>, so Mongo can use its own <code>_etag</code> shape and DynamoDB its
+own version-number shape behind the same portable field
+(<a href="https://pkg.go.dev/gocloud.dev/docstore/driver" rel="noopener noreferrer">docstore/driver package</a>).</p>
+<p><strong>Thanos objstore — capability negotiation as an explicit "supported options" query, not type
+assertion.</strong> <code>Bucket</code> embeds <code>BucketReader</code> and adds <code>Upload(ctx, name, r io.Reader,
+opts ...ObjectUploadOption) error</code> plus, critically,
+<code>SupportedObjectUploadOptions() []ObjectUploadOptionType</code> — callers are told to "validate which
+object upload options (IfNotExists, IfMatch, IfNotMatch) are supported by the provider" <em>before</em>
+using them, and <code>ValidateUploadOptions</code> gives a reusable helper for that check
+(<a href="https://github.com/thanos-io/objstore/blob/main/objstore.go" rel="noopener noreferrer">objstore.go</a>;
+<a href="https://github.com/thanos-io/objstore/blob/main/README.md" rel="noopener noreferrer">objstore README</a>). This is a
+second, equally valid style of capability negotiation to the type-assertion style: a runtime
+enum query rather than an interface-satisfaction check. It's the right fit when the varying
+capability is "does this specific verb accept this specific option flag" (many small booleans)
+rather than "does this backend implement this entire extra facet" (locking, watching).</p>
+<p><strong>Vitess topo.Conn — one interface, every topology backend (ZK/etcd/consul/in-memory)
+implements all of it, versions are opaque.</strong> <code>Conn.Update(ctx, filePath string, contents
+[]byte, version Version) (Version, error)</code> takes an opaque <code>Version interface{ String() string
+}</code> — "passing nil version permits unconditional updates" — and returns a new opaque version on
+success; <code>Delete</code> takes the same opaque version or nil for unconditional. This is the
+single-key-CAS pattern from Part A, generalized: the interface never assumes the version is a
+number, an etag, or a revision — only that it's comparable by the backend and round-trippable
+by the caller
+(<a href="https://github.com/vitessio/vitess/blob/main/go/vt/topo/conn.go" rel="noopener noreferrer">topo/conn.go</a>). Vitess also
+separates <code>TryLock</code> (fail-fast) from <code>Lock</code> (blocking) from <code>LockName</code> (lock a name with no
+backing file, for coordination that isn't about protecting a specific stored value) — three
+shades of the same primitive that a single <code>Lock(blocking bool)</code> boolean flag would muddy.</p>
+<p><strong>Temporal — RangeID as a durable fencing token, not merely a CAS token.</strong> Each history shard
+tracks an in-memory <code>RangeID</code>, "a monotonically increasing generation number used for fencing
+… shard ownership fencing via RangeID prevents split-brain, ensuring only one instance can
+write to a shard," and every persistence call for that shard is required to present the current
+<code>RangeID</code>; a stale one is rejected with a shard-ownership-lost error rather than silently
+applied (<a href="https://github.com/temporalio/temporal/blob/main/docs/architecture/history-service.md" rel="noopener noreferrer">Temporal history-service architecture</a>;
+<a href="https://github.com/temporalio/temporal/issues/3135" rel="noopener noreferrer">shard ownership assertion issue #3135</a>).
+This is the direct answer to "what replaces a memcached CAS token when you actually need
+crash-safe exclusivity across a fleet of worker processes racing for the same partition of
+work": a fencing token that is (a) monotonic, (b) durable in the backing store itself, and (c)
+checked by every write, not just advisory to whichever process currently believes it holds the
+lease. dag-worker-go's multi-instance work-distribution story (a separate open question in this
+project) should borrow this exact shape rather than re-deriving it.</p>
+<p><strong>The idiomatic Go capability-negotiation pattern, independent of any of the above projects,</strong>
+is <code>database/sql/driver</code>'s own approach: a <code>driver.Conn</code> is required to implement only <code>Prepare</code>,
+<code>Close</code>, <code>Begin</code>; if it additionally implements <code>driver.Pinger</code>, <code>database/sql</code> uses that for
+<code>DB.PingContext</code>; if it implements <code>driver.ExecerContext</code>/<code>QueryerContext</code>, <code>database/sql</code>
+skips preparing a statement and calls those directly; if not, it falls back to
+prepare-then-exec. This is "optional interface + type assertion at the call site," done in the
+Go standard library itself, and it is the exact shape dag-worker-go's <code>Store</code> core + optional
+facets should take.</p>
+<p><strong>The conformance-test-suite pattern.</strong> <code>testing/fstest.TestFS(fsys fs.FS, expected
+...string) error</code> "walks the entire tree of files in fsys, opening and checking that each file
+behaves correctly," checks that symlink metadata behaves correctly if <code>fs.ReadLinkFS</code> is also
+implemented, and returns a combinable multi-error rather than failing on the first mismatch
+(<a href="https://pkg.go.dev/testing/fstest" rel="noopener noreferrer">testing/fstest docs</a>) — a single exported function any
+<code>fs.FS</code> implementor calls from their own <code>_test.go</code>. gocloud.dev's <code>blob/drivertest</code> runs the
+same idea at far larger scale: <code>RunConformanceTests(t *testing.T, newHarness HarnessMaker,
+asTests []AsTest)</code> drives ~21 test groups (List/ListWeirdKeys/ListDelimiters, Read/Attributes,
+Write/CanceledWrite/UploadDownload/IfNotExist, Metadata/MD5, Copy/Delete/Keys, SignedURL,
+ConcurrentWriteAndRead, and a driver-specific <code>As</code> check) against whatever <code>driver.Bucket</code> the
+harness constructs, so every provider package (<code>s3blob</code>, <code>gcsblob</code>, <code>azureblob</code>, <code>fileblob</code>,
+<code>memblob</code>) gets the identical battery of behavioral tests for free, and a new provider proves
+itself by passing the shared suite rather than writing its own from scratch
+(<a href="https://github.com/google/go-cloud/blob/master/blob/drivertest/drivertest.go" rel="noopener noreferrer">blob/drivertest/drivertest.go</a>).
+<code>docstore/drivertest</code> runs the analogous suite for revision-based optimistic concurrency,
+including an <code>AsTest</code> interface for verifying the escape-hatch type assertions actually reach a
+real provider-native handle
+(<a href="https://pkg.go.dev/gocloud.dev/docstore/drivertest" rel="noopener noreferrer">docstore/drivertest</a>).</p>
+<h3 id="b-3-the-proposed-interface-set-for-dag-worker-go">B.3 The proposed interface set for dag-worker-go<a class="anchor" href="#b-3-the-proposed-interface-set-for-dag-worker-go" aria-label="Link to this section">#</a></h3>
+<p><strong>Design decision, stated up front:</strong> the core interface is scoped to <em>records</em> (nodes, edges,
+scope indices, transition events) and does <strong>not</strong> try to be a generic KV store. A generic KV
+<code>Get(key) []byte</code> interface would push all of the DAG-shaped semantics (what a node record
+looks like, what a status transition looks like) into every backend implementation, defeating
+"a new backend is a few hundred lines." Instead, the core interface knows about <em>nodes</em> and
+<em>edges</em> as first-class shapes, and backends translate that into their own native
+representation (a Postgres row, a Redis hash + ZSET pair, an in-memory <code>sync.Map</code>).</p>
+<pre><code class="language-go"><span class="tok-kw">package</span> dagstore
+
+<span class="tok-kw">import</span> (
+	<span class="tok-str">"context"</span>
+	<span class="tok-str">"errors"</span>
+	<span class="tok-str">"time"</span>
+)
+
+<span class="tok-com">// Version is an opaque, backend-defined optimistic-concurrency token —</span>
+<span class="tok-com">// modeled directly on Vitess's topo.Version</span>
+<span class="tok-com">// (https://github.com/vitessio/vitess/blob/main/go/vt/topo/conn.go).</span>
+<span class="tok-com">// Callers must treat it as a black box: obtain it from a Get, pass it back</span>
+<span class="tok-com">// unmodified to a conditional write, and never construct or compare one</span>
+<span class="tok-com">// themselves. A nil Version on a write means "unconditional" — same</span>
+<span class="tok-com">// convention as topo.Conn.Update.</span>
+<span class="tok-kw">type</span> Version <span class="tok-kw">interface</span> {
+	String() <span class="tok-kw">string</span>
+}
+
+<span class="tok-com">// NodeStatus is the deliberately minimal public vocabulary. Everything else</span>
+<span class="tok-com">// (which worker holds it, its retry count, its scheduling priority) is</span>
+<span class="tok-com">// private payload, not public state — see the companion state-machine</span>
+<span class="tok-com">// research doc for the full justification.</span>
+<span class="tok-kw">type</span> NodeStatus <span class="tok-kw">uint8</span>
+
+<span class="tok-kw">const</span> (
+	StatusNew NodeStatus = <span class="tok-kw">iota</span>
+	StatusInProgress
+	StatusSuccess
+	StatusError
+)
+
+<span class="tok-com">// Node is the portable shape every backend must be able to store and load.</span>
+<span class="tok-com">// Payload is opaque bytes the host program defines; the library never</span>
+<span class="tok-com">// inspects it.</span>
+<span class="tok-kw">type</span> Node <span class="tok-kw">struct</span> {
+	Scope     <span class="tok-kw">string</span>
+	ID        <span class="tok-kw">string</span>
+	Status    NodeStatus
+	Payload   []<span class="tok-kw">byte</span>
+	Deadline  time.Time <span class="tok-com">// zero if no worker currently holds it</span>
+	UpdatedAt time.Time
+}
+
+<span class="tok-com">// Edge is directed: From must complete before To becomes eligible.</span>
+<span class="tok-kw">type</span> Edge <span class="tok-kw">struct</span> {
+	Scope    <span class="tok-kw">string</span>
+	From, To <span class="tok-kw">string</span>
+}
+
+<span class="tok-com">// Sentinel errors every backend must map its native errors onto, so callers</span>
+<span class="tok-com">// can branch on behavior without a type switch per backend.</span>
+<span class="tok-kw">var</span> (
+	ErrNotFound       = errors.New(<span class="tok-str">"dagstore: node not found"</span>)
+	ErrVersionMismatch = errors.New(<span class="tok-str">"dagstore: version mismatch"</span>)   <span class="tok-com">// CAS/optimistic-lock failure</span>
+	ErrAlreadyExists  = errors.New(<span class="tok-str">"dagstore: node already exists"</span>)
+	ErrCapability     = errors.New(<span class="tok-str">"dagstore: capability not supported by this backend"</span>)
+)
+
+<span class="tok-com">// Store is the mandatory core. Every backend — memory, Redis, Postgres —</span>
+<span class="tok-com">// must implement exactly this and nothing more to be usable at all.</span>
+<span class="tok-com">// It intentionally does NOT include listing, scanning, or timeout sweeping:</span>
+<span class="tok-com">// those are optional facets (below) because not every backend can offer</span>
+<span class="tok-com">// them with the semantics the library needs (see Part A for memcached).</span>
+<span class="tok-kw">type</span> Store <span class="tok-kw">interface</span> {
+	<span class="tok-com">// GetNode returns ErrNotFound if absent. The returned Version must be</span>
+	<span class="tok-com">// passed to PutNode for an optimistic-concurrency write.</span>
+	GetNode(ctx context.Context, scope, id <span class="tok-kw">string</span>) (Node, Version, <span class="tok-kw">error</span>)
+
+	<span class="tok-com">// PutNode writes unconditionally if expected is nil (create-or-overwrite),</span>
+	<span class="tok-com">// or conditionally if expected is non-nil — ErrVersionMismatch if the</span>
+	<span class="tok-com">// stored version has moved on, ErrNotFound if expected is non-nil but no</span>
+	<span class="tok-com">// node exists to compare against. Returns the new Version on success.</span>
+	PutNode(ctx context.Context, n Node, expected Version) (Version, <span class="tok-kw">error</span>)
+
+	<span class="tok-com">// CreateNode is PutNode's add-only cousin: ErrAlreadyExists if the node</span>
+	<span class="tok-com">// is already present. Exists as its own method (not PutNode with a</span>
+	<span class="tok-com">// sentinel Version) because "does this key exist at all" is cheaper to</span>
+	<span class="tok-com">// express natively on every backend (Redis SETNX/SET NX, Postgres</span>
+	<span class="tok-com">// INSERT ... ON CONFLICT DO NOTHING RETURNING, memcached add) than to</span>
+	<span class="tok-com">// simulate via a fabricated "expect absent" Version value.</span>
+	CreateNode(ctx context.Context, n Node) (Version, <span class="tok-kw">error</span>)
+
+	<span class="tok-com">// Transition performs a compare-and-move public-status change and MUST</span>
+	<span class="tok-com">// be atomic with respect to any other Transition or PutNode racing on</span>
+	<span class="tok-com">// the same node. Backends that have native single-record atomics</span>
+	<span class="tok-com">// (Redis WATCH/Lua, Postgres UPDATE ... WHERE status = $expected) use</span>
+	<span class="tok-com">// them directly; a backend with nothing better may fall back to the</span>
+	<span class="tok-com">// PutNode CAS loop internally, but the atomicity guarantee to the</span>
+	<span class="tok-com">// caller is non-negotiable — see conformance test T-ATOMIC-TRANSITION.</span>
+	Transition(ctx context.Context, scope, id <span class="tok-kw">string</span>, from, to NodeStatus) <span class="tok-kw">error</span>
+
+	<span class="tok-com">// AddEdges registers zero or more directed edges. Implementations MUST</span>
+	<span class="tok-com">// guarantee that, from any external observer's point of view, either</span>
+	<span class="tok-com">// all edges in one call are visible or none are (batch atomicity per</span>
+	<span class="tok-com">// call, not necessarily across calls) — see conformance test</span>
+	<span class="tok-com">// T-EDGE-BATCH-ATOMICITY. Backends without native multi-key</span>
+	<span class="tok-com">// transactions (see Part A) must refuse via ErrCapability rather than</span>
+	<span class="tok-com">// offer partial-batch semantics silently.</span>
+	AddEdges(ctx context.Context, edges ...Edge) <span class="tok-kw">error</span>
+
+	<span class="tok-com">// DeleteNode removes a node and is unconditional; conditional delete is</span>
+	<span class="tok-com">// an optional facet (ConditionalDeleter, below) because not every</span>
+	<span class="tok-com">// backend can offer it as cheaply as an unconditional delete.</span>
+	DeleteNode(ctx context.Context, scope, id <span class="tok-kw">string</span>) <span class="tok-kw">error</span>
+
+	<span class="tok-com">// Close releases backend resources (pool, connections).</span>
+	Close(ctx context.Context) <span class="tok-kw">error</span>
+}</code></pre>
+<p><strong>Optional capability facets</strong> — a backend implements zero or more of these; callers check with
+a type assertion, exactly as <code>database/sql/driver</code> checks for <code>driver.Pinger</code>:</p>
+<pre><code class="language-go"><span class="tok-com">// Lister is implemented by any backend that can enumerate a scope's nodes</span>
+<span class="tok-com">// without a full table/keyspace scan — Postgres via an indexed WHERE</span>
+<span class="tok-com">// scope = $1, Redis via a scope-specific SET/ZSET of member IDs maintained</span>
+<span class="tok-com">// alongside the node hashes. Memcached cannot implement this — see Part A.</span>
+<span class="tok-kw">type</span> Lister <span class="tok-kw">interface</span> {
+	<span class="tok-com">// ListNodes returns nodes in a scope with cursor-based pagination.</span>
+	<span class="tok-com">// cursor == "" starts from the beginning; a non-empty returned cursor</span>
+	<span class="tok-com">// means more pages remain, matching the Redis SCAN convention of an</span>
+	<span class="tok-com">// opaque, backend-defined cursor rather than an offset</span>
+	<span class="tok-com">// (https://redis-doc-test.readthedocs.io/en/latest/commands/scan/).</span>
+	ListNodes(ctx context.Context, scope <span class="tok-kw">string</span>, cursor <span class="tok-kw">string</span>, limit <span class="tok-kw">int</span>) (nodes []Node, nextCursor <span class="tok-kw">string</span>, err <span class="tok-kw">error</span>)
+}
+
+<span class="tok-com">// ReadyQueue is implemented by any backend that can atomically hand out</span>
+<span class="tok-com">// exactly-once-in-flight "ready" nodes to competing worker processes across</span>
+<span class="tok-com">// multiple library instances. Redis implements this on Streams</span>
+<span class="tok-com">// (XADD/XREADGROUP/XACK/XCLAIM — https://redis.io/docs/latest/develop/data-types/streams/),</span>
+<span class="tok-com">// Postgres implements it on SELECT ... FOR UPDATE SKIP LOCKED</span>
+<span class="tok-com">// (https://www.postgresql.org/docs/current/sql-select.html), the in-memory</span>
+<span class="tok-com">// backend implements it on a channel + a pending-set. Memcached cannot</span>
+<span class="tok-com">// implement this at all (Part A.5) and must not attempt to fake it with a</span>
+<span class="tok-com">// polling loop over individually-fetched keys, which would violate the</span>
+<span class="tok-com">// AckTimeout guarantee below under concurrent competing consumers.</span>
+<span class="tok-kw">type</span> ReadyQueue <span class="tok-kw">interface</span> {
+	<span class="tok-com">// ClaimReady blocks (subject to ctx) until at least one ready node is</span>
+	<span class="tok-com">// available, hands it to exactly one caller across the whole fleet, and</span>
+	<span class="tok-com">// starts its ack-timeout clock. The returned ClaimToken must be passed</span>
+	<span class="tok-com">// to Ack or Nack.</span>
+	ClaimReady(ctx context.Context, scope <span class="tok-kw">string</span>, ackTimeout time.Duration) (Node, ClaimToken, <span class="tok-kw">error</span>)
+
+	<span class="tok-com">// Ack confirms successful processing; the node's status is expected to</span>
+	<span class="tok-com">// already have been moved to Success/Error by a prior Transition call —</span>
+	<span class="tok-com">// Ack here only clears it from the in-flight/pending set.</span>
+	Ack(ctx context.Context, token ClaimToken) <span class="tok-kw">error</span>
+
+	<span class="tok-com">// Nack releases the claim early (worker detected its own failure before</span>
+	<span class="tok-com">// the ack timeout), making the node immediately reclaimable rather than</span>
+	<span class="tok-com">// waiting out the full ackTimeout.</span>
+	Nack(ctx context.Context, token ClaimToken) <span class="tok-kw">error</span>
+}
+
+<span class="tok-com">// TimeoutSweeper is implemented by any backend that can reliably discover</span>
+<span class="tok-com">// claims whose ack timeout has elapsed without a proactive per-node timer.</span>
+<span class="tok-com">// Redis Streams offers this via XPENDING/XAUTOCLAIM idle-time</span>
+<span class="tok-com">// (https://redis.io/docs/latest/commands/xautoclaim/); Postgres via a</span>
+<span class="tok-com">// deadline column plus a periodic SKIP LOCKED sweep query. Memcached cannot</span>
+<span class="tok-com">// implement this (Part A.5) — no scan, no ordered index by deadline.</span>
+<span class="tok-kw">type</span> TimeoutSweeper <span class="tok-kw">interface</span> {
+	<span class="tok-com">// SweepTimedOut finds claims whose deadline has passed, transitions</span>
+	<span class="tok-com">// those nodes to StatusError (timeout), and returns how many were swept.</span>
+	<span class="tok-com">// Backends decide their own sweep granularity; the library calls this</span>
+	<span class="tok-com">// on a ticker, not per-node.</span>
+	SweepTimedOut(ctx context.Context, scope <span class="tok-kw">string</span>, now time.Time) (<span class="tok-kw">int</span>, <span class="tok-kw">error</span>)
+}
+
+<span class="tok-com">// EventStream is implemented by any backend that can fan status</span>
+<span class="tok-com">// transitions and "must be claimed" notices out to subscribers without the</span>
+<span class="tok-com">// subscriber polling. Redis: Pub/Sub or Streams consumer groups. Postgres:</span>
+<span class="tok-com">// LISTEN/NOTIFY. In-memory: a fan-out channel. A backend without this</span>
+<span class="tok-com">// facet still supports subscription at the library level via a</span>
+<span class="tok-com">// library-managed polling adapter built ONLY on the mandatory Store</span>
+<span class="tok-com">// surface, at reduced timeliness — but it must be labeled as polling, not</span>
+<span class="tok-com">// presented as equivalent.</span>
+<span class="tok-kw">type</span> EventStream <span class="tok-kw">interface</span> {
+	Subscribe(ctx context.Context, scope <span class="tok-kw">string</span>) (&lt;-<span class="tok-kw">chan</span> Event, <span class="tok-kw">error</span>)
+}
+
+<span class="tok-com">// ConditionalDeleter is implemented by backends that can delete-if-version-</span>
+<span class="tok-com">// matches as a single call rather than emulating it with a read-then-CAS-</span>
+<span class="tok-com">// then-delete loop (Postgres: DELETE ... WHERE version = $1; Redis: a small</span>
+<span class="tok-com">// Lua script; memcached's meta protocol: md key C&lt;token&gt;, which is why</span>
+<span class="tok-com">// memcached IS capable of this one facet even though it fails Lister,</span>
+<span class="tok-com">// ReadyQueue, and TimeoutSweeper — capability negotiation is per-facet, not</span>
+<span class="tok-com">// all-or-nothing per backend).</span>
+<span class="tok-kw">type</span> ConditionalDeleter <span class="tok-kw">interface</span> {
+	DeleteNodeIf(ctx context.Context, scope, id <span class="tok-kw">string</span>, expected Version) <span class="tok-kw">error</span>
+}
+
+<span class="tok-com">// ClaimToken is opaque and backend-defined, analogous to Version.</span>
+<span class="tok-kw">type</span> ClaimToken <span class="tok-kw">interface</span> {
+	String() <span class="tok-kw">string</span>
+}
+
+<span class="tok-kw">type</span> Event <span class="tok-kw">struct</span> {
+	Scope     <span class="tok-kw">string</span>
+	NodeID    <span class="tok-kw">string</span>
+	Kind      EventKind <span class="tok-com">// TransitionEvent | MustClaimEvent</span>
+	From, To  NodeStatus
+	At        time.Time
+}
+
+<span class="tok-kw">type</span> EventKind <span class="tok-kw">uint8</span>
+
+<span class="tok-kw">const</span> (
+	TransitionEvent EventKind = <span class="tok-kw">iota</span>
+	MustClaimEvent
+)</code></pre>
+<p><strong>Capability discovery</strong> follows the <code>database/sql/driver</code> / Thanos pattern exactly — a small
+enum-returning helper for coarse-grained "which facets exist" queries, plus type assertions at
+the call site for actually using them:</p>
+<pre><code class="language-go"><span class="tok-com">// Capabilities lets a caller (or the library's own bootstrap code) log or</span>
+<span class="tok-com">// refuse-to-start based on what a configured backend can do, without</span>
+<span class="tok-com">// needing five separate type assertions scattered through the codebase.</span>
+<span class="tok-kw">type</span> CapabilityReporter <span class="tok-kw">interface</span> {
+	Capabilities() CapabilitySet
+}
+
+<span class="tok-kw">type</span> CapabilitySet <span class="tok-kw">uint32</span>
+
+<span class="tok-kw">const</span> (
+	CapList CapabilitySet = <span class="tok-num">1</span> &lt;&lt; <span class="tok-kw">iota</span>
+	CapReadyQueue
+	CapTimeoutSweep
+	CapEventStream
+	CapConditionalDelete
+	CapMultiKeyAtomicEdges <span class="tok-com">// AddEdges is truly atomic across nodes, not per-call best-effort</span>
+)
+
+<span class="tok-kw">func</span> (cs CapabilitySet) Has(c CapabilitySet) <span class="tok-kw">bool</span> { <span class="tok-kw">return</span> cs&amp;c != <span class="tok-num">0</span> }</code></pre>
+<pre><code class="language-go"><span class="tok-com">// Call-site usage — exactly the shape of database/sql checking for</span>
+<span class="tok-com">// driver.Pinger, or Thanos checking SupportedObjectUploadOptions.</span>
+<span class="tok-kw">func</span> startSweeper(ctx context.Context, s dagstore.Store, scope <span class="tok-kw">string</span>) {
+	sweeper, ok := s.(dagstore.TimeoutSweeper)
+	<span class="tok-kw">if</span> !ok {
+		log.Printf(<span class="tok-str">"backend %T has no native timeout sweep; falling back to library-level polling sweep (reduced timeliness)"</span>, s)
+		<span class="tok-kw">go</span> pollingFallbackSweep(ctx, s, scope)
+		<span class="tok-kw">return</span>
+	}
+	<span class="tok-kw">go</span> <span class="tok-kw">func</span>() {
+		t := time.NewTicker(<span class="tok-num">5</span> * time.Second)
+		<span class="tok-kw">defer</span> t.Stop()
+		<span class="tok-kw">for</span> {
+			<span class="tok-kw">select</span> {
+			<span class="tok-kw">case</span> &lt;-t.C:
+				sweeper.SweepTimedOut(ctx, scope, time.Now())
+			<span class="tok-kw">case</span> &lt;-ctx.Done():
+				<span class="tok-kw">return</span>
+			}
+		}
+	}()
+}</code></pre>
+<h3 id="b-4-what-each-backend-guarantees-to-pass-conformance">B.4 What each backend guarantees, to pass conformance<a class="anchor" href="#b-4-what-each-backend-guarantees-to-pass-conformance" aria-label="Link to this section">#</a></h3>
+<p>The conformance suite (§B.5) is what actually enforces this table — it is not documentation
+that can silently drift, it is a shared <code>_test.go</code> every backend package imports and runs
+against its own harness, exactly as <code>blob/drivertest.RunConformanceTests</code> does for every
+gocloud.dev provider
+(<a href="https://github.com/google/go-cloud/blob/master/blob/drivertest/drivertest.go" rel="noopener noreferrer">blob/drivertest.go</a>).</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Capability</th><th>In-memory</th><th>Redis</th><th>Postgres</th><th>Memcached (as <code>NodeCache</code>, not <code>Store</code>)</th></tr></thead>
+<tbody>
+<tr><td><code>Store</code> core</td><td>Yes — <code>sync.Map</code> + per-node <code>sync.RWMutex</code>, Version = incrementing <code>uint64</code> cast to string</td><td>Yes — one <code>HASH</code> per node, Version = Redis <code>OBJECT FREQ</code>-independent app-level <code>rev</code> field, CAS via a 3-line Lua script (<code>if redis.call('HGET',KEYS[1],'rev')==ARGV[1] then redis.call('HSET',...) end</code>) — <a href="https://redis.antirez.com/fundamental/atomic-updates.html" rel="noopener noreferrer">atomic update patterns</a></td><td>Yes — one row per node, Version = <code>xmin</code> or an explicit <code>revision BIGINT</code>, CAS via <code>UPDATE ... WHERE id=$1 AND revision=$2</code></td><td><strong>N/A — does not implement <code>Store</code></strong> (Part A.6)</td></tr>
+<tr><td><code>Lister</code></td><td>Yes — scope index is an in-process <code>map[string]map[string]struct{}</code> under the same lock</td><td>Yes — a <code>ZSET</code> per scope keyed by node ID, scored by insertion order, <code>ZRANGE</code> for pagination</td><td>Yes — indexed <code>WHERE scope = $1 ORDER BY id LIMIT ... OFFSET</code>/keyset pagination</td><td>No</td></tr>
+<tr><td><code>ReadyQueue</code></td><td>Yes — buffered channel per scope + an in-process pending-set with a <code>time.AfterFunc</code> per claim</td><td>Yes — Streams: <code>XADD</code> on ready, <code>XREADGROUP GROUP workers ... COUNT 1 BLOCK ...</code>, <code>XACK</code> on Ack, claim = <code>(stream ID, consumer group)</code> pair (<a href="https://redis.io/docs/latest/develop/data-types/streams/" rel="noopener noreferrer">Redis Streams docs</a>)</td><td>Yes — <code>SELECT id FROM nodes WHERE scope=$1 AND status='ready' ORDER BY priority FOR UPDATE SKIP LOCKED LIMIT 1</code>, claim = row id + <code>deadline</code> column set in the same statement (<a href="https://www.postgresql.org/docs/current/sql-select.html" rel="noopener noreferrer">PostgreSQL SKIP LOCKED docs</a>)</td><td>No</td></tr>
+<tr><td><code>TimeoutSweeper</code></td><td>Yes — a min-heap of deadlines, swept on a ticker</td><td>Yes — <code>XAUTOCLAIM stream group consumer min-idle-time 0-0 COUNT 100</code>, reassigns entries idle past the ack timeout (<a href="https://redis.io/docs/latest/commands/xautoclaim/" rel="noopener noreferrer">XAUTOCLAIM docs</a>)</td><td>Yes — <code>UPDATE nodes SET status='error_timeout' WHERE status='in_progress' AND deadline &lt; now() RETURNING id</code></td><td>No</td></tr>
+<tr><td><code>EventStream</code></td><td>Yes — <code>chan Event</code> fan-out, buffered, drop-oldest on a slow subscriber (documented, not silent)</td><td>Yes — a second Streams consumer group purely for events, or Pub/Sub for at-most-once</td><td>Yes — <code>LISTEN dag_events</code> / <code>NOTIFY dag_events, payload</code> (payload ≤ 8000 bytes — large events carry a node key, not the full record)</td><td>No</td></tr>
+<tr><td><code>ConditionalDeleter</code></td><td>Yes</td><td>Yes — Lua script</td><td>Yes — <code>DELETE ... WHERE revision=$2</code></td><td><strong>Yes</strong> — <code>md key C&lt;token&gt;</code> on the meta protocol IS a real conditional delete on a single cached copy (Part A.3); this is the one facet memcached honestly supports, which is exactly why capability negotiation must be per-facet</td></tr>
+<tr><td><code>CapMultiKeyAtomicEdges</code></td><td>Yes — global scope lock held for the duration of <code>AddEdges</code></td><td>Yes — Lua script touching both node hashes and the scope ZSET in one round trip</td><td>Yes — a single <code>BEGIN; ...; COMMIT</code> transaction</td><td>No — memcached is not even a <code>Store</code>, so this bit is moot</td></tr>
+</tbody></table></div>
+<p><strong>Exact conformance semantics per capability</strong> (what a backend must prove to earn the bit, not
+just what it typically does):</p>
+<ul>
+<li><strong><code>Store.Transition</code> atomicity</strong>: under N concurrent goroutines calling <code>Transition(from=A,
+to=B)</code> and <code>Transition(from=A, to=C)</code> against the same fresh node with status <code>A</code>, exactly
+one must succeed and the rest must return a distinguishable "not in expected state" error —
+never both succeeding, never the node ending up in a status neither caller requested.</li>
+<li><strong><code>AddEdges</code> batch atomicity</strong>: a concurrent <code>GetNode</code>/<code>ListNodes</code> observer, sampled at an
+arbitrary point during a 3-edge <code>AddEdges</code> call, must see either zero or all three edges
+reflected in whatever structure records them (fan-out list, dependency counters) — partial
+visibility fails conformance outright, per <code>CapMultiKeyAtomicEdges</code> above.</li>
+<li><strong><code>ReadyQueue.ClaimReady</code> exclusivity</strong>: under N competing consumers across (simulated)
+multiple process instances hitting the same backend, each ready node must be delivered to
+exactly one consumer per claim epoch — re-delivery after <code>ackTimeout</code> elapses without an
+<code>Ack</code> is correct and expected (at-least-once), but two <em>simultaneous</em> un-timed-out claims on
+the same node is a conformance failure.</li>
+<li><strong><code>TimeoutSweeper.SweepTimedOut</code> no-double-sweep</strong>: calling it concurrently from two
+goroutines against the same overdue claim must transition that node to
+<code>StatusError</code>(timeout) exactly once — the second caller observes the already-swept state and
+counts it as zero newly-swept, not as an error, and not as a double-transition.</li>
+<li><strong><code>Version</code> round-trip fidelity</strong>: <code>Version.String()</code> must be usable purely as an opaque
+comparison/storage token — conformance feeds a <code>Version</code> obtained from one <code>GetNode</code> back
+into a <code>PutNode</code> after serializing it to string and back (as a caller persisting it across a
+process restart might), and the backend must still honor it correctly, mirroring Vitess's
+own opaque-<code>Version</code> contract (<a href="https://github.com/vitessio/vitess/blob/main/go/vt/topo/conn.go" rel="noopener noreferrer">topo/conn.go</a>).</li>
+</ul>
+<h3 id="b-5-the-conformance-suite-sketched">B.5 The conformance suite, sketched<a class="anchor" href="#b-5-the-conformance-suite-sketched" aria-label="Link to this section">#</a></h3>
+<p>Following <code>blob/drivertest</code> and <code>testing/fstest.TestFS</code> directly: one exported function per
+capability group, a <code>Harness</code> interface each backend package implements in its own
+<code>_test.go</code>, and a single <code>RunConformance</code> entry point that backend authors call with one line:</p>
+<pre><code class="language-go"><span class="tok-kw">package</span> dagstoretest
+
+<span class="tok-kw">import</span> (
+	<span class="tok-str">"context"</span>
+	<span class="tok-str">"testing"</span>
+
+	<span class="tok-str">"example.com/dagstore"</span>
+)
+
+<span class="tok-com">// Harness is implemented once per backend package (memstore, redisstore,</span>
+<span class="tok-com">// pgstore) — modeled on gocloud.dev's blob/drivertest.HarnessMaker</span>
+<span class="tok-com">// (https://github.com/google/go-cloud/blob/master/blob/drivertest/drivertest.go).</span>
+<span class="tok-kw">type</span> Harness <span class="tok-kw">interface</span> {
+	<span class="tok-com">// MakeStore returns a fresh, empty Store backed by a real instance of</span>
+	<span class="tok-com">// the backend (e.g. a Docker-Composed Redis on a non-default port for</span>
+	<span class="tok-com">// end-to-end runs, miniredis for fast unit runs).</span>
+	MakeStore(ctx context.Context) (dagstore.Store, <span class="tok-kw">error</span>)
+	Close()
+}
+
+<span class="tok-com">// RunConformance is the single call every backend's TestConformance</span>
+<span class="tok-com">// function makes. It runs the mandatory Store suite unconditionally, then</span>
+<span class="tok-com">// runs each optional-facet suite only if the returned Store satisfies that</span>
+<span class="tok-com">// facet's interface — exactly the shape of testing/fstest.TestFS walking</span>
+<span class="tok-com">// whatever the fs.FS actually implements</span>
+<span class="tok-com">// (https://pkg.go.dev/testing/fstest).</span>
+<span class="tok-kw">func</span> RunConformance(t *testing.T, mk <span class="tok-kw">func</span>(context.Context) (Harness, <span class="tok-kw">error</span>)) {
+	t.Run(<span class="tok-str">"Store/CreatePutGet"</span>, <span class="tok-kw">func</span>(t *testing.T) { testCreatePutGet(t, mk) })
+	t.Run(<span class="tok-str">"Store/TransitionAtomicity"</span>, <span class="tok-kw">func</span>(t *testing.T) { testTransitionAtomicity(t, mk) })
+	t.Run(<span class="tok-str">"Store/AddEdgesBatchAtomicity"</span>, <span class="tok-kw">func</span>(t *testing.T) { testAddEdgesAtomicity(t, mk) })
+	t.Run(<span class="tok-str">"Store/VersionRoundTrip"</span>, <span class="tok-kw">func</span>(t *testing.T) { testVersionRoundTrip(t, mk) })
+	t.Run(<span class="tok-str">"Store/ConcurrentCASConverges"</span>, <span class="tok-kw">func</span>(t *testing.T) { testConcurrentCAS(t, mk) })
+
+	t.Run(<span class="tok-str">"Capability/Lister"</span>, <span class="tok-kw">func</span>(t *testing.T) { runIfCapable[dagstore.Lister](t, mk, testListerPagination) })
+	t.Run(<span class="tok-str">"Capability/ReadyQueueExclusivity"</span>, <span class="tok-kw">func</span>(t *testing.T) { runIfCapable[dagstore.ReadyQueue](t, mk, testReadyQueueExclusivity) })
+	t.Run(<span class="tok-str">"Capability/TimeoutSweepIdempotent"</span>, <span class="tok-kw">func</span>(t *testing.T) { runIfCapable[dagstore.TimeoutSweeper](t, mk, testSweepNoDoubleFire) })
+	t.Run(<span class="tok-str">"Capability/EventStreamOrdering"</span>, <span class="tok-kw">func</span>(t *testing.T) { runIfCapable[dagstore.EventStream](t, mk, testEventOrdering) })
+	t.Run(<span class="tok-str">"Capability/ConditionalDelete"</span>, <span class="tok-kw">func</span>(t *testing.T) { runIfCapable[dagstore.ConditionalDeleter](t, mk, testCondDelete) })
+}
+
+<span class="tok-com">// runIfCapable skips (not fails) the sub-suite when the backend doesn't</span>
+<span class="tok-com">// implement the facet — mirroring Thanos's SupportedObjectUploadOptions</span>
+<span class="tok-com">// check rather than failing a backend for honestly not offering something</span>
+<span class="tok-com">// (https://github.com/thanos-io/objstore/blob/main/README.md).</span>
+<span class="tok-kw">func</span> runIfCapable[C <span class="tok-kw">any</span>](t *testing.T, mk <span class="tok-kw">func</span>(context.Context) (Harness, <span class="tok-kw">error</span>), fn <span class="tok-kw">func</span>(*testing.T, C)) {
+	ctx := context.Background()
+	h, err := mk(ctx)
+	<span class="tok-kw">if</span> err != <span class="tok-kw">nil</span> {
+		t.Fatal(err)
+	}
+	<span class="tok-kw">defer</span> h.Close()
+	s, err := h.MakeStore(ctx)
+	<span class="tok-kw">if</span> err != <span class="tok-kw">nil</span> {
+		t.Fatal(err)
+	}
+	c, ok := s.(C)
+	<span class="tok-kw">if</span> !ok {
+		t.Skipf(<span class="tok-str">"backend does not implement %T; skipping facet suite"</span>, c)
+		<span class="tok-kw">return</span>
+	}
+	fn(t, c)
+}</code></pre>
+<p>A memcached <code>NodeCache</code> package does <strong>not</strong> call <code>RunConformance</code> at all — it is not a
+<code>Store</code> — and instead ships its own much smaller conformance suite
+(<code>nodecachetest.RunConformance</code>) covering only get/set-if-absent/invalidate semantics, which is
+itself the visible, structural proof that memcached was deliberately scoped out of the <code>Store</code>
+contract rather than silently failing most of it.</p>
+<hr>
+<h2 id="recommendations-for-dag-worker-go">Recommendations for dag-worker-go<a class="anchor" href="#recommendations-for-dag-worker-go" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>Do not implement <code>dagstore.Store</code> on memcached.</strong> Ship it as <code>dagstore.NodeCache</code> — a
+three-method (<code>Get</code>, <code>SetIfAbsent</code>, <code>Invalidate</code>) read-through decorator that wraps any real
+<code>Store</code>, using <code>mg key c v</code> / <code>ms key ME</code> / <code>md key</code> on the meta protocol. This is the one
+design decision in this dossier to hold as non-negotiable; every alternative (reduced tier,
+<code>Durable() bool</code> flag) leaves a durability trap reachable through the public API.</li>
+<li><strong>Depend on the meta protocol (<code>mg</code>/<code>ms</code>/<code>md</code>), not the classic ASCII protocol</strong>, even
+though it commits to a newer client library (<code>pior/memcache</code> or
+<code>QuangTung97/go-memcache</code>), because <code>C&lt;token&gt;</code>/<code>ms ME</code> give exact add-if-absent and
+CAS-conditional-set semantics in one round trip that the classic protocol needs two
+commands (<code>gets</code> then <code>cas</code>) to approximate with a wider race window.</li>
+<li><strong>Never treat a memcached CAS token as an authoritative version.</strong> Every correctness
+argument in the library must rest on the durable backend's version field; memcached's token
+is purely a local optimization against thundering-herd refills, matching how every store
+that actually offers durable CAS (etcd, DynamoDB, Cassandra) ties its version to durable
+revision rather than an ephemeral in-memory counter.</li>
+<li><strong>Build <code>Store</code> as a narrow mandatory core (create/get/put-with-version/transition/
+add-edges/delete/close) plus five optional capability interfaces</strong> (<code>Lister</code>, <code>ReadyQueue</code>,
+<code>TimeoutSweeper</code>, <code>EventStream</code>, <code>ConditionalDeleter</code>), discovered by type assertion at call
+sites and summarized by an optional <code>CapabilityReporter</code> for logging/preflight — this is
+the containerd/Terraform/database-sql pattern, not a single fat interface.</li>
+<li><strong>Give Redis its Lua-scripted atomic transitions and Streams-based ready queue, and
+Postgres its <code>SKIP LOCKED</code>/<code>LISTEN</code>/transactional <code>AddEdges</code>, as first-class implementations
+of the optional interfaces — never emulate one backend's primitive on top of another's.</strong>
+The whole point of optional capability interfaces is that a backend which can do a thing
+natively does it in one round trip; a backend that can't either declines (<code>ErrCapability</code>)
+or falls back to a clearly-labeled, reduced-timeliness library-level polling adapter that
+callers can distinguish from the native path.</li>
+<li><strong>Write the conformance suite before the second backend, not after all three.</strong> Model it
+directly on <code>blob/drivertest.RunConformanceTests</code> and <code>testing/fstest.TestFS</code>: one exported
+<code>RunConformance(t, harnessMaker)</code> that every backend package's own test file calls, with
+capability sub-suites that <code>Skip</code> (not fail) when a facet isn't implemented — this is what
+makes the capability table in §B.4 a live contract instead of documentation that quietly
+goes stale.</li>
+<li><strong>Model <code>Version</code> and <code>ClaimToken</code> as opaque <code>interface{ String() string }</code> values</strong>,
+exactly as Vitess's <code>topo.Version</code> does, never as a concrete <code>uint64</code> or <code>string</code> in the
+public API — this is what lets Postgres use <code>xmin</code> or a <code>revision</code> column and Redis use a
+Lua-script-returned value without either backend leaking its native representation into the
+shared interface.</li>
+<li><strong>For the multi-instance work-distribution question (a separate open design area), reuse
+Temporal's <code>RangeID</code>-style fencing rather than inventing a new primitive</strong>: a durable,
+monotonic per-scope-partition token that every write must present, so a stalled instance
+that wakes up after another instance has taken over a partition gets rejected rather than
+silently corrupting state — the structural reason memcached's <code>W</code>/<code>Z</code> lease flags are
+insufficient for this role (Part A.3) is precisely that they lack this fencing property.</li>
+</ol>
+<h2 id="open-questions">Open questions<a class="anchor" href="#open-questions" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>Is a single node-level CAS loop (§A.7) actually needed inside <code>NodeCache</code>, or is
+invalidate-on-write from the durable store sufficient on its own?</strong> If reads always check
+memcached first and only ever repopulate on a genuine miss (never on a value that's merely
+"old"), the retry loop in §A.7 may be over-engineering for a component whose only job is
+shaving read latency — worth prototyping both and measuring cache-fill duplication under
+load before committing to the retry-loop complexity.</li>
+<li><strong>Should <code>AddEdges</code> batch atomicity be a hard conformance requirement, or should there be a
+weaker <code>CapEdgeBatchBestEffort</code> tier for a hypothetical future backend that can't offer true
+multi-key atomicity but also isn't memcached (e.g. a very constrained embedded KV)?</strong> This
+dossier assumes only memory/Redis/Postgres/memcached-as-cache are in scope, all of which
+either offer true batch atomicity or are excluded from <code>Store</code> entirely, so the question is
+moot today but may not stay moot if a fifth backend (e.g. DynamoDB, which <em>does</em> offer
+<code>TransactWriteItems</code> up to 100 items and would fit the strong tier fine) or a weaker one is
+added later.</li>
+<li><strong>Does <code>ReadyQueue.ClaimReady</code> need an explicit <code>ClaimToken</code>-embedded fencing counter now</strong>,
+per the Temporal <code>RangeID</code> recommendation, or can that be deferred until the multi-instance
+work-distribution design (a separate research area) actually settles on partitioning vs.
+pull-based competition vs. lease-stealing? Baking a fencing token into <code>ClaimToken</code> today
+costs little and forecloses fewer options later, but the exact shape of the token (per-scope
+epoch vs. per-node epoch vs. per-partition epoch) depends on that unresolved distribution
+design.</li>
+<li><strong>Is <code>EventStream</code> in-scope for every backend's conformance suite, or should it be allowed
+to degrade to at-most-once (Redis Pub/Sub, Postgres <code>NOTIFY</code> payload-size limits) without
+failing conformance</strong>, given the library's headline promise is that "anyone can subscribe...
+and receive every node status transition"? An at-most-once event stream silently violates
+"every" under a slow-subscriber or connection-drop scenario; this dossier did not settle
+whether the conformance suite should require at-least-once delivery (forcing, e.g., a
+Streams-consumer-group implementation on Redis rather than Pub/Sub) or accept degraded
+guarantees as long as they're truthfully reported via <code>CapabilitySet</code>.</li>
+</ul>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/research/06-memcached-and-storage-abstraction.md" rel="noopener noreferrer">View source: docs/research/06-memcached-and-storage-abstraction.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

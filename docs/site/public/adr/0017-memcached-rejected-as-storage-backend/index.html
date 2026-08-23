@@ -1,0 +1,732 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADR-0017: Memcached is rejected as a storage backend · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/adr/0017-memcached-rejected-as-storage-backend/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#adr-0017-memcached-is-rejected-as-a-storage-backend">ADR-0017: Memcached is rejected as a storage backend</a></li>
+<ul>
+<li><a href="#context">Context</a></li>
+<li><a href="#decision">Decision</a></li>
+<li><a href="#consequences">Consequences</a></li>
+<ul>
+<li><a href="#positive">Positive</a></li>
+<li><a href="#negative">Negative</a></li>
+<li><a href="#neutral">Neutral</a></li>
+</ul>
+<li><a href="#alternatives-considered">Alternatives considered</a></li>
+<li><a href="#references">References</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="adr-0017-memcached-is-rejected-as-a-storage-backend">ADR-0017: Memcached is rejected as a storage backend<a class="anchor" href="#adr-0017-memcached-is-rejected-as-a-storage-backend" aria-label="Link to this section">#</a></h1>
+<ul>
+<li><strong>Status:</strong> Accepted</li>
+<li><strong>Date:</strong> 2026-08-22</li>
+<li><strong>Deciders:</strong> Vladyslav Kazantsev (project owner)</li>
+<li><strong>Amends:</strong> —</li>
+<li><strong>Backing research:</strong> docs/research/06-memcached-and-storage-abstraction.md Part A (§A.1–§A.8)</li>
+</ul>
+<h2 id="context">Context<a class="anchor" href="#context" aria-label="Link to this section">#</a></h2>
+<p>The original brief asked for "Redis, Memcached, and PostgreSQL" backends. The design-synthesis
+draft's answer (docs/research/00-synthesis.md §3, ADR-17 seed; 06 Part A) was not "yes" but "yes,
+as a read-through <code>NodeCache</code> decorator that never implements <code>Store</code>." The project owner (AMD-5)
+went further: memcached is <strong>dropped entirely</strong>. No <code>storage/memcached</code> module, no <code>NodeCache</code>
+interface, no memcached service in <code>docker-compose.test.yml</code>, no row in the capability matrix. This
+ADR records the full technical case for that rejection, because it is the decision in this set most
+likely to be second-guessed against the literal wording of the original brief (docs/research/00
+§11, open question 6).</p>
+<p><strong>The protocol ceiling.</strong> Memcached's classic protocol gives exactly eleven verbs — <code>set/add/
+replace</code>, <code>append/prepend</code>, <code>cas</code>, <code>gets</code>, <code>delete</code>, <code>incr/decr</code>, <code>touch</code>/<code>gat</code> — and every one of
+them is scoped to <strong>exactly one key</strong>
+(<a href="https://github.com/memcached/memcached/blob/master/doc/protocol.txt" rel="noopener noreferrer">protocol.txt</a>). There is no
+verb that touches two keys atomically, at any protocol revision. Adding a DAG edge inherently means
+touching at least two records (the successor's pending-predecessor count, the predecessor's
+fan-out list) plus a scope index; memcached cannot make that one atomic unit under any
+circumstance.</p>
+<p><strong>The meta protocol (1.6+) does not lift the ceiling — it enriches single-key operations.</strong> <code>mg</code>/
+<code>ms</code>/<code>md</code>/<code>ma</code> add byte-efficient framing and expose internal item state (<code>c</code> for CAS token,
+<code>C&lt;token&gt;</code> for conditional set/delete, <code>N</code>/<code>W</code>/<code>Z</code>/<code>X</code> stampede-control flags), but the spec is
+explicit: "unlike <code>get</code>, metaget can only take a single key"
+(<a href="https://github.com/memcached/memcached/blob/master/doc/protocol.txt" rel="noopener noreferrer">protocol.txt</a>;
+<a href="https://docs.memcached.org/protocols/meta/" rel="noopener noreferrer">Meta Text Protocol</a>). There is no server-side
+scripting analogous to Redis Lua or Redis Functions — no <code>Txn</code>, no <code>MULTI</code>/<code>EXEC</code> equivalent, at
+any protocol version. The <code>N</code>/<code>W</code>/<code>Z</code> stampede tokens are a real, working single-key lease
+primitive, but they carry no fencing token: if an item is deleted and recreated while the original
+lease-winner is mid-flight, nothing keys that winner's write to a specific epoch, so it is
+structurally weaker than the Chubby-sequencer/ZooKeeper-<code>zxid</code>/Temporal-<code>RangeID</code> fencing model
+this library adopts everywhere else (ADR-0006).</p>
+<p><strong>No ordered structure.</strong> There is no ZSET analogue for a priority-ordered ready queue and no
+range-by-deadline index for the timeout sweeper. A per-scope index or a deadline index would have
+to be a hand-maintained value under one key — itself subject to the same no-multi-key-atomicity
+problem, and, past roughly 1 MiB, unable to be stored at all without client-side sharding of the
+index itself.</p>
+<p><strong>No durable CAS across restart or eviction.</strong> The protocol's own language is thin: a CAS token is
+"a unique 64-bit value of an existing entry"
+(<a href="https://github.com/memcached/memcached/blob/master/doc/protocol.txt" rel="noopener noreferrer">protocol.txt</a>) — it does not
+claim the token space survives a restart, and a plain process restart or an evict-then-recreate
+cycle can reissue a numerically identical token against a semantically different item. This is a
+textbook ABA hazard
+(<a href="https://www.stroustrup.com/isorc2010.pdf" rel="noopener noreferrer">Stroustrup et al., "Understanding and Effectively Preventing the ABA Problem"</a>;
+<a href="https://users.fmi.uni-jena.de/~nwk/LockFree.pdf" rel="noopener noreferrer">Lock-Free Concurrent Data Structures lecture notes</a>)
+with no protocol-level fix.</p>
+<p><strong>Eviction is silent and adversarial to correctness.</strong> LRU eviction is slab-class-local — an item
+can be evicted while plenty of RAM sits unused in other slab classes
+(<a href="https://github.com/memcached/memcached/blob/master/doc/new_lru.txt" rel="noopener noreferrer">new_lru.txt</a>) — and
+<code>extstore</code>, memcached's own flash-storage extension, is explicitly non-durable: "data stored with
+extstore is not durable — if the Memcached process crashes, data cannot be recovered"
+(<a href="https://docs.memcached.org/features/flashstorage/" rel="noopener noreferrer">extstore flash storage docs</a>), and it evicts
+from the in-RAM LRU tail "even when there is available space on disk" if the disk writer lags
+(<a href="https://github.com/memcached/memcached/issues/922" rel="noopener noreferrer">extstore eviction issue #922</a>). A node record —
+status, edges, lease state — can vanish with no notification, indistinguishable from "this node
+never existed." A library whose headline promise is durable, observable state transitions cannot
+make that promise on a substrate that cannot distinguish eviction from absence.</p>
+<p><strong>The general pattern, confirmed by comparison.</strong> Every genuinely CAS-capable distributed store
+either widens the atomic unit to cover multiple keys (etcd's <code>Txn{Compare, Success, Failure}</code>
+across N keys in one round trip; DynamoDB's <code>TransactWriteItems</code> across up to 100 items) or ties
+its version/CAS token to a durable, monotonic revision that survives restarts (etcd
+<code>mod_revision</code>; Cassandra's Paxos-backed LWTs within one partition). Memcached does neither — a
+single-key, single-process-lifetime CAS token, strictly weaker than every other store this project
+was ever asked to support, and weaker in precisely the dimension ("add an edge" is inherently a
+two-record operation) that matters most for a DAG.</p>
+<h2 id="decision">Decision<a class="anchor" href="#decision" aria-label="Link to this section">#</a></h2>
+<p><strong>Memcached is rejected as a storage backend for dagworker, in every capacity — not merely
+excluded from <code>Store</code>, but excluded from the codebase, the module layout, and the capability
+matrix entirely.</strong></p>
+<p>Concretely:</p>
+<ul>
+<li>There is no <code>storage/memcached</code> Go module and none will be added under this decision.</li>
+<li>There is no <code>dagstore.NodeCache</code> interface, no read-through/write-behind cache-decorator type,
+anywhere in the library.</li>
+<li><code>docker-compose.test.yml</code> (ADR-0018) has no memcached service.</li>
+<li>No capability matrix, README table, or public doc comment lists memcached as a supported,
+partially-supported, or cache-tier backend. Memcached appears in dagworker's own documentation
+exactly once: in this ADR, as a rejected alternative, so the reasoning is discoverable rather
+than silently absent.</li>
+<li>The three supported backends are, and remain, exactly: in-memory (default), Redis, PostgreSQL.</li>
+</ul>
+<p>A host program that wants a read-through cache in front of Redis or PostgreSQL reads is free to
+build one in its own process, wrapping calls to <code>Manager.GetNode</code> with any memcached client it
+likes — that pattern is entirely out of this library's scope, not forbidden to the host, just not
+something dagworker ships, tests, or documents as one of its backends.</p>
+<h2 id="consequences">Consequences<a class="anchor" href="#consequences" aria-label="Link to this section">#</a></h2>
+<h3 id="positive">Positive<a class="anchor" href="#positive" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>Removes an entire dependency surface (a memcached client — <code>pior/memcache</code> or
+<code>QuangTung97/go-memcache</code>, both comparatively young/niche relative to the ecosystem-standard
+clients for Redis/Postgres) and the module/CI/documentation burden that comes with it.</li>
+<li>Eliminates the risk of an operator reading "memcached: supported" in a capability table and
+configuring it somewhere durability actually matters — the single-most likely way a <code>NodeCache</code>
+decorator, however correctly scoped, gets misused in practice.</li>
+<li>One fewer moving part in <code>docker-compose.test.yml</code> and the conformance test matrix (ADR-0018).</li>
+</ul>
+<h3 id="negative">Negative<a class="anchor" href="#negative" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>This is a real, deliberate narrowing of the original brief's literal wording ("must also support
+Redis, Memcached, and PostgreSQL backends" — docs/research/00 §11 open question 6). Every dossier
+that touched memcached (03, 05, 06) converged independently on "cannot honestly be a durable
+backend for this workload," but the brief's literal ask is not met, and this must be stated
+plainly rather than glossed over.</li>
+<li>A host program that specifically wanted the shaved read-latency of a memcached tier now has to
+build that itself; dagworker offers no scaffolding for it.</li>
+</ul>
+<h3 id="neutral">Neutral<a class="anchor" href="#neutral" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>The rejection removes the memcached-derived 1 MiB item-size justification that partly motivated
+the 256 KiB default payload cap (ADR-0026 §5.3); that cap's other justification (the SQS
+precedent, independent of memcached) still stands on its own.</li>
+</ul>
+<h2 id="alternatives-considered">Alternatives considered<a class="anchor" href="#alternatives-considered" aria-label="Link to this section">#</a></h2>
+<p><strong><code>NodeCache</code> read-through/write-behind decorator (the synthesis draft's own recommendation, 06
+§A.6).</strong> Seriously considered — technically sound as far as it went (invalidate-on-write, not
+update-on-write, structurally defangs the ABA hazard because the cache is never authoritative) —
+and rejected by the owner under AMD-5 specifically because the marginal benefit is thin at this
+project's target latencies (in-memory has zero network hop by construction; Redis and Postgres both
+sit under sub-millisecond loopback reads per docs/research/09 §4.2–§4.3's own measurement
+methodology) against a real, ongoing cost: a fourth backend-shaped module, a newer/narrower client
+dependency, and a permanent extra row in every capability explanation the project ever writes, for
+a benefit a host program can already get in userspace with an ordinary cache-aside pattern around
+<code>Manager.GetNode</code> — without teaching the library about memcached at all.</p>
+<p><strong>Reduced-capability <code>Store</code> tier</strong> (implement the mandatory methods, return <code>ErrCapability</code> for
+<code>Lister</code>/timeout-sweep-shaped facets). Rejected per 06 §A.6's own argument: dishonest about
+durability specifically — a caller using only the "supported" surface (single-node CAS reads/
+writes) would still silently lose data on eviction or restart with zero API signal that anything
+went wrong. Reduced capability without a durability disclaimer is a trap, not a mitigation.</p>
+<p><strong><code>Durable() bool</code> flag, host decides what to do with <code>false</code>.</strong> Rejected: leaves the DAG topology,
+ready-queue, and timeout sweep with no home at all if memcached were ever configured as the only
+backend, forcing the library to refuse to start — a hard "no" nobody asked for, and one that
+changes none of the underlying autopsy findings above.</p>
+<p><strong>Meta-protocol conditional delete as a token single-facet gesture</strong> (<code>md key C&lt;token&gt;</code> is, per 06
+§B.4, the one facet memcached genuinely earns even under the old NodeCache framing). Rejected under
+AMD-5's clean-break stance: even the one honestly-earned facet is not worth a module, a dependency,
+and a documentation footnote in isolation, once the decorator it would have served is gone.</p>
+<h2 id="references">References<a class="anchor" href="#references" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>Memcached protocol spec — https://github.com/memcached/memcached/blob/master/doc/protocol.txt</li>
+<li>Meta Text Protocol — https://docs.memcached.org/protocols/meta/</li>
+<li>Max item size discussion — https://github.com/memcached/memcached/discussions/1066, https://github.com/memcached/memcached/issues/473</li>
+<li>Flash storage (extstore) durability — https://docs.memcached.org/features/flashstorage/</li>
+<li>Warm restart (graceful-only, not crash-safe) — https://docs.memcached.org/features/restart/</li>
+<li>LRU / eviction mechanics — https://github.com/memcached/memcached/blob/master/doc/new_lru.txt, https://github.com/memcached/memcached/issues/922, https://github.com/memcached/memcached/issues/881</li>
+<li>ABA problem — https://www.stroustrup.com/isorc2010.pdf, https://users.fmi.uni-jena.de/~nwk/LockFree.pdf</li>
+<li>etcd transactions — https://etcd.io/docs/v3.5/learning/api/, https://etcd.io/docs/v3.5/tutorials/how-to-transactional-write/</li>
+<li>DynamoDB <code>TransactWriteItems</code> — https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_TransactWriteItems.html</li>
+<li>Cassandra lightweight transactions — https://cassandra.apache.org/doc/latest/cassandra/architecture/guarantees.html, https://axonops.com/blog/paxos-v2-and-lightweight-transactions/</li>
+<li>Sibling ADRs: ADR-0006 (fencing token), ADR-0016 (storage port shape), ADR-0018 (conformance
+suite), ADR-0026 (payload size cap)</li>
+</ul>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/adr/0017-memcached-rejected-as-storage-backend.md" rel="noopener noreferrer">View source: docs/adr/0017-memcached-rejected-as-storage-backend.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

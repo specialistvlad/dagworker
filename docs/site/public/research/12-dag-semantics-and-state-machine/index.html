@@ -1,0 +1,1727 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>12 — DAG Semantics and State Machine · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/research/12-dag-semantics-and-state-machine/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#12-dag-semantics-and-state-machine">12 — DAG Semantics and State Machine</a></li>
+<ul>
+<li><a href="#1-the-state-machine">1. The state machine</a></li>
+<ul>
+<li><a href="#1-1-why-this-is-hard-two-failure-modes-seen-in-every-prior-art-system">1.1 Why this is hard: two failure modes seen in every prior-art system</a></li>
+<li><a href="#1-2-survey-of-prior-art">1.2 Survey of prior art</a></li>
+<ul>
+<li><a href="#apache-airflow-taskinstancestate-14-values-in-airflow-3-x">Apache Airflow — TaskInstanceState (14 values in Airflow 3.x)</a></li>
+<li><a href="#temporal-workflow-status-vs-activity-timeout-taxonomy-two-independent-state-spaces">Temporal — Workflow status vs. Activity timeout taxonomy (two independent state spaces)</a></li>
+<li><a href="#argo-workflows-nodestatus-phase">Argo Workflows — NodeStatus.phase</a></li>
+<li><a href="#kubernetes-pod-phase-vs-conditions-the-canonical-two-level-precedent">Kubernetes — Pod phase vs. conditions (the canonical two-level precedent)</a></li>
+<li><a href="#job-queues-sidekiq-river-the-distinguish-infra-state-from-business-outcome-pattern">Job queues: Sidekiq, River — the "distinguish infra state from business outcome" pattern</a></li>
+<li><a href="#aws-step-functions-state-machine-level-retry-catch-not-a-job-status-enum">AWS Step Functions — state-machine-level Retry/Catch, not a job-status enum</a></li>
+<li><a href="#google-cloud-tasks-attempt-level-telemetry-not-a-state-enum">Google Cloud Tasks — attempt-level telemetry, not a state enum</a></li>
+</ul>
+<li><a href="#1-3-cross-system-comparison-table">1.3 Cross-system comparison table</a></li>
+<li><a href="#1-4-proposed-model-public-status-internal-phase-and-a-structured-outcome">1.4 Proposed model: Public Status, internal Phase, and a structured Outcome</a></li>
+<li><a href="#1-5-explicit-answers-to-the-brief-s-pointed-questions">1.5 Explicit answers to the brief's pointed questions</a></li>
+<ul>
+<li><a href="#1-5-1-is-pending-blocked-distinct-from-ready-in-the-public-api-no">1.5.1 Is PENDING/BLOCKED distinct from READY in the public API? — No.</a></li>
+<li><a href="#1-5-2-is-timeout-an-error-with-a-reason-or-its-own-status-a-reason">1.5.2 Is TIMEOUT an error with a reason, or its own status? — A reason.</a></li>
+<li><a href="#1-5-3-is-cancelled-public-yes-as-a-reason-not-as-a-fifth-status">1.5.3 Is CANCELLED public? — Yes, as a Reason, not as a fifth Status.</a></li>
+<li><a href="#1-5-4-where-does-skipped-go-given-everything-else-internal">1.5.4 Where does skipped go, given "everything else internal"?</a></li>
+</ul>
+<li><a href="#1-6-full-transition-table">1.6 Full transition table</a></li>
+<li><a href="#1-7-the-public-status-subscription-stream-contract">1.7 The public Status subscription stream contract</a></li>
+</ul>
+<li><a href="#2-dynamic-mutation-semantics">2. Dynamic mutation semantics</a></li>
+<ul>
+<li><a href="#2-1-the-five-hard-cases-the-brief-names-framed-as-one-underlying-question">2.1 The five hard cases the brief names, framed as one underlying question</a></li>
+<li><a href="#2-2-adding-an-edge-into-a-node-that-is-already-running-or-already-succeeded">2.2 Adding an edge into a node that is already running or already succeeded</a></li>
+<li><a href="#2-3-adding-an-edge-that-would-create-a-cycle">2.3 Adding an edge that would create a cycle</a></li>
+<li><a href="#2-4-deleting-a-node-or-edge">2.4 Deleting a node or edge</a></li>
+<li><a href="#2-5-adding-a-successor-to-an-already-completed-node-becomes-ready-immediately">2.5 Adding a successor to an already-completed node — becomes ready immediately</a></li>
+<li><a href="#2-6-dynamic-fan-out-survey-and-the-pattern-to-adopt">2.6 Dynamic fan-out: survey and the pattern to adopt</a></li>
+<li><a href="#2-7-sealed-vs-open-nodes-scopes-and-termination-detection">2.7 Sealed vs. open nodes/scopes, and termination detection</a></li>
+</ul>
+<li><a href="#3-failure-propagation-and-retry">3. Failure propagation and retry</a></li>
+<ul>
+<li><a href="#3-1-two-coarse-policies-named-consistently-with-the-brief">3.1 Two coarse policies, named consistently with the brief</a></li>
+<li><a href="#3-2-airflow-s-trigger-rule-set-tabulated-with-the-v1-subset-recommendation">3.2 Airflow's trigger-rule set, tabulated, with the v1 subset recommendation</a></li>
+<li><a href="#3-3-retries-attempts-backoff-jitter-budgets">3.3 Retries: attempts, backoff, jitter, budgets</a></li>
+<li><a href="#3-4-retry-as-a-new-attempt-on-the-same-node-with-attempt-as-fencing-token">3.4 Retry as a new attempt on the same node, with attempt-as-fencing-token</a></li>
+</ul>
+<li><a href="#4-scopes">4. Scopes</a></li>
+<ul>
+<li><a href="#4-1-what-a-scope-is-mapped-onto-five-distinct-responsibilities">4.1 What a scope is, mapped onto five distinct responsibilities</a></li>
+<li><a href="#4-2-key-prefix-design">4.2 Key-prefix design</a></li>
+<li><a href="#4-3-may-edges-cross-scopes-no">4.3 May edges cross scopes? — No.</a></li>
+</ul>
+<li><a href="#5-node-payload-and-identity">5. Node payload and identity</a></li>
+<ul>
+<li><a href="#5-1-caller-supplied-ids-vs-library-generated-and-idempotent-insert">5.1 Caller-supplied IDs vs. library-generated, and idempotent insert</a></li>
+<li><a href="#5-2-payload-type-opaque-byte-vs-a-generic-type-parameter">5.2 Payload type: opaque []byte vs. a generic type parameter</a></li>
+<li><a href="#5-3-size-limits">5.3 Size limits</a></li>
+<li><a href="#5-4-labels-metadata-and-worker-capability-matching-argue-for-it">5.4 Labels/metadata and worker capability matching — argue for it</a></li>
+</ul>
+<li><a href="#6-retention-and-gc">6. Retention and GC</a></li>
+<ul>
+<li><a href="#6-1-when-is-a-finished-node-deleted">6.1 When is a finished node deleted?</a></li>
+<li><a href="#6-2-interaction-with-subscribers-that-have-not-caught-up">6.2 Interaction with subscribers that have not caught up</a></li>
+<li><a href="#6-3-recommended-default-policy-concretely">6.3 Recommended default policy, concretely</a></li>
+</ul>
+<li><a href="#recommendations-for-dag-worker-go">Recommendations for dag-worker-go</a></li>
+<li><a href="#open-questions">Open questions</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="12-dag-semantics-and-state-machine">12 — DAG Semantics and State Machine<a class="anchor" href="#12-dag-semantics-and-state-machine" aria-label="Link to this section">#</a></h1>
+<p>Scope: the semantic design of the dag-worker-go DAG itself — the public status vocabulary,
+dynamic mutation rules, failure propagation, scopes, node identity/payload, and retention. This
+is the dossier that shapes the public Go API, so every recommendation below is written as if it
+were going straight into <code>types.go</code>.</p>
+<hr>
+<h2 id="1-the-state-machine">1. The state machine<a class="anchor" href="#1-the-state-machine" aria-label="Link to this section">#</a></h2>
+<h3 id="1-1-why-this-is-hard-two-failure-modes-seen-in-every-prior-art-system">1.1 Why this is hard: two failure modes seen in every prior-art system<a class="anchor" href="#1-1-why-this-is-hard-two-failure-modes-seen-in-every-prior-art-system" aria-label="Link to this section">#</a></h3>
+<p>Every mature job/task/workflow engine converges on the same tension:</p>
+<ul>
+<li><strong>Too few states</strong> → users can't tell "this never ran because its parent failed" from "this ran
+and failed," so they build ad-hoc side channels (tags, log-scraping) to recover the distinction.</li>
+<li><strong>Too many public states</strong> → the status becomes a leaky abstraction of the <em>scheduler's</em>
+internal bookkeeping, and every consumer of the status enum has to relearn scheduler internals
+to build a UI or an alert.</li>
+</ul>
+<p>The systems below all made this trade differently. The recurring, load-bearing lesson — stated
+explicitly by the Airflow docs themselves — is that <strong><code>skipped</code> and <code>upstream_failed</code> are not the
+same as <code>failed</code>, and collapsing them loses information downstream consumers rely on</strong>:
+"[Task] enters <code>upstream_failed</code> [only] when a preceding task fails and trigger rules prevent
+continuation," which is a materially different operational fact than "the task's own code threw."
+<a href="https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/tasks.html" rel="noopener noreferrer">Airflow — Task Instances</a></p>
+<h3 id="1-2-survey-of-prior-art">1.2 Survey of prior art<a class="anchor" href="#1-2-survey-of-prior-art" aria-label="Link to this section">#</a></h3>
+<h4 id="apache-airflow-taskinstancestate-14-values-in-airflow-3-x">Apache Airflow — <code>TaskInstanceState</code> (14 values in Airflow 3.x)<a class="anchor" href="#apache-airflow-taskinstancestate-14-values-in-airflow-3-x" aria-label="Link to this section">#</a></h4>
+<div class="table-wrap"><table>
+<thead><tr><th>State</th><th>Meaning</th><th>Terminal?</th></tr></thead>
+<tbody>
+<tr><td><code>none</code></td><td>Dependencies not yet met, not queued</td><td>no</td></tr>
+<tr><td><code>scheduled</code></td><td>Scheduler determined dependencies are met</td><td>no</td></tr>
+<tr><td><code>queued</code></td><td>Assigned to an executor, awaiting a worker slot</td><td>no</td></tr>
+<tr><td><code>running</code></td><td>Executing on a worker</td><td>no</td></tr>
+<tr><td><code>restarting</code></td><td>Externally requested restart while running</td><td>no</td></tr>
+<tr><td><code>up_for_retry</code></td><td>Failed, retries remain, will be rescheduled</td><td>no</td></tr>
+<tr><td><code>up_for_reschedule</code></td><td>Sensor in <code>reschedule</code> mode, releasing the worker slot between pokes</td><td>no</td></tr>
+<tr><td><code>deferred</code></td><td>Handed off to a triggerer (async wait, e.g. long external-event wait)</td><td>no</td></tr>
+<tr><td><code>awaiting_input</code></td><td>Waiting on a human response (human-in-the-loop)</td><td>no</td></tr>
+<tr><td><code>success</code></td><td>Finished without error</td><td><strong>yes</strong></td></tr>
+<tr><td><code>failed</code></td><td>Own execution errored, no retries left</td><td><strong>yes</strong></td></tr>
+<tr><td><code>skipped</code></td><td>Deliberately bypassed — branching, <code>LatestOnly</code>, trigger rule</td><td><strong>yes</strong></td></tr>
+<tr><td><code>upstream_failed</code></td><td>An upstream task failed and the trigger rule requires it</td><td><strong>yes</strong></td></tr>
+<tr><td><code>removed</code></td><td>Task vanished from the DAG definition since the run started</td><td><strong>yes</strong></td></tr>
+</tbody></table></div>
+<p><a href="https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/tasks.html" rel="noopener noreferrer">Airflow — Task Instances</a></p>
+<p>The critical design fact: Airflow ships <strong>four distinct terminal-failure-shaped states</strong>
+(<code>failed</code>, <code>skipped</code>, <code>upstream_failed</code>, <code>removed</code>) instead of one. Each answers a different
+operator question:</p>
+<ul>
+<li><code>failed</code> → "look at this task's logs, it broke."</li>
+<li><code>upstream_failed</code> → "don't look at this task, look upstream."</li>
+<li><code>skipped</code> → "this was never supposed to run, that's fine."</li>
+<li><code>removed</code> → "the DAG source changed out from under a live run."</li>
+</ul>
+<p>Airflow's trigger-rule docs also record a genuine footgun worth inheriting as a <em>warning</em> rather
+than a feature: "Skipped tasks will cascade through trigger rules <code>all_success</code> and <code>all_failed</code>,
+and cause them to skip as well" — an accidental, transitive skip storm through a diamond, which
+is exactly the kind of behavior a minimal-vocabulary design must decide on explicitly rather than
+back into by accident.
+<a href="https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/dags.html" rel="noopener noreferrer">Airflow — DAGs / trigger rules</a></p>
+<p>Airflow also separates <strong>liveness detection</strong> from the state enum: <code>task_instance_heartbeat_timeout</code>
+(scheduler config) marks a task <code>failed</code> if it stops heartbeating, independent of any
+<code>on_failure_callback</code>/<code>on_retry_callback</code> hook that only fires on an already-committed state
+change.
+<a href="https://airflow.apache.org/docs/apache-airflow/stable/configurations-ref.html" rel="noopener noreferrer">Airflow — configuration reference</a></p>
+<h4 id="temporal-workflow-status-vs-activity-timeout-taxonomy-two-independent-state-spaces">Temporal — Workflow status vs. Activity timeout taxonomy (two independent state spaces)<a class="anchor" href="#temporal-workflow-status-vs-activity-timeout-taxonomy-two-independent-state-spaces" aria-label="Link to this section">#</a></h4>
+<p>Temporal deliberately does <strong>not</strong> have one shared enum for workflows and activities — they are
+different objects with different failure semantics, and conflating them is exactly the mistake a
+minimal public vocabulary must avoid.</p>
+<p>Workflow Execution Status (open: <code>Running</code>, <code>Paused</code>; closed: <code>Completed</code>, <code>Failed</code>, <code>Cancelled</code>,
+<code>Terminated</code>, <code>Continued-As-New</code>, <code>Timed Out</code>).
+<a href="https://docs.temporal.io/workflows" rel="noopener noreferrer">Temporal — Workflows</a></p>
+<p>Activities have <strong>no status enum at all</strong> — instead they have four <em>timeout</em> dimensions that
+compose to define failure, because an activity is a leaf unit of work whose only interesting
+transitions are "started," "finished," and "the four ways it can go dark":</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Timeout</th><th>Definition</th><th>Detects</th></tr></thead>
+<tbody>
+<tr><td><code>ScheduleToStartTimeout</code></td><td>scheduled → a worker picks it up</td><td>worker pool starved / crashed</td></tr>
+<tr><td><code>StartToCloseTimeout</code></td><td>single attempt's execution wall-clock</td><td>one attempt hanging</td></tr>
+<tr><td><code>ScheduleToCloseTimeout</code></td><td>first schedule → final closed status, spanning all retries</td><td>total budget exceeded</td></tr>
+<tr><td><code>HeartbeatTimeout</code></td><td>max gap between <code>RecordActivityHeartbeat</code> calls</td><td>worker died mid-attempt without crashing the process</td></tr>
+</tbody></table></div>
+<p>"If heartbeats cease within the specified timeout window, the server recognizes the worker has
+likely crashed and can promptly initiate recovery procedures rather than waiting for the broader
+Start-To-Close timeout to expire."
+<a href="https://docs.temporal.io/encyclopedia/detecting-activity-failures" rel="noopener noreferrer">Temporal — Detecting Activity Failures</a></p>
+<p>This is the strongest prior-art argument for dag-worker-go's own "worker ack timeout, settable
+per node at claim time" requirement: Temporal proves that a <em>coarse</em> timeout (schedule-to-close)
+and a <em>fine</em> one (heartbeat) are complementary, not redundant, and that both live below the
+public status line — the workflow/DAG consumer only ever sees <code>Failed</code>/<code>TimedOut</code>.</p>
+<h4 id="argo-workflows-nodestatus-phase">Argo Workflows — <code>NodeStatus.phase</code><a class="anchor" href="#argo-workflows-nodestatus-phase" aria-label="Link to this section">#</a></h4>
+<p><code>Pending | Running | Succeeded | Failed | Error | Skipped | Omitted</code>.
+<a href="https://argo-workflows.readthedocs.io/en/latest/fields/#nodestatus" rel="noopener noreferrer">Argo Workflows — Fields</a></p>
+<p>Argo keeps <code>Failed</code> (the pod ran and its main container exited non-zero) distinct from <code>Error</code>
+(the <em>controller</em> couldn't even run the step — infra fault, not a code fault) — the same
+own-fault vs. infra-fault split dag-worker-go needs between "worker returned error" and "worker
+never answered." Argo's <code>retryStrategy.retryPolicy</code> names this explicitly with <code>OnFailure</code> vs.
+<code>OnError</code> as separate retry triggers.
+<a href="https://argo-workflows.readthedocs.io/en/latest/retries/" rel="noopener noreferrer">Argo Workflows — Retries</a></p>
+<p>Argo's DAG template also has a <strong>fail-fast toggle at the DAG level</strong>, not per node: "By default,
+DAGs fail fast: when one task fails, no new tasks will be scheduled" once already-running tasks
+finish; <code>failFast: false</code> lets "all branches run to completion, regardless of failures in other
+branches."
+<a href="https://argo-workflows.readthedocs.io/en/latest/walk-through/dag/" rel="noopener noreferrer">Argo Workflows — DAG walk-through</a></p>
+<h4 id="kubernetes-pod-phase-vs-conditions-the-canonical-two-level-precedent">Kubernetes — Pod <code>phase</code> vs. <code>conditions</code> (the canonical two-level precedent)<a class="anchor" href="#kubernetes-pod-phase-vs-conditions-the-canonical-two-level-precedent" aria-label="Link to this section">#</a></h4>
+<p>Phase: <code>Pending | Running | Succeeded | Failed | Unknown</code> — five values, always present, always a
+simple linear-ish summary. Kubernetes' own docs are explicit that phase is <em>not</em> the real state
+machine: "The phase is not intended to be a comprehensive rollup of observations of container or
+Pod state, nor is it intended to be a comprehensive state machine."
+<a href="https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/" rel="noopener noreferrer">Kubernetes — Pod Lifecycle</a></p>
+<p>Underneath, <code>conditions</code> is an open-ended, independently-flippable set of booleans
+(<code>PodScheduled</code>, <code>Initialized</code>, <code>ContainersReady</code>, <code>Ready</code>, plus custom readiness gates) that
+controllers actually key their logic on. This is the direct model for the public/internal split
+recommended in §1.10: a small closed <code>phase</code>-like enum for humans and simple consumers, plus a
+richer, extensible, structured detail underneath for programmatic consumers — but <em>not</em> an
+open boolean-condition-set, because a DAG node's internal lifecycle is linear enough that a
+richer <em>enum</em> (not a condition set) is the right shape, argued in §1.10.</p>
+<p>Kubernetes Jobs add the retry/timeout vocabulary at the <em>pod-attempt</em> level: <code>backoffLimit</code>
+(attempt cap) and <code>activeDeadlineSeconds</code> (absolute wall-clock timeout for the whole Job),
+with retry spacing of "10s, 20s, 40s ... capped at 6 minutes" between pod restarts.
+<a href="https://kubernetes.io/docs/concepts/workloads/controllers/job/" rel="noopener noreferrer">Kubernetes — Jobs</a></p>
+<h4 id="job-queues-sidekiq-river-the-distinguish-infra-state-from-business-outcome-pattern">Job queues: Sidekiq, River — the "distinguish infra state from business outcome" pattern<a class="anchor" href="#job-queues-sidekiq-river-the-distinguish-infra-state-from-business-outcome-pattern" aria-label="Link to this section">#</a></h4>
+<p>River's <code>rivertype.JobState</code> (Go, directly comparable prior art since it's also a Go library):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>State</th><th>Doc comment</th></tr></thead>
+<tbody>
+<tr><td><code>available</code></td><td>"immediately eligible to be worked"</td></tr>
+<tr><td><code>scheduled</code></td><td>"scheduled for the future"; scheduler flips it to <code>available</code></td></tr>
+<tr><td><code>retryable</code></td><td>"errored, but will be retried"; scheduler flips it to <code>available</code> when due</td></tr>
+<tr><td><code>running</code></td><td>actively running; <strong>"If River can't update state of a running job, that job will be left as <code>running</code> and will require a pass by the job rescuer service"</strong></td></tr>
+<tr><td><code>completed</code></td><td>succeeded; reaped after a retention window (default 24h)</td></tr>
+<tr><td><code>discarded</code></td><td>exhausted retries; "manual user intervention is required"</td></tr>
+<tr><td><code>cancelled</code></td><td>user-cancelled; reaped after retention window (default 24h)</td></tr>
+<tr><td><code>pending</code></td><td>"parked while waiting for some external action... will never be worked or deleted unless moved out of this state by the user"</td></tr>
+</tbody></table></div>
+<p><a href="https://pkg.go.dev/github.com/riverqueue/river/rivertype" rel="noopener noreferrer">River — <code>rivertype</code> package</a></p>
+<p>Two details are directly reusable:</p>
+<ol>
+<li>River's <code>running</code> state has an explicit escape hatch for the exact failure mode this project
+must handle — a worker that took a job and never came back — via a background "rescuer" pass,
+which is the architectural precedent for a timeout sweeper rather than a synchronous
+deadline check (see §1.11, row <em>Ack timeout expiry</em>).</li>
+<li><code>pending</code> (blocked-on-external-action, never auto-picked) is a <strong>different state from
+<code>scheduled</code></strong> (blocked-on-time, auto-transitions) — directly informative for §1.12's
+PENDING/BLOCKED-vs-READY question below.</li>
+</ol>
+<p>Sidekiq's retry ladder is the standard "job queue" backoff citation: delay `= retry_count**4 + 15</p>
+<ul>
+<li>rand(10 * (retry_count + 1))`, ~25 default attempts spanning about 20 days, after which the job</li>
+</ul>
+<p>moves to a capped <strong>Dead set</strong> (10,000 jobs or 6 months, whichever binds first) that requires
+manual replay.
+<a href="https://github.com/sidekiq/sidekiq/wiki/Error-Handling" rel="noopener noreferrer">Sidekiq — Error Handling</a></p>
+<h4 id="aws-step-functions-state-machine-level-retry-catch-not-a-job-status-enum">AWS Step Functions — state-machine-level <code>Retry</code>/<code>Catch</code>, not a job-status enum<a class="anchor" href="#aws-step-functions-state-machine-level-retry-catch-not-a-job-status-enum" aria-label="Link to this section">#</a></h4>
+<p>Step Functions doesn't expose a task status enum to the <em>caller</em> at all — it exposes execution
+status (<code>RUNNING | SUCCEEDED | FAILED | TIMED_OUT | ABORTED</code>) plus, per <code>Task</code>/<code>Parallel</code>/<code>Map</code>
+state, declarative <code>Retry</code> and <code>Catch</code> blocks keyed on structured <strong>error names</strong>
+(<code>States.Timeout</code>, <code>States.TaskFailed</code>, <code>States.HeartbeatTimeout</code>, <code>States.ALL</code>, ...).
+<a href="https://docs.aws.amazon.com/step-functions/latest/dg/concepts-error-handling.html" rel="noopener noreferrer">AWS Step Functions — error handling</a></p>
+<p>This is the strongest existing precedent for the "reason/outcome as a separate typed field"
+recommendation in §1.10: Step Functions' <code>Retry</code> entries are <code>{ErrorEquals, IntervalSeconds,
+MaxAttempts, BackoffRate, MaxDelaySeconds, JitterStrategy}</code> — i.e., the <em>retry policy itself</em>
+is a first-class value keyed by error classification, not a side effect of which enum value got
+set. Their built-in <code>States.Timeout</code> (task ran past <code>TimeoutSeconds</code> or missed a heartbeat) is
+carried as an <strong>error name</strong>, not a distinct top-level execution status — direct prior art for
+answering "is TIMEOUT its own status?" with "no, it's a reason under Failed" (§1.12).
+<a href="https://docs.aws.amazon.com/step-functions/latest/dg/concepts-states.html" rel="noopener noreferrer">AWS Step Functions — states reference</a></p>
+<h4 id="google-cloud-tasks-attempt-level-telemetry-not-a-state-enum">Google Cloud Tasks — attempt-level telemetry, not a state enum<a class="anchor" href="#google-cloud-tasks-attempt-level-telemetry-not-a-state-enum" aria-label="Link to this section">#</a></h4>
+<p>Cloud Tasks' <code>Task</code> resource has no <code>status</code> field at all — only <code>dispatchCount</code>/<code>responseCount</code>
+counters and a <code>firstAttempt</code>/<code>lastAttempt</code> pair of <code>{scheduleTime, dispatchTime, responseTime,
+responseStatus}</code> structs, plus a per-task <code>dispatchDeadline</code> ("the deadline for requests sent to
+the worker" — HTTP default 10 min, range 15s–30min) whose expiry surfaces as a <code>DEADLINE_EXCEEDED</code>
+<code>responseStatus</code>, which is functionally identical to the ack-timeout requirement in this project's
+brief.
+<a href="https://docs.cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks#Task" rel="noopener noreferrer">Cloud Tasks — Task reference</a></p>
+<p>Queue-level retry config (<code>maxAttempts</code>, <code>minBackoff</code>, <code>maxBackoff</code>, <code>maxDoublings</code>,
+<code>maxRetryDuration</code>) computes delay as: double <code>minBackoff</code> up to <code>maxDoublings</code> times, then grow
+linearly by <code>2^maxDoublings × minBackoff</code> until <code>maxBackoff</code> is hit, then hold at <code>maxBackoff</code>
+(worked example: <code>minBackoff=10s, maxBackoff=300s, maxDoublings=3</code> → <code>10, 20, 40, 80, 160, 240,
+300, 300, ...</code>).
+<a href="https://docs.cloud.google.com/tasks/docs/configuring-queues" rel="noopener noreferrer">Cloud Tasks — configuring queues</a></p>
+<h3 id="1-3-cross-system-comparison-table">1.3 Cross-system comparison table<a class="anchor" href="#1-3-cross-system-comparison-table" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>System</th><th>Public surface</th><th>Own-fault vs. infra-fault split?</th><th>"Never should have run" state?</th><th>Timeout modeled as</th></tr></thead>
+<tbody>
+<tr><td>Airflow</td><td>14-value enum</td><td>yes (<code>failed</code> vs <code>upstream_failed</code>)</td><td>yes (<code>skipped</code>, <code>removed</code>)</td><td>zombie heartbeat → <code>failed</code></td></tr>
+<tr><td>Temporal</td><td>7-value workflow status + 4 activity timeout kinds</td><td>yes (<code>Failed</code> vs 4 timeout kinds)</td><td>no (workflow-level <code>Terminated</code> only)</td><td>own dimension, not folded into status</td></tr>
+<tr><td>Argo</td><td>7-value node phase</td><td>yes (<code>Failed</code> vs <code>Error</code>)</td><td>yes (<code>Skipped</code>, <code>Omitted</code>)</td><td><code>Error</code> + retryPolicy <code>OnError</code></td></tr>
+<tr><td>Kubernetes Pod</td><td>5-value phase + open condition set</td><td>partially (<code>Failed</code> reason field)</td><td>no</td><td>separate <code>activeDeadlineSeconds</code>/probe machinery</td></tr>
+<tr><td>River</td><td>8-value enum</td><td>yes (<code>running</code>-stuck needs a rescuer)</td><td>no</td><td>rescuer service, not a state</td></tr>
+<tr><td>Sidekiq</td><td>4 conceptual buckets (queued/retry/dead/done)</td><td>no</td><td>no</td><td>none built in</td></tr>
+<tr><td>AWS Step Functions</td><td>5-value execution status + structured error names</td><td>yes (error name taxonomy)</td><td>no</td><td><code>States.Timeout</code> as an error name</td></tr>
+<tr><td>Google Cloud Tasks</td><td>no status enum, attempt telemetry only</td><td>yes (<code>responseStatus</code> code)</td><td>no</td><td><code>dispatchDeadline</code> → <code>DEADLINE_EXCEEDED</code></td></tr>
+</tbody></table></div>
+<p><strong>Conclusion drawn from the table:</strong> every system that has lived long enough to accumulate
+production scars ends up with (a) a small closed set for "where are we in the lifecycle," (b) a
+separate way to say "whose fault, if any," and (c) timeout as a <em>reason under failure</em>, never a
+sibling top-level state. No production system reviewed makes timeout its own peer of
+success/failure — that alone answers one of the six explicit questions in the brief.</p>
+<h3 id="1-4-proposed-model-public-status-internal-phase-and-a-structured-outcome">1.4 Proposed model: Public <code>Status</code>, internal <code>Phase</code>, and a structured <code>Outcome</code><a class="anchor" href="#1-4-proposed-model-public-status-internal-phase-and-a-structured-outcome" aria-label="Link to this section">#</a></h3>
+<p>Three layers, not two, because the survey shows two independent axes need separating even inside
+"internal": <em>where in the pipeline</em> (queued vs claimed vs waiting-on-timeout-sweep) and <em>why it
+ended the way it did</em> (which trigger rule fired, which error class). Collapsing those two into
+one internal enum reproduces Airflow's 14-value sprawl one level down.</p>
+<pre><code class="language-go"><span class="tok-com">// Status is the PUBLIC vocabulary. Four values. This is the entire contract</span>
+<span class="tok-com">// exposed to subscribers and to the worker ack API. Never add a fifth value</span>
+<span class="tok-com">// without a major version bump — this enum is the API's load-bearing wall.</span>
+<span class="tok-kw">type</span> Status <span class="tok-kw">uint8</span>
+
+<span class="tok-kw">const</span> (
+    StatusNew        Status = <span class="tok-kw">iota</span> <span class="tok-com">// exists, not yet ready (blocked or not yet dispatched)</span>
+    StatusInProgress               <span class="tok-com">// claimed by a worker, ack pending</span>
+    StatusSuccess                  <span class="tok-com">// terminal, succeeded</span>
+    StatusError                    <span class="tok-com">// terminal, did not succeed — see Outcome for why</span>
+)
+
+<span class="tok-com">// Phase is INTERNAL scheduling detail. Never serialized to subscribers directly;</span>
+<span class="tok-com">// it exists so the engine's own code (and storage backends) has a place to put</span>
+<span class="tok-com">// bookkeeping state without polluting Status. Exposed read-only via Node.Phase()</span>
+<span class="tok-com">// for debugging/admin tooling, but no public API contract promises its values</span>
+<span class="tok-com">// are stable across minor versions.</span>
+<span class="tok-kw">type</span> Phase <span class="tok-kw">uint8</span>
+
+<span class="tok-kw">const</span> (
+    PhaseBlocked   Phase = <span class="tok-kw">iota</span> <span class="tok-com">// Status=New; unmet dependencies</span>
+    PhaseReady                  <span class="tok-com">// Status=New; dependencies met, sitting in the ready set</span>
+    PhaseClaimed                <span class="tok-com">// Status=InProgress; a worker holds the lease</span>
+    PhaseSucceeded               <span class="tok-com">// Status=Success</span>
+    PhaseFailed                  <span class="tok-com">// Status=Error; Outcome.Reason=ReasonWorkerError</span>
+    PhaseTimedOut                <span class="tok-com">// Status=Error; Outcome.Reason=ReasonTimeout</span>
+    PhaseUpstreamFailed          <span class="tok-com">// Status=Error; Outcome.Reason=ReasonUpstreamFailed</span>
+    PhaseSkipped                 <span class="tok-com">// Status=Error; Outcome.Reason=ReasonSkipped (see 1.5.4 note)</span>
+    PhaseCancelled                <span class="tok-com">// Status=Error; Outcome.Reason=ReasonCancelled</span>
+)
+
+<span class="tok-com">// Outcome is populated once a node reaches a terminal Status. It is the</span>
+<span class="tok-com">// structured "reason" field the brief asks for, modeled directly on AWS Step</span>
+<span class="tok-com">// Functions' error-name-plus-metadata pattern (concepts-error-handling.html)</span>
+<span class="tok-com">// rather than folding reasons into more top-level statuses.</span>
+<span class="tok-kw">type</span> Outcome <span class="tok-kw">struct</span> {
+    Reason    Reason    <span class="tok-com">// closed enum, see below</span>
+    Message   <span class="tok-kw">string</span>    <span class="tok-com">// worker- or engine-supplied human text, size-capped</span>
+    Attempt   <span class="tok-kw">uint32</span>    <span class="tok-com">// 1-based attempt number this outcome belongs to</span>
+    Timestamp time.Time
+}
+
+<span class="tok-kw">type</span> Reason <span class="tok-kw">uint8</span>
+
+<span class="tok-kw">const</span> (
+    ReasonNone           Reason = <span class="tok-kw">iota</span> <span class="tok-com">// Status=Success</span>
+    ReasonWorkerError                  <span class="tok-com">// worker explicitly Nacked/returned error</span>
+    ReasonTimeout                      <span class="tok-com">// ack deadline elapsed with no response</span>
+    ReasonUpstreamFailed                <span class="tok-com">// a required predecessor ended in Error</span>
+    ReasonSkipped                       <span class="tok-com">// trigger rule decided this node should not run</span>
+    ReasonCancelled                      <span class="tok-com">// engine- or caller-initiated cancellation</span>
+    ReasonRemoved                        <span class="tok-com">// node/edge deleted out from under the run</span>
+)</code></pre>
+<p>Design notes tying this back to the survey:</p>
+<ul>
+<li><strong><code>StatusNew</code> covers both <code>PENDING</code>/<code>BLOCKED</code> and <code>READY</code>.</strong> See §1.5.1 for why this is a
+deliberate collapse, not an oversight.</li>
+<li><strong><code>StatusInProgress</code> is the "claimed" leaf</strong>, directly answering the brief's "probably also
+in-progress" — every surveyed system needs this because "assigned but not yet acked" is a
+distinct, actionable state (it is exactly what a lease-expiry sweeper watches).</li>
+<li><strong><code>Outcome.Reason</code> is what carries <code>skipped</code>/<code>upstream_failed</code>/<code>timeout</code>/<code>cancelled</code></strong> without
+growing <code>Status</code>. This directly implements the recurring lesson from §1.1: the <em>information</em>
+Airflow's four failure-shaped states carry is preserved, but it rides on a field, not on the
+status enum, so the public vocabulary stays at four values forever.</li>
+<li><strong><code>Reason</code> is still closed and small (7 values)</strong>, not a free-text bag, because programmatic
+consumers (retry-policy selection, dashboards) need to switch on it. Free text lives in
+<code>Outcome.Message</code> only.</li>
+</ul>
+<h3 id="1-5-explicit-answers-to-the-brief-s-pointed-questions">1.5 Explicit answers to the brief's pointed questions<a class="anchor" href="#1-5-explicit-answers-to-the-brief-s-pointed-questions" aria-label="Link to this section">#</a></h3>
+<h4 id="1-5-1-is-pending-blocked-distinct-from-ready-in-the-public-api-no">1.5.1 Is PENDING/BLOCKED distinct from READY in the public API? — <strong>No.</strong><a class="anchor" href="#1-5-1-is-pending-blocked-distinct-from-ready-in-the-public-api-no" aria-label="Link to this section">#</a></h4>
+<p>Recommendation: <strong>collapse both into <code>StatusNew</code>.</strong> Reasoning:</p>
+<ul>
+<li>The distinction is a <em>scheduling</em> fact, not a <em>business-outcome</em> fact — from the perspective of
+"does the host program's operator need to act," blocked-on-a-dependency and
+ready-to-be-claimed-any-millisecond are the same thing: "not started yet, nothing to do."</li>
+<li>Every system that <em>does</em> expose this split (Airflow's <code>none</code>/<code>scheduled</code>/<code>queued</code>) does so
+because <em>humans stare at a Gantt chart</em> and want to see queueing delay — a debugging UI need,
+not an orchestration need. dag-worker-go is a library, not a UI; give the <em>internal</em> <code>Phase</code>
+(<code>PhaseBlocked</code>/<code>PhaseReady</code>) to any admin/debug surface instead of inflating the wire-level
+status subscribers must switch on.</li>
+<li>It also sidesteps a nasty invariant problem: in a <em>dynamic</em> DAG, a node can flip from Blocked to
+Ready and back to Blocked (a new predecessor edge is inserted — see §2.2) purely as a side
+effect of graph mutation, with no worker or caller action involved. Making that flip a public,
+subscribed status transition means every subscriber must handle a new-node-added event that
+looks exactly like a state regression on an existing node. Keeping it internal removes the
+regression entirely: <code>StatusNew</code> never "regresses," it just keeps being new.</li>
+<li>Cost of this choice: a consumer that <em>wants</em> queueing-delay metrics must ask the engine
+directly (<code>node.Phase()</code> or a metrics hook), not infer it from the subscription stream. That's
+an acceptable trade for keeping the stream's invariants simple (see the transition table below
+— <code>StatusNew → StatusNew</code> is the only self-loop, and it is never emitted as an event).</li>
+</ul>
+<h4 id="1-5-2-is-timeout-an-error-with-a-reason-or-its-own-status-a-reason">1.5.2 Is TIMEOUT an error with a reason, or its own status? — <strong>A reason.</strong><a class="anchor" href="#1-5-2-is-timeout-an-error-with-a-reason-or-its-own-status-a-reason" aria-label="Link to this section">#</a></h4>
+<p>Every mature system agrees on this even where they disagree on everything else: Step Functions
+carries <code>States.Timeout</code> as an <strong>error name</strong> matched inside the same <code>Retry</code>/<code>Catch</code> machinery as
+any other failure, not a sibling of <code>SUCCEEDED</code>/<code>FAILED</code>
+(<a href="https://docs.aws.amazon.com/step-functions/latest/dg/concepts-error-handling.html" rel="noopener noreferrer">AWS docs</a>);
+Cloud Tasks surfaces deadline expiry as a <code>responseStatus</code> code (<code>DEADLINE_EXCEEDED</code>), not a task
+state; Airflow's heartbeat timeout resolves directly to <code>failed</code>; Temporal's four timeout <em>kinds</em>
+all resolve to the workflow-level <code>Failed</code>/<code>TimedOut</code> closed status, never to an activity-level
+peer of "completed." dag-worker-go should do the same: <code>Status = StatusError</code>,
+<code>Outcome.Reason = ReasonTimeout</code>. This also means a node that timed out and a node whose worker
+called <code>Nack(err)</code> are trivially distinguishable by a consumer that cares (retry-policy selection
+needs to know: did the worker actively refuse, or silently vanish?) without adding a fifth public
+status.</p>
+<h4 id="1-5-3-is-cancelled-public-yes-as-a-reason-not-as-a-fifth-status">1.5.3 Is CANCELLED public? — <strong>Yes, as a <code>Reason</code>, not as a fifth <code>Status</code>.</strong><a class="anchor" href="#1-5-3-is-cancelled-public-yes-as-a-reason-not-as-a-fifth-status" aria-label="Link to this section">#</a></h4>
+<p>Argument for including it at all (unlike <code>Removed</code>, which is arguably too obscure for v1 — see
+open questions): cancellation is caller-initiated and must be distinguishable from
+worker-initiated failure for the same reason timeout must be — a retry policy and an alerting
+rule both need "did this fail because someone told it to stop" as a first-class fact, not
+something inferred from <code>Outcome.Message</code> string-matching. River makes <code>cancelled</code> a full
+top-level state distinct from <code>discarded</code>
+(<a href="https://pkg.go.dev/github.com/riverqueue/river/rivertype" rel="noopener noreferrer">rivertype docs</a>); Temporal makes
+<code>Cancelled</code> a full closed-status peer of <code>Failed</code>
+(<a href="https://docs.temporal.io/workflows" rel="noopener noreferrer">Temporal Workflows</a>). dag-worker-go doesn't need a fifth
+public status to get this distinction — <code>ReasonCancelled</code> under <code>StatusError</code> is sufficient and
+keeps the promise that <code>Status</code> never grows.</p>
+<h4 id="1-5-4-where-does-skipped-go-given-everything-else-internal">1.5.4 Where does <code>skipped</code> go, given "everything else internal"?<a class="anchor" href="#1-5-4-where-does-skipped-go-given-everything-else-internal" aria-label="Link to this section">#</a></h4>
+<p>This is the one place where collapsing into <code>StatusError</code> is debatable and worth flagging as an
+explicit trade rather than hiding it. Airflow treats <code>skipped</code> as <em>not a failure</em> — a
+<code>none_failed_min_one_success</code> trigger rule downstream of a skip is satisfied, not blocked
+(<a href="https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/dags.html" rel="noopener noreferrer">Airflow trigger rules</a>).
+If dag-worker-go reports a skipped node as <code>StatusError</code>, a naive subscriber computing
+"did the DAG succeed" by checking "any node has <code>StatusError</code>" will get a false alarm on every
+conditionally-skipped branch. Two resolutions, and the recommendation:</p>
+<ul>
+<li><strong>(a)</strong> Keep <code>StatusError</code> for skipped, but require any DAG-level completion/health check to be
+reason-aware (<code>Reason != ReasonSkipped</code> counts as real failure). This is the recommendation —
+it keeps the four-value promise absolute — <strong>provided</strong> the library also ships a first-class
+<code>Scope.Health()</code>/<code>Run.Outcome()</code> aggregate that already excludes skips, so "did the naive
+subscriber get it wrong" is not left as a homework problem for every caller.</li>
+<li><strong>(b)</strong> Add a fifth public status <code>StatusSkipped</code>. Rejected for v1: it's the exact sprawl this
+project's owner explicitly wants to avoid, and it only matters if v1 supports conditional
+trigger rules at all — which §3.2 recommends deferring past <code>all_success</code>/<code>all_done</code>.</li>
+</ul>
+<h3 id="1-6-full-transition-table">1.6 Full transition table<a class="anchor" href="#1-6-full-transition-table" aria-label="Link to this section">#</a></h3>
+<p>Legend for <strong>Actor</strong>: <code>Engine</code> = library-internal scheduler logic (no external call), <code>Caller</code> =
+host program via public API (<code>AddNode</code>, <code>Cancel</code>, ...), <code>Worker</code> = external worker via
+<code>Ack</code>/<code>Nack</code>, <code>Sweeper</code> = background timeout-detection goroutine/service.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>From (Status/Phase)</th><th>To (Status/Phase)</th><th>Actor</th><th>Trigger</th><th>Storage operation</th></tr></thead>
+<tbody>
+<tr><td>T1</td><td>—</td><td>New/Blocked</td><td>Caller</td><td><code>AddNode</code> with unmet deps, or deps not yet added</td><td><code>INSERT node</code>; per-dependency counter init</td></tr>
+<tr><td>T2</td><td>—</td><td>New/Ready</td><td>Caller</td><td><code>AddNode</code> with zero dependencies</td><td><code>INSERT node</code>; <code>PUSH ready-set</code></td></tr>
+<tr><td>T3</td><td>New/Blocked</td><td>New/Ready</td><td>Engine</td><td>last unmet predecessor edge resolves (predecessor reaches Success, or is removed, or trigger rule is satisfied)</td><td>decrement dep-counter to 0 (atomic); <code>PUSH ready-set</code></td></tr>
+<tr><td>T4</td><td>New/Blocked</td><td>New/Blocked</td><td>Caller</td><td><code>AddEdge</code> inserting a new predecessor into an already-blocked node</td><td>increment dep-counter; <code>INSERT edge</code></td></tr>
+<tr><td>T5</td><td>New/Ready</td><td>New/Blocked</td><td>Caller</td><td><code>AddEdge</code> inserting a new, unresolved predecessor into a currently-ready node (see §2.2)</td><td>atomic: <code>POP ready-set</code> + increment dep-counter + <code>INSERT edge</code></td></tr>
+<tr><td>T6</td><td>New/Ready</td><td>InProgress/Claimed</td><td>Engine (on behalf of Worker via <code>Claim</code>)</td><td>worker calls <code>Claim(scope, kind?)</code></td><td>atomic <code>POP ready-set</code> (or lease-CAS); <code>SET status=InProgress, lease_deadline=now+timeout, attempt+=1</code></td></tr>
+<tr><td>T7</td><td>InProgress/Claimed</td><td>Success</td><td>Worker</td><td><code>Ack(nodeID, attempt, result)</code></td><td><code>SET status=Success, outcome={}</code>; for each successor: run T3-equivalent dep-resolution</td></tr>
+<tr><td>T8</td><td>InProgress/Claimed</td><td>Error/Failed</td><td>Worker</td><td><code>Nack(nodeID, attempt, err)</code></td><td><code>SET status=Error, outcome={ReasonWorkerError,...}</code>; run T9/T10/T11 fan-out per failure policy</td></tr>
+<tr><td>T9</td><td>InProgress/Claimed</td><td>New/Ready (retry)</td><td>Engine</td><td><code>Nack</code> and <code>attempt &lt; maxAttempts</code></td><td>atomic: <code>SET attempt</code> unchanged (see §3.4), <code>SET status=New</code>, schedule re-ready after backoff delay; <code>PUSH ready-set</code> (delayed)</td></tr>
+<tr><td>T10</td><td>InProgress/Claimed</td><td>Error/TimedOut</td><td>Sweeper</td><td><code>lease_deadline</code> elapsed, no <code>Ack</code>/<code>Nack</code> received</td><td><code>CAS status=Error WHERE lease_id=&lt;fenced token&gt; AND status=InProgress</code>; <code>outcome={ReasonTimeout,...}</code></td></tr>
+<tr><td>T11</td><td>New/Blocked</td><td>Error/UpstreamFailed</td><td>Engine</td><td>a required predecessor reaches Error and the node's trigger rule (default <code>all_success</code>) is now unsatisfiable</td><td><code>SET status=Error, outcome={ReasonUpstreamFailed,...}</code>; recurse to this node's successors</td></tr>
+<tr><td>T12</td><td>New/Blocked or New/Ready</td><td>Error/Skipped</td><td>Engine</td><td>trigger-rule evaluation determines the node can never satisfy its rule (e.g. <code>all_success</code> with a skipped/failed predecessor and no override)</td><td><code>SET status=Error, outcome={ReasonSkipped,...}</code>; recurse</td></tr>
+<tr><td>T13</td><td>New/* or InProgress/Claimed</td><td>Error/Cancelled</td><td>Caller</td><td><code>Cancel(nodeID)</code> or <code>CancelScope(scopeID)</code></td><td><code>CAS status IN (New,InProgress) -&gt; Error</code>; <code>outcome={ReasonCancelled,...}</code>; if fail-fast policy, recurse to successors as T11-equivalent with <code>ReasonCancelled</code></td></tr>
+<tr><td>T14</td><td>any node in a scope</td><td>Error/Removed</td><td>Caller</td><td><code>RemoveNode</code>/<code>RemoveEdge</code> targeting a node with live successors still depending on it (see §2.4)</td><td><code>SET status=Error, outcome={ReasonRemoved,...}</code> on affected successors only if their dep can no longer resolve; the removed node itself is hard-deleted, not transitioned</td></tr>
+<tr><td>T15</td><td>Success or Error (terminal)</td><td>—</td><td>Caller</td><td>GC/retention sweep (§6)</td><td><code>DELETE node</code> + tombstone/cursor bookkeeping</td></tr>
+</tbody></table></div>
+<p>Notes on invariants this table is designed to preserve:</p>
+<ul>
+<li><strong>Every row that changes <code>Status</code> writes exactly one <code>Outcome</code> or clears it</strong> — there is no
+transition that leaves <code>Outcome</code> stale relative to <code>Status</code>, which is what makes the two safe
+to read non-atomically by a subscriber (read <code>Status</code> first, then <code>Outcome</code>; a torn read at
+worst shows an old-but-still-consistent-with-a-prior-Status pair, never a mismatched one, if the
+storage layer writes them in the same row/transaction — mandatory for every backend, see the
+storage dossier).</li>
+<li><strong>T6 and T10 are the only transitions that use compare-and-swap keyed on a fencing token</strong>
+(lease id / attempt number) rather than a plain state check, because they are exactly the two
+places two actors can race for the same node: a worker's late <code>Ack</code> racing the sweeper's
+timeout, and two engine instances (different processes, shared storage — see the concurrency
+dossier) racing to claim the same ready node. This directly follows Kleppmann's fencing-token
+argument — "the storage service must actively validate tokens and reject any requests with ...
+a non-increasing value"
+(<a href="https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html" rel="noopener noreferrer">How to do Distributed Locking</a>)
+— applied with <code>attempt</code> doubling as the token (§3.4).</li>
+<li><strong>No row transitions directly from <code>Success</code> back to anything.</strong> Once succeeded, a node is
+immutable except for deletion (T15). This matches every surveyed system — none of Airflow,
+Temporal, Argo, River, or Step Functions allow a completed unit of work to un-complete; "retry"
+always means a <em>new</em> attempt on a node that is not yet in a terminal state, never a mutation of
+a terminal one.</li>
+</ul>
+<h3 id="1-7-the-public-status-subscription-stream-contract">1.7 The public <code>Status</code> subscription stream contract<a class="anchor" href="#1-7-the-public-status-subscription-stream-contract" aria-label="Link to this section">#</a></h3>
+<p>Given the table above, the event stream (requirement: "every node status transition") should only
+emit on rows that change <code>Status</code>, not <code>Phase</code> — i.e., T3/T4/T5 (internal Ready/Blocked churn) are
+<strong>not</strong> emitted as status-transition events, only as the separate "ready for processing" signal
+the brief calls out as event class (b). This keeps the two announced event classes crisp:</p>
+<ol>
+<li><strong>Status-transition events</strong> — fire on T1/T2 (New created), T6 (→ InProgress), T7 (→ Success),
+T8/T9/T10/T11/T12/T13/T14 (→ Error, with <code>Outcome.Reason</code> attached). Exactly one event per row
+in the table above that has a <code>Status</code> in the "To" column different from "From," or is a
+node's first appearance.</li>
+<li><strong>"Take this for processing" events</strong> — fire once per T6-eligible moment, i.e., whenever a node
+enters <code>New/Ready</code> (T2, T3, or T9-after-backoff), <em>not</em> when it's claimed. This is what lets
+multiple worker-pull loops race for the same signal without the signal itself being
+consumed-once (claiming is a separate, CAS'd <code>Claim</code> call — the notification is "go look," not
+"yours").</li>
+</ol>
+<hr>
+<h2 id="2-dynamic-mutation-semantics">2. Dynamic mutation semantics<a class="anchor" href="#2-dynamic-mutation-semantics" aria-label="Link to this section">#</a></h2>
+<h3 id="2-1-the-five-hard-cases-the-brief-names-framed-as-one-underlying-question">2.1 The five hard cases the brief names, framed as one underlying question<a class="anchor" href="#2-1-the-five-hard-cases-the-brief-names-framed-as-one-underlying-question" aria-label="Link to this section">#</a></h3>
+<p>All five cases the brief lists reduce to: <strong>"what does the engine do when the fact 'this node has
+no more predecessors that can affect it' turns out to be false after the engine already acted on
+it as if it were true?"</strong> That's a graph problem (cycle safety, dependency-count correctness) and
+a distributed-systems problem (has-this-DAG-terminated) at once. §2.7 below treats the second
+half directly via Dijkstra–Scholten/Safra; this section treats the graph-mechanics half.</p>
+<h3 id="2-2-adding-an-edge-into-a-node-that-is-already-running-or-already-succeeded">2.2 Adding an edge into a node that is already running or already succeeded<a class="anchor" href="#2-2-adding-an-edge-into-a-node-that-is-already-running-or-already-succeeded" aria-label="Link to this section">#</a></h3>
+<p>This is the retroactive-dependency case and the one genuinely hard design decision in this
+dossier, because no surveyed system needs to answer it — Airflow, Argo, and Step Functions all
+require the full graph shape to be knowable before a run starts (Airflow's dynamic task mapping
+still expands a <em>known template</em> at runtime, it doesn't let a caller wire a brand-new edge into an
+already-<em>running</em> task instance; Argo's <code>withParam</code> generates sibling nodes, not new predecessors
+of an existing node). dag-worker-go's brief explicitly requires exactly this, so the recommendation
+here is original design, argued from first principles plus the closest analogues (transaction
+isolation semantics, and Temporal's "history is append-only, decisions are made from a snapshot"
+model):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Target node's current status</th><th>Adding edge <code>pred → target</code></th><th>Recommendation</th></tr></thead>
+<tbody>
+<tr><td><code>New/Blocked</code> or <code>New/Ready</code></td><td><code>pred</code> not yet terminal</td><td><strong>Allowed, ordinary case.</strong> <code>target</code> moves (or stays) Blocked; if it was Ready, T5 applies (pop it back out of the ready set — see below for why this must be atomic).</td></tr>
+<tr><td><code>InProgress/Claimed</code></td><td><code>pred</code> not yet terminal</td><td><strong>Allowed, but non-retroactive: does not interrupt the in-flight attempt.</strong> The edge is recorded for the <em>next</em> attempt (retry) or for downstream consumers that read the graph shape, but the worker holding the current lease already received its input snapshot and keeps running to completion. Rationale: interrupting live work because the graph shape changed underneath it violates the same "isolation" expectation transactional systems give — a running attempt should see a consistent snapshot of its inputs, not a torn one. This is a deliberate, documented <strong>non-goal</strong>: dag-worker-go does not support mid-flight cancellation-on-dependency-change; the caller who needs that must <code>Cancel</code> explicitly (T13).</td></tr>
+<tr><td><code>Success</code> (terminal)</td><td>new edge <code>pred → target</code>, and <code>pred</code> is not yet terminal</td><td><strong>Rejected by default, with an explicit opt-in.</strong> Default: <code>AddEdge</code> returns a typed <code>ErrAlreadySucceeded</code> — a completed node's success is a fact about the past, and silently re-blocking it would mean "success" stopped being a terminal, trustworthy signal, breaking the single invariant §1.6 leans on hardest (no transition out of Success). Opt-in: an explicit <code>AddEdge(..., WithReopen())</code> that performs <code>Success → New/Blocked</code> as a documented, rare, audited operation (its own <code>Outcome.Reason = ReasonReopened</code> would need to be added if this ships — flagged as an open question, §Open questions, since it's the one place the "closed enum" promise strains).</td></tr>
+<tr><td><code>Error</code> (terminal, any reason)</td><td>new edge <code>pred → target</code></td><td><strong>Rejected</strong>, same default as Success, same opt-in shape. An already-failed/skipped/cancelled node re-entering the graph as blocked is even less obviously correct than reopening a success, since its <code>Outcome.Reason</code> no longer describes reality once it can run again.</td></tr>
+</tbody></table></div>
+<p><strong>The concurrency-critical detail inside "allowed" (rows 1–2):</strong> the transition from Ready back to
+Blocked (T5) must be atomic with the edge insert, or a worker can <code>Claim</code> the node in the gap
+between "edge recorded" and "dep-counter incremented," running it before its new dependency is
+honored. Every backend needs a single atomic operation for "insert edge AND (if target was Ready)
+remove it from the ready set AND increment its dep-counter" — in Redis this is one Lua script (see
+the storage dossier for the full script); in PostgreSQL one <code>SERIALIZABLE</code> or advisory-lock-guarded
+transaction; in-memory one mutex-guarded critical section. This is the single most important
+concurrency-correctness requirement to fall out of this dossier's analysis and should be flagged
+to whichever dossier owns storage-backend design.</p>
+<h3 id="2-3-adding-an-edge-that-would-create-a-cycle">2.3 Adding an edge that would create a cycle<a class="anchor" href="#2-3-adding-an-edge-that-would-create-a-cycle" aria-label="Link to this section">#</a></h3>
+<p><strong>Recommendation: reject synchronously at insert time with a typed <code>ErrCycle</code> error, at
+O(1)-amortized cost using a topological-order (not per-edge DFS) invariant.</strong></p>
+<p>Naive cost: checking "does adding edge <code>u → v</code> create a cycle" by DFS from <code>v</code> looking for a path
+back to <code>u</code> costs O(V+E) per insert in the worst case — the standard cycle-detection bound, since
+"a topological ordering is possible if and only if the graph has no directed cycles," and both
+Kahn's algorithm and DFS-based topological sort run in O(|V|+|E|)
+(<a href="https://en.wikipedia.org/wiki/Topological_sorting" rel="noopener noreferrer">Topological sorting — Wikipedia</a>). Doing a
+full O(V+E) walk on every single edge insert directly violates this project's headline O(1)/O(log
+n) performance goal at 1M-node scale.</p>
+<p>The standard trick used by incremental-topological-order maintenance (Pearce &amp; Kelly,
+<em>"A Dynamic Topological Sort Algorithm for Directed Acyclic Graphs"</em>, ACM JEA 2006, the
+canonical reference for this exact problem) is to <strong>maintain an explicit topological order number
+(<code>ord[v]</code>) per node</strong> and use it as a cheap pre-filter:</p>
+<pre><code class="language-go"><span class="tok-com">// Cheap path: if ord[pred] &lt; ord[target] already, the edge cannot create a</span>
+<span class="tok-com">// cycle without also implying one already existed (topological invariant</span>
+<span class="tok-com">// holds), so this is the common case and it's O(1).</span>
+<span class="tok-kw">func</span> (g *graph) addEdgeChecked(pred, target NodeID) <span class="tok-kw">error</span> {
+    <span class="tok-kw">if</span> g.ord[pred] &lt; g.ord[target] {
+        g.insertEdge(pred, target) <span class="tok-com">// O(1): append to adjacency, bump dep-counter</span>
+        <span class="tok-kw">return</span> <span class="tok-kw">nil</span>
+    }
+    <span class="tok-com">// Slow path: ord[pred] &gt;= ord[target]. The order must be repaired before</span>
+    <span class="tok-com">// we know whether a cycle exists. Bounded local re-topo-sort touching only</span>
+    <span class="tok-com">// the "affected region" between ord[target] and ord[pred] — Pearce/Kelly</span>
+    <span class="tok-com">// bound this at O((V+E) log V) worst case across a whole batch, but for a</span>
+    <span class="tok-com">// single edge it is proportional to the size of the affected region, not</span>
+    <span class="tok-com">// the whole graph, and the affected region is empty (i.e., a true cycle)</span>
+    <span class="tok-com">// exactly when target can already reach pred.</span>
+    <span class="tok-kw">if</span> g.canReach(target, pred) { <span class="tok-com">// bounded BFS within the affected window</span>
+        <span class="tok-kw">return</span> ErrCycle{Pred: pred, Target: target}
+    }
+    g.repairOrder(pred, target) <span class="tok-com">// re-number the affected region</span>
+    g.insertEdge(pred, target)
+    <span class="tok-kw">return</span> <span class="tok-kw">nil</span>
+}</code></pre>
+<p>Cost model to put in the perf dossier's cross-reference: <strong>O(1) amortized for the overwhelmingly
+common case</strong> (new edges added in roughly causal order, which is true for the fan-out and
+retroactive-dependency patterns this library actually needs to support — a new node is normally
+wired to <em>recently</em> created nodes, not to ones deep in the topological past), degrading to
+work proportional to the <em>affected region size</em> (never the whole graph) only when an edge is
+inserted "against the grain" of current topological order. This is the honest cost, and it should
+be explicitly benchmarked (adversarial insert order vs. causal insert order) in the performance
+dossier rather than asserted as O(1) unconditionally.</p>
+<p>Cheaper, coarser alternative worth naming for v1 if implementing Pearce–Kelly correctly is judged
+too much engineering risk up front: <strong>per-scope generation counters plus a same-scope-only cycle
+check limited to a bounded neighborhood</strong> (e.g., reject any edge whose target is within k hops
+upstream of pred via a bounded reverse-BFS, and fall back to a full check only past that bound,
+logging it as a slow-path metric). This trades a small risk of missing a very-long-range cycle
+check being fast for guaranteed worst-case bounds; not recommended as the final answer, but a
+legitimate fallback if full incremental topo-order maintenance slips the schedule.</p>
+<h3 id="2-4-deleting-a-node-or-edge">2.4 Deleting a node or edge<a class="anchor" href="#2-4-deleting-a-node-or-edge" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Operation</th><th>Effect</th><th>Recommendation</th></tr></thead>
+<tbody>
+<tr><td><code>RemoveEdge(pred, target)</code></td><td><code>target</code>'s dep-counter decrements</td><td>If this was the last unmet dependency, <code>target</code> becomes Ready immediately (identical mechanics to T3) — deleting a blocking edge is dependency-resolution-by-removal, not a special case.</td></tr>
+<tr><td><code>RemoveNode(id)</code> where <code>id</code> is <code>New</code>/Blocked or Ready, no successors yet claimed</td><td>full delete</td><td>Straightforward: cascade-decrement all successors' dep-counters as if a <code>RemoveEdge</code> fired for every outgoing edge.</td></tr>
+<tr><td><code>RemoveNode(id)</code> where <code>id</code> is <code>InProgress</code></td><td><strong>reject by default</strong> (<code>ErrNodeInFlight</code>), require <code>Cancel</code> first</td><td>Deleting live work out from under a worker holding a lease is a correctness hazard identical to the retroactive-edit-of-a-running-node problem in §2.2 — force the caller through the explicit, auditable <code>Cancel</code> (T13) path instead of overloading delete with cancel semantics.</td></tr>
+<tr><td><code>RemoveNode(id)</code> where <code>id</code> is terminal (<code>Success</code>/<code>Error</code>) and has live successors depending on it</td><td>full delete, successors marked per T14</td><td>The successor's <code>ReasonRemoved</code> distinguishes "my dependency vanished" from <code>ReasonUpstreamFailed</code> ("my dependency ran and failed") — a materially different operational fact worth the extra <code>Reason</code> value, directly mirroring Airflow's dedicated <code>removed</code> state, which exists for exactly this "the DAG changed out from under a live run" scenario (<a href="https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/tasks.html" rel="noopener noreferrer">Airflow task states</a>).</td></tr>
+</tbody></table></div>
+<h3 id="2-5-adding-a-successor-to-an-already-completed-node-becomes-ready-immediately">2.5 Adding a successor to an already-completed node — becomes ready immediately<a class="anchor" href="#2-5-adding-a-successor-to-an-already-completed-node-becomes-ready-immediately" aria-label="Link to this section">#</a></h3>
+<p>This is the load-bearing dynamic-DAG case (it's what makes fan-out and streaming pipelines work at
+all) and should be treated as the <em>default</em>, unsurprising path, not an edge case:
+<code>AddNode(newNode, dependsOn=[completedPred])</code> — if <code>completedPred.Status == Success</code>, <code>newNode</code>'s
+dep-counter for that edge starts pre-satisfied; if <code>newNode</code> has no other unmet deps, it is Ready
+the instant it's inserted (T2-with-a-precomputed-satisfied-edge, not T1-then-T3 — no intermediate
+Blocked state should ever be observable). If <code>completedPred.Status == Error</code>, the recommendation
+in §3 is that <code>newNode</code> is immediately <code>Error/UpstreamFailed</code> (T11) rather than Ready — a node
+should never be scheduled onto the ready set as a live consequence of wiring it to an
+already-failed predecessor, since that predecessor will never re-run to unblock it.</p>
+<h3 id="2-6-dynamic-fan-out-survey-and-the-pattern-to-adopt">2.6 Dynamic fan-out: survey and the pattern to adopt<a class="anchor" href="#2-6-dynamic-fan-out-survey-and-the-pattern-to-adopt" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>System</th><th>Mechanism</th><th>When task count is known</th><th>Cap/limit</th></tr></thead>
+<tbody>
+<tr><td>Airflow ≥2.3</td><td><code>task.expand(x=iterable)</code> / <code>partial().expand()</code></td><td>at scheduling time, from a literal or from an upstream task's <em>return value</em> ("task-generated mapping")</td><td><code>max_map_length</code> (default <strong>1024</strong>); <code>max_active_tis_per_dag</code> throttles concurrency <a href="https://airflow.apache.org/docs/apache-airflow/stable/authoring-and-scheduling/dynamic-task-mapping.html" rel="noopener noreferrer">Airflow dynamic task mapping</a></td></tr>
+<tr><td>Prefect</td><td><code>task.map(iterable)</code> returns a list of <code>PrefectFuture</code>s</td><td>at call time, from any Python iterable, including one produced earlier in the same flow</td><td>none built-in; governed by the task runner's concurrency limits <a href="https://docs.prefect.io/v3/how-to-guides/workflows/run-work-concurrently" rel="noopener noreferrer">Prefect — run work concurrently</a></td></tr>
+<tr><td>Argo Workflows</td><td><code>withItems</code> (static list) vs. <code>withParam</code> (JSON array from a prior step's stdout)</td><td><code>withItems</code>: parse time; <code>withParam</code>: <strong>runtime</strong>, "you can generate the JSON in another step ... so creating a dynamic workflow"</td><td>none named in docs; bounded by controller resource limits in practice <a href="https://argo-workflows.readthedocs.io/en/latest/walk-through/loops/" rel="noopener noreferrer">Argo — loops</a></td></tr>
+<tr><td>Dask distributed</td><td><code>dask.delayed</code> recursion, or <code>get_client()</code>/<code>secede()</code>/<code>rejoin()</code>/<code>worker_client()</code> to submit new futures <strong>from inside a running task</strong></td><td>fully dynamic — a task can decide, using its own computed result, to spawn more tasks, with no pre-declared shape at all</td><td>none — bounded only by cluster resources; <code>secede</code>/<code>rejoin</code> exist specifically to avoid worker-thread deadlock while a task blocks on children it just spawned <a href="https://distributed.dask.org/en/stable/task-launch.html" rel="noopener noreferrer">Dask distributed — task launch</a></td></tr>
+<tr><td>Ray</td><td>any remote function can call another remote function and return/chain <code>ObjectRef</code>s ("nested tasks"); dependencies are expressed as futures resolved at runtime</td><td>fully dynamic, same class as Dask</td><td>governed by cluster scheduling, not a declared cap</td></tr>
+</tbody></table></div>
+<p>Two families emerge: <strong>template-expansion-at-schedule-time</strong> (Airflow, Argo <code>withParam</code>, Prefect
+<code>.map</code>) where the <em>set</em> of new nodes is computed once, from one piece of data, and inserted as a
+batch; and <strong>fully organic runtime spawning</strong> (Dask, Ray) where any running unit of work can
+insert more nodes at any time, including nodes that depend on itself.</p>
+<p><strong>Recommendation for dag-worker-go: support the organic model as the primitive, and let
+template-expansion be a caller-side pattern built on top, not a separate library feature.</strong>
+Reasoning: the library's public API is already "any caller can <code>AddNode</code>/<code>AddEdge</code> at any time"
+(that's the dynamic-DAG requirement itself) — a worker acking a node's completion is just another
+caller, so <code>Ack(nodeID, result)</code> plus, in the same logical operation, a batch <code>AddNodes(children...)</code>
+call gives the host program the Dask/Ray "spawn from inside a task" capability for free, with no
+bespoke "expand" API surface to design, version, or benchmark separately. The one thing worth
+adding explicitly, because none of the surveyed systems' analogue is directly liftable into a
+concurrent-multi-instance setting: <strong>a batch-insert API (<code>AddNodes([]NodeSpec, edges []EdgeSpec)
+→ error</code>) that is atomic per scope</strong> — either all nodes and edges in the batch land or none do —
+so a worker fanning out into 10,000 children under Airflow's own <code>max_map_length</code>-style cap (v1
+recommendation: a configurable per-call and per-scope batch-size cap, defaulting to something in
+the low thousands, mirroring Airflow's 1024 default) doesn't leave the graph half-expanded if it
+crashes mid-batch.</p>
+<h3 id="2-7-sealed-vs-open-nodes-scopes-and-termination-detection">2.7 Sealed vs. open nodes/scopes, and termination detection<a class="anchor" href="#2-7-sealed-vs-open-nodes-scopes-and-termination-detection" aria-label="Link to this section">#</a></h3>
+<p><strong>The problem, stated precisely:</strong> "is this DAG/scope done?" is undecidable from local
+information alone in a graph that can still grow, for exactly the reason distributed termination
+detection exists: a scope with zero currently-<code>New</code>/<code>InProgress</code> nodes is not necessarily
+finished — some already-succeeded node might, a moment later, be handed a new successor by a
+caller that hasn't made its next <code>AddNode</code> call yet. This is <em>structurally</em> the same problem
+Dijkstra and Scholten solved for detecting termination of a "diffusing computation": a
+computation is a (possibly growing) tree/DAG of active processes, and the question is exactly
+"has every process in this dynamically-shaped computation gone idle, permanently, with nothing in
+flight."</p>
+<p><strong>Dijkstra–Scholten</strong>, the paper's own model: a diffusing computation starts at one initiator and
+spreads by processes sending messages that spawn or activate other processes; the algorithm has
+each process count outstanding "signals" it's owed and only report itself terminated up its
+spanning-tree parent once its own subtree has balanced every send with an acknowledgment —
+"[for DAGs] a <code>Deficit</code> attribute on edges measur[es] the imbalance between received messages and
+sent signals... nodes can only terminate after balancing their deficits on both incoming and
+outgoing edges," and for general (cyclic-capable) graphs the algorithm "implicitly creates a
+spanning tree of the graph by having each node record the first edge through which it receives a
+message."
+<a href="https://en.wikipedia.org/wiki/Dijkstra%E2%80%93Scholten_algorithm" rel="noopener noreferrer">Dijkstra–Scholten algorithm — Wikipedia</a></p>
+<p><strong>Safra's algorithm</strong> (the ring-based alternative, commonly paired with Chandy–Misra–Haas-style
+credit/weight schemes and popularized via Mattern's presentations) takes a different, decentralized
+approach: a <strong>token circulates a logical ring</strong> of processes accumulating a count of
+messages-sent-minus-messages-received across the whole system; when the token returns to the
+initiator having circulated once with a net-zero counter and every process was idle when it
+forwarded the token, termination is declared. Where Dijkstra–Scholten needs a maintained
+spanning tree (good fit when the "spawn" relationship — parent/child — is itself the natural tree
+to hang bookkeeping off of), Safra's ring/token approach needs no such structure and tolerates a
+much more tangled communication graph, at the cost of a full ring traversal's latency per
+termination check.
+<a href="https://en.wikipedia.org/wiki/Termination_detection" rel="noopener noreferrer">Termination detection — Wikipedia</a></p>
+<p><strong>Why a plain "count of not-yet-terminal nodes" is insufficient for dag-worker-go:</strong> the
+naive check <code>SELECT COUNT(*) FROM nodes WHERE scope=? AND status IN (New,InProgress)</code> racing
+against a concurrent <code>AddNode</code> is exactly the diffusing-computation race Dijkstra–Scholten exists
+to close — the count can hit zero for one instant while a caller (possibly a worker that just
+Acked and is about to fan out, i.e. exactly the pattern in §2.6) is <em>between</em> its Ack and its next
+AddNodes call, with nothing in the data model recording "there is still an obligation outstanding
+here."</p>
+<p><strong>Recommendation: a <code>Sealed</code>/<code>Open</code> flag, exactly as the brief proposes, modeled as the
+project-specific fixed point of Dijkstra–Scholten's "deficit" idea rather than a full
+general-purpose termination-detection algorithm</strong> — because dag-worker-go's version of the problem
+is <em>simpler</em> than the fully general one both algorithms solve: nodes don't send anonymous
+messages to each other across an arbitrary communication topology; they mutate a single shared,
+already-durable graph structure the engine itself owns and can inspect transactionally. The
+"deficit" that must reach zero is not messages-in-flight, it's exactly: <strong>(a) no node in the scope
+is <code>New</code>/<code>InProgress</code>, AND (b) the scope (or the specific node whose completion might trigger new
+successors) has been explicitly marked <code>Sealed</code> by the caller.</strong> <code>Sealed</code> is the caller's
+assertion "I am done calling <code>AddNode</code>/<code>AddEdge</code> against this scope/node" — the equivalent of a
+Dijkstra–Scholten process explicitly reporting it will spawn no more children, which collapses the
+distributed-detection problem back into a simple, cheap, storage-local check:</p>
+<pre><code class="language-go"><span class="tok-com">// Scope-level completion check — O(1) against a maintained counter, not a</span>
+<span class="tok-com">// scan, once Sealed is tracked as a boolean alongside a live not-terminal</span>
+<span class="tok-com">// counter maintained by every T1..T14 transition above.</span>
+<span class="tok-kw">func</span> (s *Scope) IsComplete() <span class="tok-kw">bool</span> {
+    <span class="tok-kw">return</span> s.Sealed &amp;&amp; s.notTerminalCount.Load() == <span class="tok-num">0</span>
+}</code></pre>
+<p>This makes the sealing decision the caller's responsibility (matching the brief's own framing:
+"no more successors will be added" is a statement only the caller/host program can make with
+authority — the library cannot infer it), while the <em>counting</em> stays O(1) via an atomically
+maintained live counter per scope, updated on every one of the T1–T15 transitions rather than
+recomputed by scanning. An <strong>open</strong> scope (the default) simply never reports <code>IsComplete()==true</code>
+regardless of counter state, which is the conservative, safe default — it costs nothing but a
+<code>Scope.Seal()</code> call the caller must remember to make, exactly mirroring how a diffusing computation
+without an explicit "no more children" signal from every leaf can never be proven terminated by
+definition, not by a bug.</p>
+<hr>
+<h2 id="3-failure-propagation-and-retry">3. Failure propagation and retry<a class="anchor" href="#3-failure-propagation-and-retry" aria-label="Link to this section">#</a></h2>
+<h3 id="3-1-two-coarse-policies-named-consistently-with-the-brief">3.1 Two coarse policies, named consistently with the brief<a class="anchor" href="#3-1-two-coarse-policies-named-consistently-with-the-brief" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong>Fail-fast</strong>: one node's terminal <code>Error</code> immediately cancels every not-yet-terminal descendant
+(T13-style cascade with <code>ReasonCancelled</code>, or a dedicated <code>ReasonUpstreamFailed</code> — see the
+trigger-rule table below for why <code>ReasonUpstreamFailed</code> is the more precise choice for pure
+dependency failures vs. <code>ReasonCancelled</code> for an explicit stop-the-world). This is Argo's
+default (<code>failFast: true</code>) and Kubernetes Job's implicit behavior once <code>backoffLimit</code> is
+exhausted.</li>
+<li><strong>Continue</strong>: descendants are marked <code>Error/UpstreamFailed</code> (or <code>Error/Skipped</code>, depending on
+trigger rule) only when <em>their own</em> trigger rule becomes unsatisfiable, while unrelated branches
+of the DAG keep running unaffected. This is Argo's <code>failFast: false</code> and Airflow's default
+per-task trigger-rule evaluation (each task's rule is checked independently against its own
+immediate predecessors, not against a whole-DAG kill switch).</li>
+</ul>
+<h3 id="3-2-airflow-s-trigger-rule-set-tabulated-with-the-v1-subset-recommendation">3.2 Airflow's trigger-rule set, tabulated, with the v1 subset recommendation<a class="anchor" href="#3-2-airflow-s-trigger-rule-set-tabulated-with-the-v1-subset-recommendation" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Trigger rule</th><th>Fires when</th><th>Recommend for v1?</th></tr></thead>
+<tbody>
+<tr><td><code>all_success</code> (default)</td><td>every predecessor is <code>Success</code></td><td><strong>Yes — the only default, ships first</strong></td></tr>
+<tr><td><code>all_failed</code></td><td>every predecessor is <code>Failed</code>/<code>upstream_failed</code></td><td>No — narrow use case (failure-handler nodes), defer</td></tr>
+<tr><td><code>all_done</code></td><td>every predecessor reached <em>any</em> terminal state</td><td><strong>Yes</strong> — the standard "cleanup/finally" pattern, cheap to implement (just checks terminality, not outcome)</td></tr>
+<tr><td><code>all_done_setup_success</code></td><td>like <code>all_done</code>, plus ≥1 setup predecessor succeeded</td><td>No — depends on an Airflow-specific "setup/teardown" task concept out of scope for v1</td></tr>
+<tr><td><code>all_done_min_one_success</code></td><td>all non-skipped predecessors done, ≥1 succeeded</td><td>No — defer, composes two conditions v1 doesn't need yet</td></tr>
+<tr><td><code>all_skipped</code></td><td>every predecessor is <code>Skipped</code></td><td>No — narrow</td></tr>
+<tr><td><code>one_failed</code></td><td>≥1 predecessor <code>Failed</code>, doesn't wait for the rest</td><td>No for v1 (needs "doesn't wait" semantics — a node becoming ready <em>before</em> all predecessors are terminal, which complicates the dep-counter model in §2 non-trivially: it requires a second, race-prone kind of "ready," see open questions)</td></tr>
+<tr><td><code>one_success</code></td><td>≥1 predecessor <code>Success</code>, doesn't wait for the rest</td><td>No for v1, same reason as <code>one_failed</code></td></tr>
+<tr><td><code>one_done</code></td><td>≥1 predecessor terminal, doesn't wait</td><td>No for v1, same reason</td></tr>
+<tr><td><code>none_failed</code></td><td>zero predecessors in <code>Failed</code>/<code>upstream_failed</code></td><td><strong>Yes</strong> — cheap (a boolean OR maintained per-node, same shape as the existing dep-counter machinery) and it is the documented fix for Airflow's own cascading-skip footgun, so shipping it in v1 directly addresses the failure mode called out in §1.2</td></tr>
+<tr><td><code>none_failed_min_one_success</code></td><td>no failures AND ≥1 success</td><td><strong>Yes</strong> — Airflow's own recommended default for anything downstream of a branch, and it's <code>none_failed</code> plus a trivial extra AND</td></tr>
+<tr><td><code>none_skipped</code></td><td>zero predecessors <code>Skipped</code></td><td>No — defer, narrow</td></tr>
+<tr><td><code>always</code></td><td>ignore predecessors entirely</td><td><strong>Yes</strong> — trivial to implement (a node with <code>always</code> simply isn't gated by dep-counting at all) and it's the primitive fail-fast-cancellation and cleanup-hook patterns are built from</td></tr>
+</tbody></table></div>
+<p><strong>v1 recommendation: <code>all_success</code> (default), <code>all_done</code>, <code>none_failed</code>,
+<code>none_failed_min_one_success</code>, <code>always</code>.</strong> All five share the property that they can be evaluated
+<em>incrementally</em>, as each predecessor reaches a terminal state, without ever needing to look at a
+predecessor that hasn't finished yet and without needing the "doesn't wait for the rest" early-fire
+semantics that <code>one_*</code> rules require — which is the actual engineering reason to defer the
+<code>one_*</code> family, not merely "narrow use case": early-fire trigger rules mean a node can become
+Ready while some of its declared predecessors are still <code>InProgress</code>, which means those
+predecessors' eventual completion must be handled as a no-op against an already-scheduled
+successor — a second code path through every transition in §1.6's table that v1 should not take on
+before the core state machine has production mileage.
+<a href="https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/dags.html" rel="noopener noreferrer">Airflow — DAGs / trigger rules</a></p>
+<h3 id="3-3-retries-attempts-backoff-jitter-budgets">3.3 Retries: attempts, backoff, jitter, budgets<a class="anchor" href="#3-3-retries-attempts-backoff-jitter-budgets" aria-label="Link to this section">#</a></h3>
+<p><strong>Backoff formula: full jitter, per the AWS Architecture Blog's own head-to-head testing.</strong> The
+post defines three candidate formulas —</p>
+<pre><code>FullJitter        = random_between(0, min(cap, base * 2^attempt))
+EqualJitter        = half = min(cap, base * 2^attempt) / 2
+                     random_between(half, half + half)   // i.e. half + random(0, half)
+DecorrelatedJitter = min(cap, random_between(base, prev_sleep * 3))</code></pre>
+<p>— and concludes Full Jitter is the recommendation: it "uses less work" (fewer total retry
+attempts consumed across a fleet under contention) than Equal Jitter, and performs comparably to
+Decorrelated Jitter while being simpler to reason about and implement, because "adding jitter
+addresses the clustering problem where exponentially backed-off calls happen [simultaneously]...
+without jitter, exponential backoff alone creates gaps and clusters of calls, whereas jittered
+approaches achieve an approximately constant rate of calls."
+<a href="https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/" rel="noopener noreferrer">AWS Architecture Blog — Exponential Backoff and Jitter</a></p>
+<pre><code class="language-go"><span class="tok-com">// Full Jitter, per AWS's recommendation, as the library default.</span>
+<span class="tok-kw">func</span> fullJitterBackoff(attempt <span class="tok-kw">uint32</span>, base, <span class="tok-kw">cap</span> time.Duration) time.Duration {
+    exp := base &lt;&lt; attempt <span class="tok-com">// base * 2^attempt, saturating before overflow</span>
+    <span class="tok-kw">if</span> exp &gt; <span class="tok-kw">cap</span> || exp &lt; base <span class="tok-com">/* overflow */</span> {
+        exp = <span class="tok-kw">cap</span>
+    }
+    <span class="tok-kw">return</span> time.Duration(rand.Int63n(<span class="tok-kw">int64</span>(exp) + <span class="tok-num">1</span>))
+}</code></pre>
+<p>Cross-checking against the three other systems surveyed:</p>
+<ul>
+<li>Cloud Tasks' <code>minBackoff</code>/<code>maxBackoff</code>/<code>maxDoublings</code> scheme (§1.2) has <strong>no jitter term at
+all</strong> — it's a pure deterministic exponential-then-linear ramp. Worth flagging as the weaker
+precedent precisely because it predates (or ignores) the jitter literature; not a
+counter-argument to Full Jitter, just evidence that "ship deterministic backoff" is a real,
+shippable-but-inferior choice other systems made.</li>
+<li>Step Functions' <code>Retry</code> block supports <code>JitterStrategy: FULL | NONE</code> directly — i.e., AWS's own
+product team took their blog's own recommendation and shipped it as a literal enum value years
+later, which is about as strong an internal-consistency endorsement as a design decision gets.
+<a href="https://docs.aws.amazon.com/step-functions/latest/dg/concepts-error-handling.html" rel="noopener noreferrer">Step Functions error handling</a></li>
+<li>Sidekiq's <code>count**4 + 15 + rand(10*(count+1))</code> is closer to Equal Jitter in shape (a
+deterministic floor plus a bounded random addition) than to Full Jitter, and its polynomial
+(not exponential) growth is a deliberate choice for a <em>human-facing</em> dead-letter timeline (~20
+days to exhaust 25 attempts) rather than a machine-facing thundering-herd concern — not directly
+transferable to a library whose retry timeline should be configurable per node, not baked into
+one global curve.
+<a href="https://github.com/sidekiq/sidekiq/wiki/Error-Handling" rel="noopener noreferrer">Sidekiq Error Handling</a></li>
+</ul>
+<p><strong>Recommendation: Full Jitter as the library-wide default, with <code>base</code>, <code>cap</code>, and <code>maxAttempts</code>
+settable per node at claim time</strong> (mirroring the brief's own per-node-timeout requirement — the
+same <code>Claim</code>-time options struct should carry both the ack deadline and the retry policy, since
+both are "how should the engine treat this node if the worker doesn't come back cleanly").</p>
+<p><strong>Retry budgets / circuit breaking:</strong> none of the eight systems surveyed implement a cross-node
+"retry budget" (a shared cap on total retries-in-flight across a whole scope to stop a systemic
+outage from retry-storming a downstream dependency) as a <em>DAG-engine</em> feature — it shows up one
+layer down, as a property of the <em>worker's own</em> HTTP/RPC client (e.g., gRPC's or a service mesh's
+retry budget, unrelated to any system surveyed here). <strong>Recommendation: out of scope for
+dag-worker-go v1.</strong> The library's job is per-node retry scheduling with jittered backoff; a
+cross-node budget is a policy the host program can build on top by watching the status-transition
+stream (count <code>ReasonWorkerError</code>/<code>ReasonTimeout</code> events per scope per window) and calling
+<code>CancelScope</code> if a threshold trips — exposing the primitive (the stream) is sufficient, building
+the policy in is scope creep the brief doesn't ask for.</p>
+<h3 id="3-4-retry-as-a-new-attempt-on-the-same-node-with-attempt-as-fencing-token">3.4 Retry as a new attempt on the same node, with attempt-as-fencing-token<a class="anchor" href="#3-4-retry-as-a-new-attempt-on-the-same-node-with-attempt-as-fencing-token" aria-label="Link to this section">#</a></h3>
+<p><strong>Recommendation, matching the brief's own lean: yes, retry is a new attempt on the same
+<code>NodeID</code>, and the attempt counter doubles as the fencing token.</strong> This directly follows River's
+own documented failure mode (§1.2: a <code>running</code> job whose engine can't update its state "will be
+left as <code>running</code> and will require a pass by the job rescuer service") and Kleppmann's fencing
+argument (§1.6): the danger case is a worker from <strong>attempt N</strong> finally responding (a very slow
+<code>Ack</code>) <em>after</em> the sweeper has already declared attempt N timed out and the engine has dispatched
+attempt N+1 to a different worker. Without a fencing check, the late <code>Ack</code> from the stale worker
+could incorrectly mark the node <code>Success</code> after a second worker is already redoing the work (or
+worse, both attempts write conflicting results).</p>
+<pre><code class="language-go"><span class="tok-com">// Ack/Nack must be fenced against the current attempt number, not merely</span>
+<span class="tok-com">// against "is this node currently InProgress" — a plain status check is not</span>
+<span class="tok-com">// enough, exactly per Kleppmann: "the storage server [must remember] that it</span>
+<span class="tok-com">// has already processed a write with a higher token number" and reject the</span>
+<span class="tok-com">// stale one.</span>
+<span class="tok-kw">func</span> (e *Engine) Ack(nodeID NodeID, attempt <span class="tok-kw">uint32</span>, result []<span class="tok-kw">byte</span>) <span class="tok-kw">error</span> {
+    <span class="tok-com">// Single atomic CAS at the storage layer:</span>
+    <span class="tok-com">//   UPDATE nodes SET status='success', outcome=...</span>
+    <span class="tok-com">//   WHERE id=$1 AND status='in_progress' AND attempt=$2</span>
+    <span class="tok-com">// A 0-row update means either the node moved on already (timeout fired,</span>
+    <span class="tok-com">// attempt N+1 dispatched) or this Ack is stale — both map to the same</span>
+    <span class="tok-com">// caller-visible error, ErrStaleAttempt, so a worker can't distinguish</span>
+    <span class="tok-com">// "I was too slow" from "someone else already handled this," which is</span>
+    <span class="tok-com">// the correct level of ignorance for a worker to have.</span>
+    n, err := e.store.CASSuccess(nodeID, attempt, result)
+    <span class="tok-kw">if</span> err != <span class="tok-kw">nil</span> {
+        <span class="tok-kw">return</span> err
+    }
+    <span class="tok-kw">if</span> n == <span class="tok-num">0</span> {
+        <span class="tok-kw">return</span> ErrStaleAttempt
+    }
+    <span class="tok-kw">return</span> <span class="tok-kw">nil</span>
+}</code></pre>
+<p>This makes <code>attempt</code> do double duty as (a) the retry-count the backoff/max-attempts policy reads
+and (b) the fencing token the CAS keys on — one field, two jobs, and no separate lease-UUID scheme
+needed, because attempt numbers are already monotonic per node by construction (T6 increments on
+every claim) and already durable (they're part of the row a retry mutates anyway).</p>
+<hr>
+<h2 id="4-scopes">4. Scopes<a class="anchor" href="#4-scopes" aria-label="Link to this section">#</a></h2>
+<h3 id="4-1-what-a-scope-is-mapped-onto-five-distinct-responsibilities">4.1 What a scope is, mapped onto five distinct responsibilities<a class="anchor" href="#4-1-what-a-scope-is-mapped-onto-five-distinct-responsibilities" aria-label="Link to this section">#</a></h3>
+<p>The brief lists five things a scope must be a unit of; the survey shows these five responsibilities
+are usually split across <em>different</em> mechanisms in other systems (Kubernetes splits them across
+Namespace + ResourceQuota + RBAC + a separate GC controller), which is itself the argument for
+<code>dag-worker-go</code> deliberately fusing them into one concept rather than four:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Responsibility</th><th>Kubernetes' analogue</th><th>dag-worker-go's <code>Scope</code></th></tr></thead>
+<tbody>
+<tr><td>Namespace (naming)</td><td><code>Namespace</code> object, DNS-safe name</td><td>scope ID is an opaque caller-chosen string, implicitly created on first use — no <code>CreateScope</code> call required, exactly mirroring "namespaces are created implicitly" in the brief</td></tr>
+<tr><td>Isolation</td><td>RBAC bound to a namespace</td><td>key-prefixing (below) — a scope's data is physically partitioned in every backend's key space, so cross-scope access is a bug class prevented by key shape, not by an access-control check the library would have to enforce at runtime</td></tr>
+<tr><td>Ownership</td><td>namespace <code>labels</code>/<code>annotations</code>, external convention</td><td>out of scope for the <em>library</em> — no built-in ACL system; ownership is a host-program concern layered on top, same as Kubernetes leaves "who may touch this namespace" to RBAC, a separate subsystem, not core namespace semantics</td></tr>
+<tr><td>Concurrency limit / quota</td><td><code>ResourceQuota</code> object, "enforce[d]... at the namespace level," rejected at admission with <code>403 Forbidden</code> on violation (<a href="https://kubernetes.io/docs/concepts/policy/resource-quotas/" rel="noopener noreferrer">Kubernetes ResourceQuota</a>)</td><td>a per-scope <code>MaxConcurrentInProgress</code> (and optionally <code>MaxNodesTotal</code>) enforced at <code>Claim</code> time / <code>AddNode</code> time by the same atomic op that would otherwise unconditionally admit — reject with a typed <code>ErrScopeQuotaExceeded</code>, same admission-time-rejection shape Kubernetes uses</td></tr>
+<tr><td>GC/retention unit</td><td>no first-class per-namespace TTL in core Kubernetes (left to controllers)</td><td>first-class: <code>Scope.RetentionPolicy</code> (§6) — this is one thing dag-worker-go should do <em>better</em> than the Kubernetes analogue, since "when do old DAG runs get deleted" is squarely inside this library's job in a way "when do old namespaces get deleted" was never Kubernetes core's job</td></tr>
+</tbody></table></div>
+<h3 id="4-2-key-prefix-design">4.2 Key-prefix design<a class="anchor" href="#4-2-key-prefix-design" aria-label="Link to this section">#</a></h3>
+<p>Every storage backend keys all scope-owned data off a <code>scope:&lt;scopeID&gt;:</code> prefix, so that:</p>
+<ul>
+<li>Redis: <code>SCAN</code>/<code>KEYS</code> restricted to a scope is a prefix match, and a Lua script enforcing
+quota/atomicity (§2.2, §3.4) only ever touches keys under one prefix, never needing cross-prefix
+coordination.</li>
+<li>PostgreSQL: <code>scope_id</code> as a leading column in every composite primary key and every index, so
+every query the engine issues is naturally scope-scoped and index-local, and a <code>DROP</code> of a whole
+scope's rows is a single indexed range delete, not a full-table scan.</li>
+<li>Memcached: since it has no native namespacing or scan primitive, scope prefixing is the <em>only</em>
+mechanism available and must additionally maintain an explicit per-scope node-ID index (a
+separate key) since Memcached cannot enumerate keys by prefix at all — a concrete design
+constraint this dossier flags for the storage-backend dossier rather than solving here, since
+Memcached's complete absence of a "list keys matching X" primitive means several O(1)/O(log n)
+operations trivial in Redis/Postgres (e.g., "list all Ready nodes in this scope") need a
+Memcached-specific auxiliary index structure to stay off O(n).</li>
+</ul>
+<h3 id="4-3-may-edges-cross-scopes-no">4.3 May edges cross scopes? — <strong>No.</strong><a class="anchor" href="#4-3-may-edges-cross-scopes-no" aria-label="Link to this section">#</a></h3>
+<p><strong>Recommendation: reject <code>AddEdge</code> (and multi-node <code>AddNodes</code>+edges batches) that reference a node
+in a different scope, with a typed <code>ErrCrossScopeEdge</code>.</strong> What this buys, concretely:</p>
+<ol>
+<li><strong>The O(1)/O(log n) performance goal stays achievable per-scope.</strong> If edges could cross scopes,
+"is this DAG done" (§2.7) and cycle detection (§2.3) would both need to reason about a graph
+that spans key-prefix boundaries, defeating the entire point of prefixing (§4.2) as a
+performance mechanism — every cross-scope-capable operation degrades to needing global
+coordination exactly where per-scope prefixing was supposed to let backends shard/partition
+independently in a future clustered mode.</li>
+<li><strong>Deletion/GC (§6) stays scope-local.</strong> A scope can be torn down (all its keys deleted) without
+a global "is anyone else still pointing at one of my nodes" check — which is precisely the kind
+of global liveness question §2.7 shows is expensive and race-prone. Kubernetes' own namespace
+deletion has to grapple with exactly this for cross-namespace owner references; not needing to
+is a real simplification, not merely a restriction.</li>
+<li><strong>The quota/concurrency-limit mechanism (§4.1) stays meaningful.</strong> A <code>MaxConcurrentInProgress</code>
+quota on scope A is trivially bypassable if scope B can hold a node that fans out into scope A
+via a cross-scope edge dependency chain most of whose accounting lands on B.</li>
+<li><strong>Cost of the restriction:</strong> a caller who genuinely needs one causal chain spanning two logical
+namespaces must either put both halves in one scope (using the <em>labels</em> mechanism, §5.4, to
+still get logical partitioning within it for selective subscription) or explicitly bridge them
+at the application layer (scope A's terminal node's <code>Ack</code> triggers a scope-B <code>AddNode</code> call from
+host-program code, i.e., the same "worker fans out" pattern from §2.6, just crossing a scope
+boundary through caller code rather than through the graph itself). This is a real, but small
+and rare, cost — most reported no-scope-boundaries-should-exist use cases are actually just
+"one scope with labels."</li>
+</ol>
+<hr>
+<h2 id="5-node-payload-and-identity">5. Node payload and identity<a class="anchor" href="#5-node-payload-and-identity" aria-label="Link to this section">#</a></h2>
+<h3 id="5-1-caller-supplied-ids-vs-library-generated-and-idempotent-insert">5.1 Caller-supplied IDs vs. library-generated, and idempotent insert<a class="anchor" href="#5-1-caller-supplied-ids-vs-library-generated-and-idempotent-insert" aria-label="Link to this section">#</a></h3>
+<p><strong>Recommendation: caller-supplied string IDs, required, with idempotent insert defined as
+same-ID-same-payload = no-op, same-ID-different-payload = conflict error.</strong> This mirrors the
+industry-standard idempotency-key pattern directly: Stripe's API "saves the resulting status code
+and body of the first request made for any given idempotency key... [and] compares incoming
+parameters to those of the original request and errors if they're not the same to prevent
+accidental misuse."
+<a href="https://docs.stripe.com/api/idempotent_requests" rel="noopener noreferrer">Stripe — Idempotent requests</a></p>
+<pre><code class="language-go"><span class="tok-com">// AddNode is idempotent keyed on caller-supplied ID. Same id + byte-identical</span>
+<span class="tok-com">// spec (payload, deps, labels) is a silent no-op returning the existing node's</span>
+<span class="tok-com">// current view — critical for at-least-once callers (a host program retrying</span>
+<span class="tok-com">// its own AddNode call after a network blip must not create a duplicate node</span>
+<span class="tok-com">// or, worse, silently fork the DAG into two shapes depending on which retry</span>
+<span class="tok-com">// "won").</span>
+<span class="tok-kw">func</span> (s *Scope) AddNode(id NodeID, spec NodeSpec) (Node, <span class="tok-kw">error</span>) {
+    existing, ok := s.store.Get(id)
+    <span class="tok-kw">if</span> ok {
+        <span class="tok-kw">if</span> !specEqual(existing.Spec, spec) {
+            <span class="tok-kw">return</span> Node{}, ErrIDConflict{ID: id} <span class="tok-com">// Stripe's "parameters ... not the same" case</span>
+        }
+        <span class="tok-kw">return</span> existing, <span class="tok-kw">nil</span> <span class="tok-com">// idempotent no-op</span>
+    }
+    <span class="tok-kw">return</span> s.store.Insert(id, spec)
+}</code></pre>
+<p>Why caller-supplied rather than library-generated (e.g., a UUID/ULID returned from <code>AddNode</code>):
+a library-generated ID makes idempotent retry <em>impossible</em> to express correctly — if the host
+program's <code>AddNode</code> call itself times out before the response (with the new ID) arrives, the
+caller has no way to know whether to retry (risking a duplicate node under a new ID) or not
+(risking having silently dropped the node). Caller-supplied IDs push the idempotency key to where
+the caller already has one naturally (most host programs modeling "one node per business
+work-item" already have a natural key — an order ID, a request ID — for that work-item). Library
+ID generation should still be offered as a convenience helper (<code>GenerateID() NodeID</code>, e.g. a
+ULID for the lexical-sortability property, unrelated to idempotency) for callers who genuinely
+have no natural key, but never as the <em>only</em> option.</p>
+<p><strong>Comparison to how other surveyed systems handle this:</strong> Airflow, Argo, and Step Functions all
+use caller/definition-supplied names for tasks/states (a DAG is Python/YAML/JSON source naming its
+own nodes) — none of them generate task identity for the caller, because a human author needs a
+stable name to reference across DAG edits. That precedent supports caller-supplied IDs even setting
+the idempotency argument aside. River and Sidekiq, by contrast, generate job IDs (UUIDs) because
+their unit of work has no natural pre-existing external key and — importantly — neither system
+promises idempotent insert at all (a duplicate <code>Insert</code> call there does create two jobs, modulo
+River's separate opt-in <code>UniqueOpts</code> feature); this project's brief explicitly wants idempotent
+insert, which settles the comparison in favor of caller-supplied IDs.</p>
+<h3 id="5-2-payload-type-opaque-byte-vs-a-generic-type-parameter">5.2 Payload type: opaque <code>[]byte</code> vs. a generic type parameter<a class="anchor" href="#5-2-payload-type-opaque-byte-vs-a-generic-type-parameter" aria-label="Link to this section">#</a></h3>
+<p><strong>Recommendation: <code>[]byte</code> at the storage/wire boundary, with a generic convenience wrapper on
+top for in-process ergonomics — not a generic type parameter threaded through the core engine.</strong></p>
+<p>Reasoning:</p>
+<ul>
+<li>Every pluggable backend this project must support (Redis, Memcached, PostgreSQL <code>bytea</code>/<code>jsonb</code>)
+is fundamentally a bytes store at the wire protocol level — a <code>Storage[T any]</code> interface would
+force every backend adapter to own (de)serialization for an unbounded set of <code>T</code>s, or force the
+library to fix serialization (JSON? gob? protobuf?) as a hidden, hard-to-change default baked
+into the storage contract itself. Keeping the core <code>Node.Payload []byte</code> keeps that choice where
+it belongs: with the caller, per node, changeable without touching storage-adapter code.</li>
+<li>A generic <code>Node[T]</code> <em>can</em> still be layered on top as a thin, optional convenience type
+(<code>type TypedNode[T any] struct { Node; decode func([]byte) (T, error) }</code>) for host programs that
+want compile-time payload types and are willing to fix one serialization format for their whole
+DAG — but it should not be the primitive the engine, the storage interface, or the event stream
+are defined in terms of, precisely because the event stream (subscribers "anyone can subscribe
+to") crosses process/language boundaries in the general case (a Redis- or Postgres-backed
+install's subscribers are not guaranteed to be the same Go binary that inserted the node), where
+a Go generic type parameter has no meaning at all — it cannot survive serialization onto a wire.</li>
+</ul>
+<h3 id="5-3-size-limits">5.3 Size limits<a class="anchor" href="#5-3-size-limits" aria-label="Link to this section">#</a></h3>
+<p>No surveyed system leaves payload size unbounded; the numbers below are the real-world floor a
+"support Redis, Memcached, and PostgreSQL" library must design under, since the library's declared
+limit can never exceed the tightest backend's hard limit without silently breaking on that
+backend:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>System</th><th>Limit</th><th>Source</th></tr></thead>
+<tbody>
+<tr><td>Memcached</td><td>default max item size <strong>1 MiB</strong> (<code>item_size_max</code>, tunable via <code>-I</code>)</td><td><a href="https://github.com/memcached/memcached/wiki/ConfiguringServer" rel="noopener noreferrer">Memcached — Configuring the Server</a></td></tr>
+<tr><td>AWS SQS</td><td>message body <strong>256 KiB</strong> (1,048,576 bytes is actually SQS's <em>newer</em> raised limit per the fetched quotas page — treat 256 KiB as the traditionally-cited figure and confirm against the current AWS quotas page at implementation time, since AWS has changed this limit over the product's lifetime)</td><td><a href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html" rel="noopener noreferrer">AWS SQS — message quotas</a></td></tr>
+<tr><td>Redis</td><td>value size limited by <code>proto-max-bulk-len</code> (default 512 MiB), far above what a DAG node payload should ever need</td><td>general Redis operational knowledge, not independently re-verified against current docs in this research pass — flag for verification</td></tr>
+<tr><td>PostgreSQL</td><td><code>bytea</code>/<code>text</code> column, practically bounded by TOAST at ~1 GiB per value, again far above a sane node-payload budget</td><td>general PostgreSQL operational knowledge — flag for verification</td></tr>
+</tbody></table></div>
+<p><strong>Recommendation: a library-default hard cap of 256 KiB per node payload</strong> (matching the
+traditionally-cited SQS figure, chosen specifically <em>because</em> it's a widely-battle-tested "small
+enough to always fit comfortably in Memcached's 1 MiB ceiling with room for framing/metadata, big
+enough for the overwhelming majority of real work-item payloads" number, not because SQS is
+otherwise relevant to this project), <strong>configurable down</strong> per scope for backends or deployments
+that need a tighter bound, and <strong>never configurable up past what the memcached backend's
+configured <code>item_size_max</code> allows</strong> when that backend is in use — the library should read the
+active backend's real limit where introspectable and take the minimum of (library default, caller
+override, backend real limit), failing <code>AddNode</code> with a typed <code>ErrPayloadTooLarge</code> rather than
+silently truncating or erroring deep inside a backend driver. The recommended pattern for anything
+genuinely payload-heavy (large files, big JSON blobs) is the same one AWS ships for exactly this
+case in SQS's own extended-client pattern: <strong>store the large blob in an out-of-band object store
+and put a reference (a key/URL) in the node payload</strong> — this project should document that pattern
+rather than try to raise its own size ceiling to accommodate it.</p>
+<h3 id="5-4-labels-metadata-and-worker-capability-matching-argue-for-it">5.4 Labels/metadata and worker capability matching — argue for it<a class="anchor" href="#5-4-labels-metadata-and-worker-capability-matching-argue-for-it" aria-label="Link to this section">#</a></h3>
+<p><strong>Recommendation: yes, ship labels (<code>map[string]string</code>, small, indexed) and a <code>kind</code>-partitioned
+<code>Claim(scope, opts ClaimOpts{Kind string, Labels map[string]string})</code> — this is not a nice-to-have,
+it is close to load-bearing, and it is cheap specifically because the ready-set can be
+kind-partitioned at write time rather than filtered at read time.</strong></p>
+<p>Argument for necessity: a host program embedding this library almost never has one homogeneous
+worker pool — the moment there are two kinds of external worker (a GPU-bound worker vs. a
+CPU-bound one, a worker that only knows how to call vendor A's API vs. vendor B's), a
+<code>Claim()</code> that hands back an arbitrary ready node forces the host program to implement its own
+filtering-and-requeue loop on top (claim, inspect kind, if wrong kind release-and-retry) — which
+both wastes a claim/lease cycle per mismatch and reintroduces exactly the kind of
+worker-competing-for-work coordination problem this library exists to solve, just one layer up in
+application code instead of inside the library where it belongs. Kubernetes' entire node-affinity /
+taint-toleration system and Cloud Tasks' separate named queues both exist because "not every
+worker can run every unit of work" is close to universal in practice, not a niche need.</p>
+<p>Argument for cheapness ("it looks essential and is cheap if the ready-set is partitioned by
+kind," per the brief's own framing, which this dossier endorses): the ready set (§1.6, the thing
+<code>Claim</code> pops from) does not have to be one structure — it can be one ready-queue-per-<code>(scope,
+kind)</code> pair, so <code>Claim(scope, kind="gpu")</code> is a direct O(1)/O(log n) pop from <em>that</em> queue, with
+zero filtering cost, rather than a scan-and-skip over a mixed queue. <code>Labels</code> beyond <code>kind</code> (an
+open <code>map[string]string</code> for finer-grained capability matching — region, vendor, size class) are
+inherently more expensive to serve as O(1) pops (arbitrary label predicates don't partition into a
+small fixed set of queues the way a single <code>kind</code> string does), so the recommendation is
+<strong>two-tier</strong>: <code>Kind string</code> gets the fast, structurally-partitioned treatment (a required or
+defaulted field, since it's cheap and covers the majority need), while <code>Labels
+map[string]string</code> is available for selective <em>subscription filtering</em> (a subscriber says "only
+notify me about nodes matching these labels," filtered at the fan-out point where the cost is
+already being paid to distribute the event, not at the <code>Claim</code> hot path) rather than promised as
+an indexed <code>Claim</code>-time predicate in v1.</p>
+<hr>
+<h2 id="6-retention-and-gc">6. Retention and GC<a class="anchor" href="#6-retention-and-gc" aria-label="Link to this section">#</a></h2>
+<h3 id="6-1-when-is-a-finished-node-deleted">6.1 When is a finished node deleted?<a class="anchor" href="#6-1-when-is-a-finished-node-deleted" aria-label="Link to this section">#</a></h3>
+<p><strong>Recommendation: never automatically, immediately, on completion — always after a configurable
+retention window measured from the terminal-transition timestamp, per scope, with a floor
+enforced by unread-subscriber-cursor position (§6.2).</strong> This directly mirrors River's own default
+(<code>completed</code>/<code>cancelled</code> jobs "reaped by the job cleaner service after a configured amount of time
+(default 24 hours)") rather than Sidekiq's approach of not retaining successful jobs at all past
+the queue they moved through, since dag-worker-go's stronger read-after-write and
+subscription-replay requirements (the brief's "receive every node status transition") need a
+window River-style systems don't have to provide (a plain job queue has no promise that a
+consumer, once notified once, ever needs to re-read the job's final state).
+<a href="https://pkg.go.dev/github.com/riverqueue/river/rivertype" rel="noopener noreferrer">River — <code>rivertype</code> package</a></p>
+<h3 id="6-2-interaction-with-subscribers-that-have-not-caught-up">6.2 Interaction with subscribers that have not caught up<a class="anchor" href="#6-2-interaction-with-subscribers-that-have-not-caught-up" aria-label="Link to this section">#</a></h3>
+<p>This is the actual hard part, and none of the eight systems surveyed is a clean precedent because
+none of them combine <em>durable, replayable, multi-subscriber</em> event delivery with <em>per-item TTL
+deletion</em> the way this brief's requirements do simultaneously — the closest real analogue is Redis
+Streams' own consumer-group model, which separately solves "how do we know a consumer hasn't
+finished with this yet" via the <strong>Pending Entries List (PEL)</strong>: a message stays "pending" (not
+GC'd from the group's bookkeeping) from <code>XREADGROUP</code> delivery until <code>XACK</code>, and <code>XPENDING</code>/
+<code>XCLAIM</code>/<code>XAUTOCLAIM</code> exist specifically to recover from a consumer that took a message and never
+acked it — structurally the same "don't delete/reclaim state a subscriber might still need" problem
+as a node whose status-transition event some subscriber hasn't yet consumed.
+<a href="https://redis.io/docs/latest/develop/data-types/streams/" rel="noopener noreferrer">Redis — Streams</a></p>
+<p><strong>Recommendation, adapted from that model:</strong></p>
+<ol>
+<li><strong>Track a low-water mark per scope: the oldest position any registered subscriber has not yet
+acknowledged consuming</strong>, exactly analogous to a Streams consumer group's oldest pending entry.
+A terminal node is eligible for deletion only once (a) its retention window has elapsed <em>and</em>
+(b) the scope's low-water mark has advanced past its terminal-transition event — i.e., every
+currently-registered subscriber has already seen (or explicitly skipped) the transition that
+made this node terminal.</li>
+<li><strong>A subscriber that never checkpoints/acks is a leak, by design, not a silent correctness bug</strong>
+— exactly as an un-acked Streams PEL entry blocks that stream's own trimming. The library should
+expose this as an observable metric (<code>Scope.OldestUnackedAge()</code>/<code>Scope.PendingSubscriberLag()</code>)
+and, critically, <strong>must not let a single wedged subscriber block retention forever by default</strong>
+— a configurable maximum lag (time-based, e.g. "no subscriber may hold back GC for more than
+72h") after which the low-water mark is forcibly advanced, the stuck subscriber is dropped, and
+a distinguished "you missed events, resync from a full snapshot" signal is delivered to it if
+it reconnects (mirroring how Redis Streams itself expects a consumer that fell too far behind
+to eventually be reaped by <code>XCLAIM</code>/<code>XAUTOCLAIM</code> from another consumer, or for the stream to be
+trimmed by <code>MAXLEN</code> regardless of PEL state if the operator configures it that way — Redis does
+not make unbounded blocking the only option, and neither should this library).</li>
+<li><strong>Deletion is always of the <em>node</em>, never a silent truncation of undelivered events</strong> — the
+event stream and the node-table lifecycle are two different retention policies that happen to
+be coupled through the low-water mark, not the same mechanism. A backend that can cheaply
+support "keep a small tombstone/last-known-outcome even after the full node payload is GC'd"
+(e.g., Postgres: null out the <code>payload</code> column but keep the row with <code>status</code>/<code>outcome</code> for a
+longer secondary window) should do so, so a very-late subscriber query gets "this node finished
+with outcome X, payload no longer retained" rather than "node not found, indistinguishable from
+never having existed" — the latter is indistinguishable from a bug from the caller's point of
+view and should be avoided wherever the backend makes it cheap to avoid.</li>
+</ol>
+<h3 id="6-3-recommended-default-policy-concretely">6.3 Recommended default policy, concretely<a class="anchor" href="#6-3-recommended-default-policy-concretely" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>Per-scope configurable <code>RetentionPolicy{TerminalTTL time.Duration, MaxSubscriberLag
+time.Duration}</code>, library defaults <code>TerminalTTL = 24h</code> (matching River's own default exactly,
+since it's a reasonable, field-tested number for "how long might an operator want to look at a
+finished job") and <code>MaxSubscriberLag = 72h</code> (three times the TTL — long enough that a
+subscriber offline over a long weekend isn't punished, short enough that a genuinely-abandoned
+subscriber doesn't pin storage indefinitely).</li>
+<li>GC runs as a background sweep per scope (same architectural family as River's "job cleaner
+service" and the sweeper already required for timeout detection in §1.6 T10 — these two sweeps
+can plausibly share one background-worker abstraction in the implementation, though that's an
+implementation detail for a later dossier, not a semantic one).</li>
+<li><code>Scope.Seal()</code> (§2.7) does not itself trigger GC — a sealed, complete scope still respects the
+same TTL/lag policy as an open one, since "the DAG is logically done" and "operators/subscribers
+are done looking at it" are different facts, exactly the same distinction Argo and Airflow both
+respect by keeping finished DAG-run history around for a separately-configured retention window
+rather than deleting a run's records the instant its last node finishes.</li>
+</ul>
+<hr>
+<h2 id="recommendations-for-dag-worker-go">Recommendations for dag-worker-go<a class="anchor" href="#recommendations-for-dag-worker-go" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>Ship a four-value public <code>Status</code> enum — <code>New, InProgress, Success, Error</code> — and never grow
+it.</strong> Carry everything else (skip, upstream-failure, timeout, cancellation, removal) in a
+closed 7-value <code>Outcome.Reason</code> field populated only when <code>Status</code> reaches a terminal value.
+This is the single highest-leverage decision in this dossier and is validated by every system
+surveyed converging on "small closed top-level status + richer reason/detail field" once it
+left academic/greenfield status and hit production scars.</li>
+<li><strong>Collapse PENDING/BLOCKED into READY at the public layer</strong> (§1.5.1) — both surface as
+<code>StatusNew</code>; expose the Blocked/Ready split only via an internal <code>Phase</code> accessor for
+debugging, not via the subscription stream, specifically because dynamic mutation (§2.2) can
+flip a node between them with no worker or caller action, which would otherwise force every
+subscriber to treat a scheduling artifact as a state regression.</li>
+<li><strong>Model TIMEOUT and CANCELLED as <code>Outcome.Reason</code> values, never as top-level statuses</strong> (§1.5.2,
+§1.5.3) — this is unanimous across every system surveyed (Step Functions' <code>States.Timeout</code> as
+an error name, Cloud Tasks' <code>DEADLINE_EXCEEDED</code> response status, Temporal's timeout kinds all
+resolving to workflow <code>Failed</code>/<code>TimedOut</code>).</li>
+<li><strong>Make the ack-timeout sweep a compare-and-swap keyed on the attempt number</strong>, treating
+<code>attempt</code> as a Kleppmann-style fencing token, and use the identical CAS discipline for <code>Ack</code>
+and <code>Nack</code> — this closes the specific race (a late <code>Ack</code> from a timed-out worker) that every
+at-least-once job system (River's own "rescuer service" language, Redis Streams' <code>XCLAIM</code>)
+builds explicit machinery to handle.</li>
+<li><strong>Reject cross-scope edges outright (<code>ErrCrossScopeEdge</code>)</strong> — it is the one restriction that
+keeps §2's cycle-check, §2.7's completion-check, and §6's retention/GC all provably scope-local,
+which is what makes the O(1)/O(log n) performance goal achievable per-operation rather than
+contingent on total graph size.</li>
+<li><strong>Reject retroactive edges into <code>Success</code>/<code>Error</code> nodes by default</strong> (<code>ErrAlreadySucceeded</code> /
+equivalent), with an explicit, separately-named opt-in (<code>WithReopen()</code>) for the rare case that
+needs it — do not make re-blocking a completed node the default behavior of <code>AddEdge</code>, since it
+breaks the one invariant (§1.6) every transition table in this dossier leans on: nothing leaves
+<code>Success</code> except deletion.</li>
+<li><strong>Maintain a topological-order number per node (Pearce–Kelly-style) rather than doing a fresh
+DFS per <code>AddEdge</code></strong>, to keep cycle rejection at insert time O(1)-amortized for the causal (most
+common) insertion order and bounded-by-affected-region rather than by total graph size in the
+worst case — and benchmark both the causal and adversarial insertion orders explicitly in the
+performance dossier, since this is the one place this dossier's O(1) claim is conditional
+rather than unconditional.</li>
+<li><strong>Implement scope completion (<code>IsComplete</code>) as <code>Sealed &amp;&amp; notTerminalCount == 0</code> with an
+atomically-maintained O(1) counter</strong>, not a scan and not a general Dijkstra–Scholten/Safra
+implementation — the fully general termination-detection algorithms solve a harder problem
+(arbitrary message-passing topology) than this library actually has (a single owned,
+transactionally-inspectable graph store), and an explicit caller-driven <code>Seal()</code> collapses the
+real problem to a cheap counter check.</li>
+<li><strong>Ship exactly five trigger rules in v1</strong>: <code>all_success</code> (default), <code>all_done</code>, <code>none_failed</code>,
+<code>none_failed_min_one_success</code>, <code>always</code> — all five evaluable incrementally as predecessors
+complete, none requiring "become ready before all predecessors are terminal" semantics. Defer
+the <code>one_*</code> family explicitly, and document why (§3.2) rather than silently omitting it.</li>
+<li><strong>Default backoff = Full Jitter</strong> (<code>random(0, min(cap, base*2^attempt))</code>), per node
+<code>base</code>/<code>cap</code>/<code>maxAttempts</code> settable at claim time alongside the ack-timeout deadline in the
+same options struct — both are "what should the engine do if this worker misbehaves" settings
+and belong together in the API surface.</li>
+<li><strong>Caller-supplied string <code>NodeID</code>, required; idempotent <code>AddNode</code> defined as
+same-ID-same-payload = no-op, same-ID-different-payload = typed conflict error</strong> — the Stripe
+idempotency-key pattern, chosen over library-generated IDs specifically because generated IDs
+make correct retry-after-timeout impossible for the caller to express.</li>
+<li><strong><code>[]byte</code> payload at the storage/engine boundary; a generic typed wrapper only as an optional
+convenience layer on top</strong>, never as the primitive the storage interface or event stream are
+defined in terms of, because the event stream must remain meaningful to subscribers in a
+different process (or language) than the inserting caller.</li>
+<li><strong>256 KiB default payload size cap</strong>, enforced as <code>min(library default, caller override,
+backend real limit)</code> with a typed <code>ErrPayloadTooLarge</code>, chosen to sit comfortably under
+Memcached's 1 MiB default <code>item_size_max</code> — document the "put a reference to an external blob
+store in the payload" pattern rather than raising the ceiling to accommodate large payloads.</li>
+<li><strong>Ship <code>Kind string</code> as a first-class, ready-set-partitioning field on every node, with
+<code>Claim(scope, kind)</code> an O(1)/O(log n) pop from a per-<code>(scope,kind)</code> queue</strong>; ship free-form
+<code>Labels map[string]string</code> for subscription-time filtering only, not as an indexed <code>Claim</code>
+predicate in v1.</li>
+<li><strong>Retention: default 24h terminal-node TTL (matching River), gated additionally on a per-scope
+subscriber low-water mark with a default 72h maximum-lag override</strong> that forcibly advances and
+flags a lagging subscriber for resync rather than blocking GC indefinitely — modeled on Redis
+Streams' PEL/<code>XCLAIM</code>/<code>MAXLEN</code> combination, since it is the closest real precedent for coupling
+durable multi-consumer delivery with bounded retention.</li>
+</ol>
+<hr>
+<h2 id="open-questions">Open questions<a class="anchor" href="#open-questions" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>Reopening a completed node (<code>WithReopen()</code>, §2.2, §6):</strong> if this ships, does <code>Outcome.Reason</code>
+need an eighth value (<code>ReasonReopened</code>) to describe a node that is no longer in its original
+terminal state, and does that node's <em>history</em> (was it ever <code>Success</code>, and when) need to be
+retained as an audit trail distinct from its current <code>Outcome</code> — this dossier flags the need but
+does not design the audit-log shape, which likely belongs in whichever dossier covers storage
+schema/versioning.</li>
+<li><strong>Batch-insert atomicity at scale (§2.6):</strong> a per-scope-atomic <code>AddNodes</code> batch is recommended,
+but the cap on batch size (Airflow uses 1024 as its <code>max_map_length</code> default) interacts with
+each backend's own transaction-size practicalities differently — PostgreSQL can comfortably
+batch thousands of rows in one transaction, but a single Redis Lua script or a Memcached-backed
+implementation may need a materially smaller cap or a different (non-single-transaction) batching
+strategy to stay performant at 1M-node scale; this needs backend-specific benchmarking, not a
+single cross-backend constant.</li>
+<li><strong>The cost model for adversarial-order edge insertion (§2.3)</strong> is stated qualitatively
+("proportional to affected region size") but not derived with a tight worst-case bound for this
+project's specific access pattern; a literature review of Pearce &amp; Kelly's amortized bounds
+across a realistic workload (mostly-causal inserts with occasional cross-scope-in-time fan-in)
+should happen before committing to a specific implementation, and is deferred to whichever
+dossier covers the core graph data structure and its benchmarks.</li>
+<li><strong><code>one_*</code> "early-fire" trigger rules (§3.2):</strong> deferred from v1, but if a future version adds
+them, they require a second notion of "ready" (ready-because-a-quorum-of-predecessors-resolved,
+while others are still <code>InProgress</code>) that this dossier's transition table (§1.6) does not model
+— worth a dedicated design pass rather than a bolt-on when the time comes.</li>
+<li><strong>Exact current numeric limits for Redis (<code>proto-max-bulk-len</code>) and PostgreSQL (TOAST/row size)
+cited in §5.3 were not independently re-verified against current upstream docs in this research
+pass</strong> (both are far above the recommended 256 KiB default so they don't change the
+recommendation, but they should be pinned to primary-source citations before this dossier's
+numbers are treated as final).</li>
+<li><strong>Cross-instance claim contention</strong> (multiple library instances in different processes racing on
+the same <code>Claim</code>) is referenced in §1.6/§3.4 as the reason CAS-with-fencing is mandatory, but the
+<em>distribution strategy</em> question the brief poses (partition-per-scope vs. consistent hashing vs.
+pure pull-based competition vs. lease stealing) is explicitly out of this dossier's scope and
+belongs to the storage/concurrency dossier — flagged here only so that dossier inherits the
+fencing-token requirement as a hard constraint on whatever distribution strategy it recommends.</li>
+</ul>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/research/12-dag-semantics-and-state-machine.md" rel="noopener noreferrer">View source: docs/research/12-dag-semantics-and-state-machine.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

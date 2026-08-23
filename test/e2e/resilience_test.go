@@ -43,7 +43,7 @@ func eachBackend(t *testing.T, fn func(t *testing.T, b e2e.Backend)) {
 
 // A diamond drained by a pool of workers: the shape most real pipelines are,
 // and the one that catches a scheduler that releases a join too early.
-func TestDiamondDrains(t *testing.T) {
+func TestE2E_Resilience_DiamondDrains(t *testing.T) {
 	t.Parallel()
 	eachBackend(t, func(t *testing.T, b e2e.Backend) {
 		t.Helper()
@@ -120,7 +120,7 @@ func TestDiamondDrains(t *testing.T) {
 
 // A failure part-way down does not strand the rest of the graph, and the
 // all_done cleanup node still runs.
-func TestFailurePropagatesAndCleanupRuns(t *testing.T) {
+func TestE2E_Resilience_FailurePropagates(t *testing.T) {
 	t.Parallel()
 	eachBackend(t, func(t *testing.T, b e2e.Backend) {
 		t.Helper()
@@ -176,7 +176,7 @@ func TestFailurePropagatesAndCleanupRuns(t *testing.T) {
 // A worker that never answers loses its node, and the retry policy decides
 // whether another attempt happens. This is the guarantee the whole lease
 // protocol exists to provide.
-func TestAbandonedWorkIsRecovered(t *testing.T) {
+func TestE2E_Resilience_AbandonedWorkIsRecovered(t *testing.T) {
 	t.Parallel()
 	eachBackend(t, func(t *testing.T, b e2e.Backend) {
 		t.Helper()
@@ -230,7 +230,7 @@ func TestAbandonedWorkIsRecovered(t *testing.T) {
 
 // The graph may grow while it is running, which is the feature that separates
 // this from a job queue.
-func TestGraphGrowsWhileRunning(t *testing.T) {
+func TestE2E_Resilience_GraphGrowsWhileRunning(t *testing.T) {
 	t.Parallel()
 	eachBackend(t, func(t *testing.T, b e2e.Backend) {
 		t.Helper()
@@ -286,7 +286,7 @@ func TestGraphGrowsWhileRunning(t *testing.T) {
 
 // Cancelling a scope stops everything, including work already in a worker's
 // hands: its acknowledgement is refused rather than resurrecting the node.
-func TestCancelScopeStopsInFlightWork(t *testing.T) {
+func TestE2E_Resilience_CancelStopsInFlightWork(t *testing.T) {
 	t.Parallel()
 	eachBackend(t, func(t *testing.T, b e2e.Backend) {
 		t.Helper()
@@ -324,7 +324,7 @@ func TestCancelScopeStopsInFlightWork(t *testing.T) {
 
 // Subscribers see the run happen. The counts are what matter: every node is
 // created once, transitions to in-progress once, and terminates once.
-func TestSubscriberSeesTheWholeRun(t *testing.T) {
+func TestE2E_Resilience_SubscriberSeesTheRun(t *testing.T) {
 	t.Parallel()
 	eachBackend(t, func(t *testing.T, b e2e.Backend) {
 		t.Helper()

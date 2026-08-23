@@ -1,0 +1,1509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dag-worker-go — Design Synthesis · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/research/00-synthesis/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#dag-worker-go-design-synthesis">dag-worker-go — Design Synthesis</a></li>
+<ul>
+<li><a href="#1-executive-summary">1. Executive summary</a></li>
+<li><a href="#2-layered-architecture-and-hot-path-data-flow">2. Layered architecture and hot-path data flow</a></li>
+<ul>
+<li><a href="#2-1-hot-path-addnode-addedges-insert">2.1 Hot path — AddNode / AddEdges (insert)</a></li>
+<li><a href="#2-2-hot-path-claim-dispatch-to-a-worker">2.2 Hot path — Claim (dispatch to a worker)</a></li>
+<li><a href="#2-3-hot-path-ack-nack-complete">2.3 Hot path — Ack/Nack (complete)</a></li>
+</ul>
+<li><a href="#3-numbered-decisions-adr-seeds">3. Numbered decisions (ADR seeds)</a></li>
+<li><a href="#4-public-go-api-surface">4. Public Go API surface</a></li>
+<li><a href="#5-node-state-machine-public-status-internal-phase-actor">5. Node state machine — public status × internal phase × actor</a></li>
+<li><a href="#6-storage-port-dagstore">6. Storage port (dagstore)</a></li>
+<li><a href="#7-per-backend-capability-matrix">7. Per-backend capability matrix</a></li>
+<li><a href="#8-repository-layout">8. Repository layout</a></li>
+<li><a href="#9-phased-delivery-plan">9. Phased delivery plan</a></li>
+<li><a href="#10-contradictions-between-dossiers-resolved">10. Contradictions between dossiers, resolved</a></li>
+<ul>
+<li><a href="#10-1-idempotent-decrement-structure-packed-bitmap-vs-per-node-set">10.1 Idempotent-decrement structure: packed bitmap vs. per-node SET</a></li>
+<li><a href="#10-2-redis-lease-state-hand-rolled-hash-zset-vs-native-streams-consumer-groups">10.2 Redis lease state: hand-rolled hash+ZSET vs. native Streams consumer groups</a></li>
+<li><a href="#10-3-cycle-check-cost-model-full-pearce-kelly-renumbering-vs-single-node-rank-bump">10.3 Cycle-check cost model: full Pearce–Kelly renumbering vs. single-node rank bump</a></li>
+<li><a href="#10-4-minimum-go-version-1-22-floor-11-vs-1-25-floor-08">10.4 Minimum Go version: 1.22 floor (11) vs. 1.25 floor (08)</a></li>
+<li><a href="#10-5-public-status-count-5-values-01-s-own-early-framing-vs-4-values-12-s-considered-design">10.5 Public status count: 5 values (01's own early framing) vs. 4 values (12's considered design)</a></li>
+<li><a href="#10-6-sweeper-coordination-zero-coordination-by-construction-vs-an-implied-leader-elected-sweeper">10.6 Sweeper coordination: zero-coordination-by-construction vs. an implied leader-elected sweeper</a></li>
+</ul>
+<li><a href="#11-open-questions-for-the-project-owner">11. Open questions for the project owner</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="dag-worker-go-design-synthesis">dag-worker-go — Design Synthesis<a class="anchor" href="#dag-worker-go-design-synthesis" aria-label="Link to this section">#</a></h1>
+<p>Status: <strong>design brief</strong>, synthesized from twelve (plus two ancillary) research dossiers in this
+directory. This document is the single source of truth for the v0.1→v1.0 implementation. Where the
+dossiers disagreed, a position is taken and the losing options are named. This document is meant to
+be implemented close to verbatim; deviations should be recorded as ADR amendments, not silent drift.</p>
+<p>Dossiers referenced by number: 01 prior-art, 02 incremental-topo, 03 leases, 04 postgres,
+05 redis, 06 memcached/storage-abstraction, 07 work-distribution, 08 go-api, 09 perf,
+10 events, 11 testing, 12 dag-semantics, 14 http-json-protocol, 15 daemon-packaging.</p>
+<hr>
+<h2 id="1-executive-summary">1. Executive summary<a class="anchor" href="#1-executive-summary" aria-label="Link to this section">#</a></h2>
+<p>dag-worker-go is a Go library, embedded in a host process, that turns a <strong>dynamic DAG of work
+items</strong> into a stream of "take this now" claims for <strong>external workers</strong>, and a stream of
+<strong>status-transition events</strong> for anyone who wants to watch. The host owns the workers; the library
+owns the graph, the readiness computation, the lease/timeout protocol, and the pluggable storage.</p>
+<p>The public surface is deliberately small. Node status is a <strong>four-value enum</strong> — <code>New</code>,
+<code>InProgress</code>, <code>Success</code>, <code>Error</code> — with everything else (why it failed, which attempt, whose lease,
+what internal scheduling phase it's in) riding on a closed, structured <code>Outcome.Reason</code> field or
+staying entirely internal. Every mature prior-art system surveyed (Airflow, Temporal, Argo,
+Kubernetes, River, Step Functions, Cloud Tasks) converges on exactly this shape once it has
+production scars: a small closed top-level status, a richer reason underneath, and timeout modeled
+as a <em>reason for failure</em>, never a sibling of success (01 §17, 12 §1.3-1.4).</p>
+<p>Readiness is computed the way Kahn's algorithm already computes it — an atomic per-node
+"unsatisfied predecessor" decrement on every completion, never a graph rescan (02 §1). Dynamic edge
+insertion is made safe against cycles by maintaining an incremental topological order (Pearce–Kelly)
+so the common, causally-ordered case is an O(1) accept and only genuinely out-of-order edges pay for
+a bounded local search (02 §2.4, 12 §2.3). Every claim of a node is a <strong>single atomic primitive per
+backend</strong> that grants ownership and records a lease deadline in the same write, and every subsequent
+write against that node — ack, extend, or a sweeper's reclaim — is gated by a <strong>monotonically
+increasing fencing token</strong> (<code>lease_epoch</code>, doubling as the retry-attempt counter) so a worker that
+was merely paused, not dead, can never corrupt state after being superseded (03 §3.4, §5b; 01 §16;
+12 §3.4). This one mechanism — atomic claim-with-deadline plus fencing-gated write — is the single
+idea that recurs, independently re-derived, across every research file in this series, and it is
+non-negotiable on every backend from day one.</p>
+<p>Storage is pluggable behind a <strong>narrow mandatory core</strong> (<code>GetNode</code>/<code>PutNode</code>/<code>CreateNode</code>/
+<code>Transition</code>/<code>AddEdges</code>/<code>DeleteNode</code>/<code>Close</code>) plus <strong>optional capability facets</strong>
+(<code>Lister</code>, <code>ReadyQueue</code>, <code>TimeoutSweeper</code>, <code>EventStream</code>, <code>ConditionalDeleter</code>) discovered by type
+assertion — the <code>database/sql/driver</code>, containerd, and Terraform pattern, not one fat interface (06
+§B.3). In-memory, Redis, and PostgreSQL implement the full contract with their own native atomics
+(a sharded map with mutexes; Lua/Functions; <code>SELECT … FOR UPDATE SKIP LOCKED</code> plus transactions).
+Memcached implements <strong>none</strong> of <code>Store</code> — it has no multi-key atomicity, no ordered index, no
+durability worth trusting — and instead ships as a <code>NodeCache</code> read-through decorator in front of a
+real backend (06 Part A). Work distribution across multiple library instances defaults to <strong>pure
+pull-based competition</strong> on the shared storage's native atomic claim, because it is the only
+strategy every required backend implements natively with zero external coordinator, and it upgrades
+non-breakingly to virtual-partition-plus-HRW routing later without changing the public claim API
+(07 §7.3, 01 §15).</p>
+<p>The event/reactive layer is two separate interfaces, not one: <code>Bus.Subscribe</code> for the durable-ish
+"every status transition" observation feed, and <code>Reserver.Reserve</code>/<code>Ack</code>/<code>Nack</code> for the
+loss-tolerant, single-winner "take this node" doorbell. <code>Reserve</code> always re-derives eligibility from
+current storage state and never trusts accumulated event history — this is what makes a missed or
+duplicated <code>NodeReady</code> signal a latency problem, never a correctness one, and is the direct Go
+translation of Kubernetes' level-triggered reconciliation discipline (10 §9, 01 §13.1).</p>
+<p>Performance at the mandated 1,000,000-node scale is a data-layout discipline, not a tuning
+afterthought: struct-of-arrays keyed by dense <code>int32</code> handles, zero string keys off the hot path,
+sharded (never single-mutex, never bare <code>sync.Map</code>) concurrent state, and CI gates expressed as
+dimensionless ratios (pipelined ≥ 20× unpipelined, in-memory ≥ 100× Redis ≥ 300× Postgres, same run)
+rather than brittle absolute-latency thresholds (09 Part 1-2, 4).</p>
+<hr>
+<h2 id="2-layered-architecture-and-hot-path-data-flow">2. Layered architecture and hot-path data flow<a class="anchor" href="#2-layered-architecture-and-hot-path-data-flow" aria-label="Link to this section">#</a></h2>
+<pre><code>┌─────────────────────────────────────────────────────────────────────────────┐
+│                              PUBLIC API (dagworker)                          │
+│   Manager{New, AddNode, AddEdges, Claim, Ack, Nack, Extend, Subscribe,       │
+│            Scope.Seal, Scope.Health}                — never blocks on I/O   │
+│            it doesn't own; ctx first-arg everywhere; no goroutine spawned    │
+│            on the caller's behalf beyond documented, awaited internals.     │
+└───────────────┬───────────────────────────────────┬─────────────────────────┘
+                │                                     │
+                ▼                                     ▼
+┌───────────────────────────────┐     ┌───────────────────────────────────────┐
+│      CORE SCHEDULER            │     │           EVENT BUS                  │
+│  - Kahn ready-set maintenance   │     │  Bus.Subscribe (observation, durable  │
+│    (pending[] decrement, §3)    │◄───►│    tier when backend allows)          │
+│  - Pearce-Kelly order/cycle     │     │  Reserver.Reserve/Ack/Nack (doorbell, │
+│    maintenance (§4)             │     │    best-effort, never load-bearing)   │
+│  - trigger-rule evaluation      │     │  per-subscriber bounded chan +        │
+│    (all_success/all_done/...)   │     │    OverflowPolicy (drop-oldest/block/ │
+│  - Sealed+notTerminalCount      │     │    close-slow), never blocks producer │
+│    completion detection (O(1))  │     └───────────────────────────────────────┘
+└───────────────┬─────────────────┘                     ▲
+                │                                        │ emits Event{Seq,...}
+                ▼                                        │ after commit, never before
+┌───────────────────────────────────────────────────────┴─────────────────────┐
+│                          LEASE MANAGER                                       │
+│  claim = atomic(grant ownership + lease_epoch++ + deadline) in ONE write     │
+│  ack/nack/extend = CAS keyed on lease_epoch (fencing token == attempt #)     │
+│  sweep = inline-on-claim-path reclaim (correctness) + optional cross-        │
+│          instance shard/heartbeat sharding (efficiency only, never required) │
+└───────────────┬───────────────────────────────────────────────────────────────┘
+                │
+                ▼
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                          STORAGE PORT  (dagstore.Store)                       │
+│   mandatory core: GetNode/PutNode/CreateNode/Transition/AddEdges/DeleteNode    │
+│   optional facets: Lister · ReadyQueue · TimeoutSweeper · EventStream ·        │
+│                     ConditionalDeleter   (type-asserted, never emulated)       │
+└───────┬───────────────┬───────────────┬───────────────┬──────────────────────┘
+        ▼               ▼               ▼               ▼
+   ┌─────────┐    ┌───────────┐   ┌───────────┐   ┌────────────────────┐
+   │ IN-MEM  │    │  REDIS    │   │ POSTGRES  │   │ MEMCACHED           │
+   │ sharded │    │ HASH+ZSET │   │ SKIP      │   │ NodeCache only —    │
+   │ map+RW  │    │ +Lua/Fns  │   │ LOCKED +  │   │ never implements    │
+   │ mutex,  │    │ +Streams  │   │ LISTEN/   │   │ Store; read-through │
+   │ CSR adj │    │ (events)  │   │ NOTIFY    │   │ decorator in front  │
+   └─────────┘    └───────────┘   └───────────┘   └────────────────────┘</code></pre>
+<h3 id="2-1-hot-path-addnode-addedges-insert">2.1 Hot path — <code>AddNode</code> / <code>AddEdges</code> (insert)<a class="anchor" href="#2-1-hot-path-addnode-addedges-insert" aria-label="Link to this section">#</a></h3>
+<ol>
+<li>Caller supplies a string <code>NodeID</code> + payload + zero or more predecessor <code>NodeID</code>s (same scope).</li>
+<li><strong>Idempotency check</strong>: same ID + byte-identical spec ⇒ no-op returning the existing node
+(Stripe-style; 12 §5.1). Same ID + different spec ⇒ typed <code>ErrIDConflict</code>.</li>
+<li>For each predecessor edge: if the predecessor is already <code>Success</code>, the edge is born
+pre-satisfied (no <code>pending</code> increment); if the predecessor is <code>Error</code>, the new node is
+immediately <code>Error/UpstreamFailed</code>, never <code>New</code> (12 §2.5). Otherwise <code>pending++</code> and the edge is
+recorded as unsatisfied.</li>
+<li><strong>Cycle/order check</strong> happens only against non-satisfied edges: <code>ord(pred) &lt; ord(target)</code> is an
+O(1) accept (the common, causally-ordered case); otherwise a bounded local search decides
+cycle-vs-reorder (02 §2.4, §3.2; 12 §2.3; 04 §14.4).</li>
+<li>If the node's edge was inserted into an already-<code>Ready</code> node, popping it back out of the
+ready-set and incrementing <code>pending</code> must be <strong>one atomic operation</strong> with the edge insert —
+otherwise a worker can claim it in the gap (12 §2.2).</li>
+<li><code>pending == 0</code> ⇒ push to the per-<code>(scope, kind)</code> ready-set; this is the only path that ever adds
+to the ready-set, and it is <code>O(1)</code> amortized per edge over the DAG's whole life (02 §1.2).</li>
+<li>Emit <code>EventTransition</code> (first appearance) after the write commits, carrying <code>Seq</code> (10 §5.2).</li>
+</ol>
+<h3 id="2-2-hot-path-claim-dispatch-to-a-worker">2.2 Hot path — <code>Claim</code> (dispatch to a worker)<a class="anchor" href="#2-2-hot-path-claim-dispatch-to-a-worker" aria-label="Link to this section">#</a></h3>
+<ol>
+<li>Worker calls <code>Claim(ctx, scope, ClaimOptions{Kind, LeaseTimeout, MaxNodes})</code>.</li>
+<li>Storage backend's <code>ReadyQueue.ClaimReady</code> executes the single atomic claim-with-lease primitive:
+Postgres — one <code>SKIP LOCKED</code> CTE chained into an <code>UPDATE … RETURNING</code>; Redis — one Lua
+Function doing <code>ZPOPMIN</code> + hash mutation + <code>ZADD</code> into the deadline ZSET; in-memory — one
+mutex-guarded pop + slab write (03 §5b, 04 §14.1, 05 §15.2).</li>
+<li>The write bumps <code>lease_epoch</code> (= new <code>attempt</code>) and sets <code>lease_deadline = server_clock_now() +
+timeout</code>, <strong>never</strong> a client-computed wall-clock value (03 §5a — Redis <code>TIME</code>, Postgres
+<code>clock_timestamp()</code>, never <code>now()</code>).</li>
+<li>The claim response carries <code>{NodeID, Payload, LeaseEpoch, LeaseDeadline}</code>. The SDK's managed
+heartbeat loop (08 §9.3, <code>context.AfterFunc</code>) starts a <code>context.WithDeadlineCause</code> timer; if it
+fires with no ack, the node is marked <code>Error/Timeout</code> by the <em>same</em> fenced write path a sweeper
+would use (§2.3 below), never by a separate "worker declares itself dead" signal.</li>
+<li>Emit <code>EventTransition(New→InProgress)</code>.</li>
+</ol>
+<h3 id="2-3-hot-path-ack-nack-complete">2.3 Hot path — <code>Ack</code>/<code>Nack</code> (complete)<a class="anchor" href="#2-3-hot-path-ack-nack-complete" aria-label="Link to this section">#</a></h3>
+<ol>
+<li>Worker calls <code>Ack(ctx, lease, result)</code> or <code>Nack(ctx, lease, err)</code>, presenting the <code>LeaseEpoch</code> it
+was handed at claim time.</li>
+<li>Storage executes a <strong>single fenced CAS</strong>: <code>WHERE lease_epoch = $presented AND status =
+'in_progress'</code>. Zero rows affected ⇒ stale ack (already reclaimed by a sweeper, or a duplicate)
+— reject, never silently accept, never tell the worker to retry (03 §5b; 12 §3.4).</li>
+<li>On success: <code>status = Success</code> (or <code>Error</code> with <code>Outcome.Reason</code>), and — in the <strong>same atomic
+operation</strong> — every direct successor's <code>pending</code> is decremented (Postgres: <code>UPDATE … RETURNING</code>
+chained CTE with a deterministic ascending-<code>node_id</code> lock order to avoid the fan-in deadlock
+class; Redis: one Lua Function; in-memory: one mutex-guarded walk of the CSR out-edges) (02 §1.2,
+§6.2; 04 §14.2, §15.2).</li>
+<li>Any successor whose <code>pending</code> hits zero is pushed to the ready-set <strong>inside the same write</strong>.</li>
+<li>The node's own consumer-refcount (for payload GC, 02 §6) is decremented in the same atomic op.</li>
+<li>Emit <code>EventTransition(InProgress→Success|Error)</code> after commit, then <code>EventReady</code> for every
+successor that just became ready (10 §5, §3.3) — two different event kinds, two different
+backpressure/durability policies (10 §7.2).</li>
+<li>If <code>Sealed &amp;&amp; notTerminalCount == 0</code> after this transition, the scope is complete — an O(1)
+counter check, never a scan (12 §2.7).</li>
+</ol>
+<hr>
+<h2 id="3-numbered-decisions-adr-seeds">3. Numbered decisions (ADR seeds)<a class="anchor" href="#3-numbered-decisions-adr-seeds" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>ID</th><th>Decision</th><th>Choice</th><th>Rationale (one line)</th><th>Dossier</th></tr></thead>
+<tbody>
+<tr><td>ADR-01</td><td>Public status vocabulary</td><td>Exactly 4 values: <code>New, InProgress, Success, Error</code>; never grow it</td><td>Every system that survived production scars converged here; timeout/cancel/skip ride a closed <code>Outcome.Reason</code>, not a 5th status</td><td>01 §17, 12 §1.4</td></tr>
+<tr><td>ADR-02</td><td>Internal scheduling detail</td><td><code>Phase</code> enum (<code>Blocked/Ready/Claimed/...</code>) collapses to <code>StatusNew</code>/<code>InProgress</code> publicly; exposed only via a debug accessor</td><td>Blocked↔Ready churn from dynamic edges must never look like a status regression to a subscriber</td><td>12 §1.5.1</td></tr>
+<tr><td>ADR-03</td><td>Ready-set maintenance</td><td>Kahn in-degree/<code>pending[]</code> decrement on completion only; never rescan the graph</td><td>O(1) amortized per edge over the DAG's life; the entire "sublinear ready-set" requirement</td><td>02 §1</td></tr>
+<tr><td>ADR-04</td><td>Cycle rejection at insert time</td><td>Maintain an incremental topological order (Pearce–Kelly); <code>ord(u)&lt;ord(v)</code> fast-accept, bounded DFS otherwise, cycle-detection folded into the same walk</td><td>Only algorithm surveyed with real production adoption (Abseil/TensorFlow/JGraphT) and cost proportional to actual disruption</td><td>02 §2.4, §3; 12 §2.3</td></tr>
+<tr><td>ADR-05</td><td>Predecessor-satisfied tracking</td><td>Per-node SET of not-yet-satisfied predecessor IDs (Redis SET / Postgres <code>edges.satisfied</code> boolean / in-memory adjacency+pending set) as the default; packed bitmap deferred</td><td>Dynamic edge <em>removal</em> needs addressable, idempotent per-predecessor cancellation a bare counter/bitmap-by-hash cannot give safely — see §10.1 contradiction</td><td>05 §5; 02 §8 (resolved)</td></tr>
+<tr><td>ADR-06</td><td>Fencing token</td><td>Every node carries a monotonic <code>lease_epoch</code>, bumped on every claim/reclaim; every ack/extend/sweep CAS's on it in the same write as the mutation; mandatory on every backend from day one</td><td>Kleppmann's fencing argument — a lease alone never makes a write safe; retrofitting later touches every ack path</td><td>03 §3.4, §5b; 01 §16; 06 (Temporal RangeID)</td></tr>
+<tr><td>ADR-07</td><td>Claim atomicity</td><td>One atomic primitive per backend grants ownership <strong>and</strong> records the lease deadline in the same write; no backend ever implements reclaim as a separate sweeper-only path</td><td>Faktory/Asynq/K8s-finalizer pattern — the only systems surveyed needing zero external sweeper for correctness</td><td>01 §11.2, §18; 03 §5b-d</td></tr>
+<tr><td>ADR-08</td><td>Clock authority</td><td>Every deadline comparison reads the storage backend's own clock (Redis <code>TIME</code>, Postgres <code>clock_timestamp()</code>, in-memory monotonic <code>time.Now()</code>); never a client-computed wall-clock value; lint-banned <code>now()</code> in Postgres SQL</td><td>Spanner/TrueTime lesson generalizes: independent clock reads are never safe for a hard boundary; only one clock can be authoritative</td><td>03 §3.5, §5a</td></tr>
+<tr><td>ADR-09</td><td>Delivery guarantee</td><td>Document precisely as "at-least-once delivery, at-most-once accepted effect per lease epoch" ("effectively-once"); never claim exactly-once</td><td>Two Generals / FLP — exactly-once <em>delivery</em> to an external process is provably impossible</td><td>03 §5e; 10 §2</td></tr>
+<tr><td>ADR-10</td><td>Heartbeat vs. ack are separate RPC shapes</td><td><code>Extend(nodeID, epoch, dur)</code> (liveness, low-stakes, idempotent-ish) is a distinct call from <code>Ack</code>/<code>Nack</code> (terminal, fenced, high-stakes); SDK owns the heartbeat loop, not hand-written host code</td><td>Kafka's own <code>session.timeout</code> vs <code>max.poll.interval</code> split shows conflating liveness with progress causes false evictions</td><td>03 §2.3, §5c</td></tr>
+<tr><td>ADR-11</td><td>Retry = new attempt, same NodeID</td><td><code>attempt</code>/<code>lease_epoch</code> is one field doing double duty as retry-count and fencing token</td><td>River's own documented "stuck running, needs a rescuer" failure mode is exactly the race this closes</td><td>12 §3.4</td></tr>
+<tr><td>ADR-12</td><td>Default backoff</td><td>Full Jitter: <code>random(0, min(cap, base·2^attempt))</code>, settable per node at claim time alongside the ack timeout</td><td>AWS's own head-to-head testing; Step Functions later shipped it as <code>JitterStrategy: FULL</code></td><td>12 §3.3</td></tr>
+<tr><td>ADR-13</td><td>Cross-instance work distribution, v1</td><td>Pure pull-based competition on the shared storage's native atomic claim; no partitioning, no membership table</td><td>Only strategy all four required backends implement natively with zero external coordinator; degrades gracefully on instance death</td><td>01 §15; 07 §7.3; 05 §9.1</td></tr>
+<tr><td>ADR-14</td><td>Work distribution upgrade path</td><td>Internal partition-assignment function is a swappable interface from line one (even while v0.1 is the trivial P=1 case); v2 = jump-consistent-hash node→partition + HRW partition→instance + bounded-load capping; never a public API change</td><td>Node→partition is append-only/instance-agnostic (jump hash's sweet spot); partition→instance churns at arbitrary points (HRW's sweet spot) — conflating them reintroduces the exact failure jump hash's own paper warns against</td><td>07 §3, §7</td></tr>
+<tr><td>ADR-15</td><td>Leader election scope</td><td>Reserved strictly for a periodic, low-frequency maintenance task (cross-instance sweep-shard rebalancing); never the work-dispatch mechanism</td><td>Airflow's own architectural history is a documented case study of a single-dispatcher cap being hit and re-architected away from</td><td>07 §5.5; 01 §3.2-3.3</td></tr>
+<tr><td>ADR-16</td><td>Storage port shape</td><td>Narrow mandatory <code>Store</code> core + optional capability facets (<code>Lister</code>, <code>ReadyQueue</code>, <code>TimeoutSweeper</code>, <code>EventStream</code>, <code>ConditionalDeleter</code>) discovered by type assertion; <code>Version</code>/<code>ClaimToken</code> are opaque <code>interface{ String() string }</code></td><td>containerd/Terraform/<code>database/sql/driver</code> pattern; lets Redis/Postgres use native atomics instead of a lowest-common-denominator emulation</td><td>06 §B.2-B.3</td></tr>
+<tr><td>ADR-17</td><td>Memcached's role</td><td>Implements only a 3-method <code>NodeCache</code> (get/set-if-absent/invalidate) read-through decorator; never <code>Store</code></td><td>No multi-key atomicity at any protocol version, no durable CAS across restart/eviction — durability trap if it silently backed the real contract</td><td>06 Part A</td></tr>
+<tr><td>ADR-18</td><td>Conformance suite</td><td>One <code>RunConformance(t, harnessMaker)</code> (modeled on <code>blob/drivertest</code>/<code>testing/fstest.TestFS</code>) written <strong>before</strong> the second backend; per-capability sub-suites <code>Skip</code>, never silently pass</td><td>Keeps the capability table a live, tested contract instead of documentation that drifts</td><td>06 §B.5; 11</td></tr>
+<tr><td>ADR-19</td><td>Event bus shape</td><td>Two separate interfaces: <code>Bus.Subscribe</code> (observation, durable when backend allows) and <code>Reserver.Reserve/Ack/Nack</code> (doorbell, best-effort); <code>Reserve</code> always re-derives eligibility from storage, never from accumulated event history</td><td>Reproducing the "subscribe = get handed work" fusion is the Reactive-Streams push anti-pattern and an un-doable breaking change later</td><td>10 §1, §9; 08 (open questions)</td></tr>
+<tr><td>ADR-20</td><td>Ordering &amp; resume primitive</td><td>One per-node monotonic <code>Seq</code>, assigned atomically with the state write; doubles as staleness token and half the resume-cursor design; a scope-wide total order is opt-in only</td><td>Kafka's per-partition-only ordering guarantee generalizes to per-node; a global counter would serialize every writer in the scope</td><td>10 §3.3, §5.2</td></tr>
+<tr><td>ADR-21</td><td>Recovery model</td><td>State-plus-notification, not event-sourced-log-as-truth; <code>ErrCursorExpired</code> is one typed error with one recovery procedure (full state read, then resubscribe from now) across every backend</td><td>Fowler's own caveat: external systems can't tell real dispatch from replay; a general event-sourced rebuild is unneeded surface area</td><td>10 §4.3, §6</td></tr>
+<tr><td>ADR-22</td><td>Subscriber backpressure</td><td>Bounded per-subscriber channel with an explicit <code>OverflowPolicy</code> (default <code>DropOldestAndMarkGap</code>); the fan-out point never blocks on any one subscriber</td><td>NATS/etcd/client-go convergence: a slow subscriber must never become the producer's problem (head-of-line blocking)</td><td>08 §8.1-8.5; 10 §7.1</td></tr>
+<tr><td>ADR-23</td><td>Scopes</td><td>Opaque caller-chosen string, created implicitly on first use; key-prefixed physical isolation in every backend; cross-scope <code>AddEdge</code> rejected outright (<code>ErrCrossScopeEdge</code>)</td><td>Keeps cycle-check, completion-detection, retention, and GC all provably scope-local — the precondition for the O(1)/O(log n) goal per operation</td><td>12 §4</td></tr>
+<tr><td>ADR-24</td><td>Scope completion</td><td><code>Sealed &amp;&amp; notTerminalCount == 0</code>, an atomically-maintained counter; caller-driven <code>Seal()</code>, never inferred</td><td>Collapses the general Dijkstra-Scholten/Safra termination-detection problem to a cheap local check because the graph is one owned, transactionally-inspectable store</td><td>12 §2.7</td></tr>
+<tr><td>ADR-25</td><td>Node identity &amp; idempotency</td><td>Caller-supplied string <code>NodeID</code>, required; idempotent insert = same-ID-same-payload no-op, same-ID-different-payload typed conflict (Stripe pattern)</td><td>Library-generated IDs make correct retry-after-timeout impossible for the caller to express</td><td>12 §5.1</td></tr>
+<tr><td>ADR-26</td><td>Payload &amp; sizing</td><td><code>[]byte</code>/<code>json.RawMessage</code> at the storage/wire boundary (never generic); 256 KiB default cap = <code>min(library default, caller override, backend real limit)</code>; generics only as an optional in-process <code>Typed[T]</code> convenience wrapper</td><td>Cross-process shared storage means the payload boundary is necessarily byte-oriented; 256 KiB sits safely under Memcached's 1 MiB item ceiling</td><td>08 §7; 12 §5.2-5.3</td></tr>
+<tr><td>ADR-27</td><td>Go API shape</td><td><code>New(store Store, opts ...Option)</code> — Uber's opaque-<code>Option</code>-interface functional options, required <code>store</code> positional; no <code>context.Context</code> ever stored on a struct; full sentinel+typed error taxonomy pre-v0.1; <code>Close</code> blocks until every owned goroutine has exited</td><td>Matches the Google/Uber style guides' own decision tables; a library embedded for years needs the compatibility discipline from commit one</td><td>08 §2-6, §9</td></tr>
+<tr><td>ADR-28</td><td>In-memory backend internals</td><td>Struct-of-arrays keyed by dense, generation-counted <code>int32</code> handles; sharded (striped) <code>RWMutex</code> map, never a single lock and never bare <code>sync.Map</code>; interned string IDs at the boundary only</td><td>GC cost is linear in <em>pointer-bearing</em> live heap, not object count (Discord/BigCache evidence); 256-shard knee measured at 8.3-9x over one mutex</td><td>09 Part 1-2</td></tr>
+<tr><td>ADR-29</td><td>Minimum Go version</td><td>Go ≥ 1.25</td><td>Gets <code>sync.WaitGroup.Go</code>, GA <code>testing/synctest</code>, and per-iteration loop vars (already true since 1.22) guaranteed with no <code>GOEXPERIMENT</code> flag; greenfield library has no legacy floor to protect</td><td>08 §2.5 note, "Recommend Go &gt;=1.25"; 11 (resolved — see §10.4)</td></tr>
+<tr><td>ADR-30</td><td>Trigger rules, v1</td><td>Ship exactly five: <code>all_success</code> (default), <code>all_done</code>, <code>none_failed</code>, <code>none_failed_min_one_success</code>, <code>always</code>; defer the <code>one_*</code> early-fire family</td><td>All five are evaluable incrementally as predecessors terminate; <code>one_*</code> needs a second "ready" concept the core transition table doesn't model yet</td><td>12 §3.2</td></tr>
+<tr><td>ADR-31</td><td>Repository/module topology</td><td>Multi-module monorepo: core has zero network/DB deps; each storage backend and each network adapter is its own Go module with its own <code>go.mod</code>/semver; <code>dagworkerd</code> daemon is the only module allowed to import everything</td><td>Go's own doc: split exactly where an optional feature drags in a dependency tree the median user doesn't want (gocloud.dev is the negative example)</td><td>15 §1</td></tr>
+</tbody></table></div>
+<hr>
+<h2 id="4-public-go-api-surface">4. Public Go API surface<a class="anchor" href="#4-public-go-api-surface" aria-label="Link to this section">#</a></h2>
+<pre><code class="language-go"><span class="tok-com">// Package dagworker is the public entry point. It never imports net/http,</span>
+<span class="tok-com">// database/sql, redis, or grpc — those live in optional adapter/storage</span>
+<span class="tok-com">// modules under github.com/&lt;org&gt;/dagworker/{storage,adapters}/*.</span>
+<span class="tok-kw">package</span> dagworker
+
+<span class="tok-kw">import</span> (
+	<span class="tok-str">"context"</span>
+	<span class="tok-str">"errors"</span>
+	<span class="tok-str">"fmt"</span>
+	<span class="tok-str">"log/slog"</span>
+	<span class="tok-str">"time"</span>
+)
+
+<span class="tok-com">// ---------------------------------------------------------------- identity</span>
+
+<span class="tok-kw">type</span> Scope <span class="tok-kw">string</span>
+<span class="tok-kw">type</span> NodeID <span class="tok-kw">string</span>
+
+<span class="tok-com">// ---------------------------------------------------------------- status (ADR-01, ADR-02)</span>
+
+<span class="tok-com">// Status is the entire public vocabulary. Four values, forever.</span>
+<span class="tok-kw">type</span> Status <span class="tok-kw">uint8</span>
+
+<span class="tok-kw">const</span> (
+	StatusNew        Status = <span class="tok-kw">iota</span> <span class="tok-com">// exists, not yet acked by a worker (blocked or ready — see Phase)</span>
+	StatusInProgress               <span class="tok-com">// claimed by a worker, ack pending</span>
+	StatusSuccess                  <span class="tok-com">// terminal, succeeded</span>
+	StatusError                    <span class="tok-com">// terminal, did not succeed — see Outcome.Reason for why</span>
+)
+
+<span class="tok-kw">func</span> (s Status) Terminal() <span class="tok-kw">bool</span> { <span class="tok-kw">return</span> s == StatusSuccess || s == StatusError }
+
+<span class="tok-com">// Reason is closed and small; free text lives only in Outcome.Message.</span>
+<span class="tok-kw">type</span> Reason <span class="tok-kw">uint8</span>
+
+<span class="tok-kw">const</span> (
+	ReasonNone Reason = <span class="tok-kw">iota</span>
+	ReasonWorkerError
+	ReasonTimeout
+	ReasonUpstreamFailed
+	ReasonSkipped
+	ReasonCancelled
+	ReasonRemoved
+)
+
+<span class="tok-kw">type</span> Outcome <span class="tok-kw">struct</span> {
+	Reason    Reason
+	Message   <span class="tok-kw">string</span> <span class="tok-com">// host/engine text, size-capped</span>
+	Attempt   <span class="tok-kw">uint32</span> <span class="tok-com">// 1-based; also the fencing epoch, see ADR-06/ADR-11</span>
+	Timestamp time.Time
+}
+
+<span class="tok-com">// Phase is INTERNAL scheduling detail — never on the wire, never on the</span>
+<span class="tok-com">// subscription stream. Exposed read-only for debug/admin tooling only;</span>
+<span class="tok-com">// no stability promise across minor versions (ADR-02).</span>
+<span class="tok-kw">type</span> Phase <span class="tok-kw">uint8</span>
+
+<span class="tok-kw">const</span> (
+	PhaseBlocked Phase = <span class="tok-kw">iota</span>
+	PhaseReady
+	PhaseClaimed
+	PhaseSucceeded
+	PhaseFailed
+	PhaseTimedOut
+	PhaseUpstreamFailed
+	PhaseSkipped
+	PhaseCancelled
+)
+
+<span class="tok-com">// ---------------------------------------------------------------- node shape</span>
+
+<span class="tok-kw">type</span> Node <span class="tok-kw">struct</span> {
+	Scope     Scope
+	ID        NodeID
+	Kind      <span class="tok-kw">string</span> <span class="tok-com">// ready-set partition key, see ADR-26 note on labels</span>
+	Status    Status
+	Outcome   Outcome
+	Payload   []<span class="tok-kw">byte</span> <span class="tok-com">// json.RawMessage or opaque bytes; ADR-26</span>
+	Labels    <span class="tok-kw">map</span>[<span class="tok-kw">string</span>]<span class="tok-kw">string</span>
+	Priority  <span class="tok-kw">int16</span>
+	Seq       Seq <span class="tok-com">// ADR-20</span>
+	UpdatedAt time.Time
+}
+
+<span class="tok-kw">type</span> Seq <span class="tok-kw">uint64</span> <span class="tok-com">// per-node monotonic; also the resume-cursor unit (ADR-20)</span>
+
+<span class="tok-com">// ---------------------------------------------------------------- errors (ADR-27)</span>
+
+<span class="tok-kw">var</span> (
+	ErrNotFound         = errors.New(<span class="tok-str">"dagworker: not found"</span>)
+	ErrConflict         = errors.New(<span class="tok-str">"dagworker: conflict"</span>)
+	ErrIDConflict       = errors.New(<span class="tok-str">"dagworker: id exists with a different spec"</span>)
+	ErrCycle            = errors.New(<span class="tok-str">"dagworker: dependency cycle"</span>)
+	ErrCrossScopeEdge   = errors.New(<span class="tok-str">"dagworker: edge crosses scopes"</span>)   <span class="tok-com">// ADR-23</span>
+	ErrAlreadyTerminal  = errors.New(<span class="tok-str">"dagworker: node already terminal"</span>) <span class="tok-com">// ADR-23/12 §2.2, no WithReopen</span>
+	ErrNodeInFlight     = errors.New(<span class="tok-str">"dagworker: node is in-progress"</span>)
+	ErrLeaseExpired     = errors.New(<span class="tok-str">"dagworker: lease expired"</span>)
+	ErrLeaseMismatch    = errors.New(<span class="tok-str">"dagworker: lease epoch mismatch"</span>) <span class="tok-com">// ADR-06 stale ack</span>
+	ErrScopeEmpty       = errors.New(<span class="tok-str">"dagworker: no ready node in scope"</span>)
+	ErrScopeSealed      = errors.New(<span class="tok-str">"dagworker: scope is sealed"</span>)
+	ErrClosed           = errors.New(<span class="tok-str">"dagworker: manager closed"</span>)
+	ErrPayloadTooLarge  = errors.New(<span class="tok-str">"dagworker: payload exceeds cap"</span>)
+	ErrSubscriberLagged = errors.New(<span class="tok-str">"dagworker: subscriber lagged and was disconnected"</span>)
+	ErrCursorExpired    = errors.New(<span class="tok-str">"dagworker: resume cursor older than retained history"</span>) <span class="tok-com">// ADR-21</span>
+	ErrNilStore         = errors.New(<span class="tok-str">"dagworker: store must not be nil"</span>)
+	ErrInvalidConfig    = errors.New(<span class="tok-str">"dagworker: invalid option value"</span>)
+)
+
+<span class="tok-kw">type</span> CycleError <span class="tok-kw">struct</span> {
+	Scope Scope
+	Path  []NodeID
+}
+
+<span class="tok-kw">func</span> (e *CycleError) Error() <span class="tok-kw">string</span> { <span class="tok-kw">return</span> fmt.Sprintf(<span class="tok-str">"dagworker: cycle in scope %q"</span>, e.Scope) }
+<span class="tok-kw">func</span> (e *CycleError) Unwrap() <span class="tok-kw">error</span> { <span class="tok-kw">return</span> ErrCycle }
+
+<span class="tok-com">// ---------------------------------------------------------------- options (ADR-27)</span>
+
+<span class="tok-kw">type</span> Option <span class="tok-kw">interface</span>{ apply(*config) }
+
+<span class="tok-kw">type</span> config <span class="tok-kw">struct</span> {
+	defaultLeaseTimeout time.Duration
+	clock               Clock
+	logger              *slog.Logger
+	subscriberBuffer    <span class="tok-kw">int</span>
+	overflow            OverflowPolicy
+	shardCount          <span class="tok-kw">int</span>
+	payloadCap          <span class="tok-kw">int</span>
+	retention           RetentionPolicy
+}
+
+<span class="tok-kw">func</span> WithDefaultLeaseTimeout(d time.Duration) Option
+<span class="tok-kw">func</span> WithClock(c Clock) Option <span class="tok-com">// test seam, ADR-27 / 08 §11</span>
+<span class="tok-kw">func</span> WithLogger(l *slog.Logger) Option
+<span class="tok-kw">func</span> WithSubscriberBufferSize(n <span class="tok-kw">int</span>) Option
+<span class="tok-kw">func</span> WithOverflowPolicy(p OverflowPolicy) Option
+<span class="tok-kw">func</span> WithPayloadCap(n <span class="tok-kw">int</span>) Option
+<span class="tok-kw">func</span> WithRetention(r RetentionPolicy) Option
+
+<span class="tok-kw">func</span> New(store Store, opts ...Option) (*Manager, <span class="tok-kw">error</span>)
+
+<span class="tok-com">// ---------------------------------------------------------------- Manager</span>
+
+<span class="tok-kw">type</span> Manager <span class="tok-kw">struct</span>{ <span class="tok-com">/* unexported */</span> }
+
+<span class="tok-com">// AddNode is idempotent (ADR-25). deps must be in the same Scope (ADR-23).</span>
+<span class="tok-kw">func</span> (m *Manager) AddNode(ctx context.Context, scope Scope, id NodeID, payload []<span class="tok-kw">byte</span>, opts ...NodeOption) <span class="tok-kw">error</span>
+
+<span class="tok-com">// AddNodes is atomic per call within one scope — either every node/edge in</span>
+<span class="tok-com">// the batch lands or none does (12 §2.6).</span>
+<span class="tok-kw">func</span> (m *Manager) AddNodes(ctx context.Context, scope Scope, specs []NodeSpec) <span class="tok-kw">error</span>
+
+<span class="tok-kw">func</span> (m *Manager) AddEdge(ctx context.Context, scope Scope, from, to NodeID) <span class="tok-kw">error</span>
+<span class="tok-kw">func</span> (m *Manager) RemoveEdge(ctx context.Context, scope Scope, from, to NodeID) <span class="tok-kw">error</span>
+<span class="tok-kw">func</span> (m *Manager) RemoveNode(ctx context.Context, scope Scope, id NodeID) <span class="tok-kw">error</span> <span class="tok-com">// rejects in-flight, 12 §2.4</span>
+
+<span class="tok-kw">func</span> (m *Manager) GetNode(ctx context.Context, scope Scope, id NodeID) (Node, <span class="tok-kw">error</span>)
+
+<span class="tok-com">// Claim blocks (subject to ctx) until at least one ready node is available</span>
+<span class="tok-com">// or ctx is done. Never returns ErrScopeEmpty to a blocking caller.</span>
+<span class="tok-kw">func</span> (m *Manager) Claim(ctx context.Context, scope Scope, opts ...ClaimOption) (*Claim, <span class="tok-kw">error</span>)
+
+<span class="tok-com">// TryClaim is the non-blocking variant; returns ErrScopeEmpty immediately.</span>
+<span class="tok-kw">func</span> (m *Manager) TryClaim(ctx context.Context, scope Scope, opts ...ClaimOption) (*Claim, <span class="tok-kw">error</span>)
+
+<span class="tok-kw">type</span> Claim <span class="tok-kw">struct</span> {
+	Node       Node
+	LeaseEpoch <span class="tok-kw">uint64</span> <span class="tok-com">// ADR-06 / ADR-11 fencing token == attempt number</span>
+	Deadline   time.Time
+}
+
+<span class="tok-com">// Ack/Nack/Extend are fenced on LeaseEpoch (ADR-06, ADR-10). A stale epoch</span>
+<span class="tok-com">// returns ErrLeaseMismatch, never a retryable error.</span>
+<span class="tok-kw">func</span> (m *Manager) Ack(ctx context.Context, c Claim, result []<span class="tok-kw">byte</span>) <span class="tok-kw">error</span>
+<span class="tok-kw">func</span> (m *Manager) Nack(ctx context.Context, c Claim, cause <span class="tok-kw">error</span>) <span class="tok-kw">error</span>
+<span class="tok-kw">func</span> (m *Manager) Extend(ctx context.Context, c Claim, newTimeout time.Duration) (time.Time, <span class="tok-kw">error</span>)
+
+<span class="tok-com">// Scope-level operations (ADR-23, ADR-24).</span>
+<span class="tok-kw">func</span> (m *Manager) Seal(ctx context.Context, scope Scope) <span class="tok-kw">error</span>
+<span class="tok-kw">func</span> (m *Manager) IsComplete(ctx context.Context, scope Scope) (<span class="tok-kw">bool</span>, <span class="tok-kw">error</span>)
+<span class="tok-kw">func</span> (m *Manager) Health(ctx context.Context, scope Scope) (ScopeHealth, <span class="tok-kw">error</span>) <span class="tok-com">// reason-aware, 12 §1.5.4</span>
+<span class="tok-kw">func</span> (m *Manager) CancelScope(ctx context.Context, scope Scope) <span class="tok-kw">error</span>
+<span class="tok-kw">func</span> (m *Manager) Cancel(ctx context.Context, scope Scope, id NodeID) <span class="tok-kw">error</span>
+
+<span class="tok-com">// Subscribe is the observation feed (ADR-19, ADR-20, ADR-22).</span>
+<span class="tok-kw">func</span> (m *Manager) Subscribe(ctx context.Context, opts SubscribeOptions) (*Subscription, <span class="tok-kw">error</span>)
+
+<span class="tok-com">// Handle is sugar over Subscribe for callers who prefer a callback (08 §8.6).</span>
+<span class="tok-kw">func</span> (m *Manager) Handle(ctx context.Context, opts SubscribeOptions, fn <span class="tok-kw">func</span>(Event)) (stop <span class="tok-kw">func</span>(), err <span class="tok-kw">error</span>)
+
+<span class="tok-com">// Close blocks until every goroutine the Manager started has exited (ADR-27, 08 §9.5).</span>
+<span class="tok-kw">func</span> (m *Manager) Close(ctx context.Context) <span class="tok-kw">error</span>
+
+<span class="tok-com">// ---------------------------------------------------------------- events</span>
+
+<span class="tok-kw">type</span> EventKind <span class="tok-kw">uint8</span>
+
+<span class="tok-kw">const</span> (
+	EventTransition EventKind = <span class="tok-kw">iota</span> <span class="tok-com">// ADR-19: observation, durable when backend allows</span>
+	EventReady                       <span class="tok-com">// ADR-19: doorbell, always best-effort/coalescing</span>
+)
+
+<span class="tok-kw">type</span> Event <span class="tok-kw">struct</span> {
+	Seq      Seq
+	Scope    Scope
+	NodeID   NodeID
+	Kind     EventKind
+	From, To Status
+	At       time.Time
+}
+
+<span class="tok-kw">type</span> OverflowPolicy <span class="tok-kw">int</span>
+
+<span class="tok-kw">const</span> (
+	OverflowDropOldestAndMarkGap OverflowPolicy = <span class="tok-kw">iota</span> <span class="tok-com">// default, ADR-22</span>
+	OverflowBlock                                      <span class="tok-com">// per-subscriber slot only, never the producer</span>
+	OverflowCloseSlow
+)
+
+<span class="tok-kw">type</span> SubscribeOptions <span class="tok-kw">struct</span> {
+	Scope      Scope <span class="tok-com">// "" subscribes to every scope</span>
+	From       Seq   <span class="tok-com">// resume token; 0 = start from now</span>
+	BufferSize <span class="tok-kw">int</span>
+	Overflow   OverflowPolicy
+	Durable    <span class="tok-kw">bool</span> <span class="tok-com">// WithDurable, 10 §7.2 — opt into the durable tier per-subscribe</span>
+}
+
+<span class="tok-kw">type</span> Subscription <span class="tok-kw">struct</span>{ <span class="tok-com">/* unexported */</span> }
+
+<span class="tok-kw">func</span> (s *Subscription) Events() &lt;-<span class="tok-kw">chan</span> Event
+<span class="tok-kw">func</span> (s *Subscription) Err() <span class="tok-kw">error</span>
+<span class="tok-kw">func</span> (s *Subscription) Close() <span class="tok-kw">error</span>
+
+<span class="tok-com">// ---------------------------------------------------------------- generics escape hatch (ADR-26)</span>
+
+<span class="tok-com">// Typed is an optional, in-process-only convenience layer — never the</span>
+<span class="tok-com">// primitive the Store interface or event stream are defined in terms of.</span>
+<span class="tok-kw">type</span> Typed[T <span class="tok-kw">any</span>] <span class="tok-kw">struct</span>{ <span class="tok-com">/* unexported */</span> }
+
+<span class="tok-kw">func</span> NewTyped[T <span class="tok-kw">any</span>](m *Manager, scope Scope) Typed[T]
+<span class="tok-kw">func</span> (t Typed[T]) AddNode(ctx context.Context, id NodeID, payload T, deps ...NodeID) <span class="tok-kw">error</span>
+<span class="tok-kw">func</span> (t Typed[T]) Claim(ctx context.Context, opts ...ClaimOption) (TypedClaim[T], <span class="tok-kw">error</span>)
+
+<span class="tok-kw">type</span> TypedClaim[T <span class="tok-kw">any</span>] <span class="tok-kw">struct</span> {
+	Claim
+	Payload T
+}
+
+<span class="tok-com">// ---------------------------------------------------------------- Clock (08 §11)</span>
+
+<span class="tok-kw">type</span> Clock <span class="tok-kw">interface</span> {
+	Now() time.Time
+	NewTimer(d time.Duration) (&lt;-<span class="tok-kw">chan</span> time.Time, <span class="tok-kw">func</span>() <span class="tok-kw">bool</span>)
+	AfterFunc(d time.Duration, f <span class="tok-kw">func</span>()) (stop <span class="tok-kw">func</span>() <span class="tok-kw">bool</span>)
+}</code></pre>
+<hr>
+<h2 id="5-node-state-machine-public-status-internal-phase-actor">5. Node state machine — public status × internal phase × actor<a class="anchor" href="#5-node-state-machine-public-status-internal-phase-actor" aria-label="Link to this section">#</a></h2>
+<p>Legend: <code>Engine</code> = internal scheduler logic (no external call); <code>Caller</code> = host program via public
+API; <code>Worker</code> = external worker via <code>Ack</code>/<code>Nack</code>/<code>Extend</code>; <code>Sweeper</code> = fenced reclaim path (may run
+inline on the claim path or as a background loop — same fencing rule either way).</p>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>From (Status/Phase)</th><th>To (Status/Phase)</th><th>Actor</th><th>Trigger</th><th>Storage op (fencing?)</th></tr></thead>
+<tbody>
+<tr><td>T1</td><td>—</td><td>New/Blocked</td><td>Caller</td><td><code>AddNode</code> with unmet deps</td><td>INSERT node; init pending counter</td></tr>
+<tr><td>T2</td><td>—</td><td>New/Ready</td><td>Caller</td><td><code>AddNode</code> with zero unmet deps</td><td>INSERT node; push ready-set</td></tr>
+<tr><td>T3</td><td>New/Blocked</td><td>New/Ready</td><td>Engine</td><td>last unmet predecessor edge resolves</td><td>atomic decrement→0; push ready-set (no fence needed — idempotent per-edge guard, ADR-05)</td></tr>
+<tr><td>T4</td><td>New/Blocked</td><td>New/Blocked</td><td>Caller</td><td><code>AddEdge</code> into an already-blocked node</td><td>increment pending; INSERT edge</td></tr>
+<tr><td>T5</td><td>New/Ready</td><td>New/Blocked</td><td>Caller</td><td><code>AddEdge</code> inserting an unresolved predecessor into a Ready node</td><td>atomic: pop ready-set + increment pending + INSERT edge (must be one op, §2.1 step 5)</td></tr>
+<tr><td>T6</td><td>New/Ready</td><td>InProgress/Claimed</td><td>Engine (on Worker's <code>Claim</code>)</td><td><code>Claim(scope, kind)</code></td><td>atomic pop + <strong>fence bump</strong> (<code>lease_epoch++</code>) + set deadline — <strong>fenced</strong></td></tr>
+<tr><td>T7</td><td>InProgress/Claimed</td><td>Success</td><td>Worker</td><td><code>Ack</code></td><td>CAS on <code>lease_epoch</code> — <strong>fenced</strong>; fan-out successor decrements in same op</td></tr>
+<tr><td>T8</td><td>InProgress/Claimed</td><td>Error/Failed</td><td>Worker</td><td><code>Nack</code></td><td>CAS on <code>lease_epoch</code> — <strong>fenced</strong>; <code>Outcome.Reason=WorkerError</code></td></tr>
+<tr><td>T9</td><td>InProgress/Claimed</td><td>New/Ready (retry)</td><td>Engine</td><td><code>Nack</code> and <code>attempt &lt; maxAttempts</code></td><td>CAS; re-arm with Full Jitter delay; push ready-set (delayed)</td></tr>
+<tr><td>T10</td><td>InProgress/Claimed</td><td>Error/TimedOut</td><td>Sweeper</td><td>lease deadline elapsed, no ack</td><td>CAS <code>WHERE lease_epoch = X AND status = InProgress</code> — <strong>fenced</strong></td></tr>
+<tr><td>T11</td><td>New/Blocked</td><td>Error/UpstreamFailed</td><td>Engine</td><td>required predecessor reached Error, trigger rule unsatisfiable</td><td>SET status=Error, Outcome; recurse to successors</td></tr>
+<tr><td>T12</td><td>New/*</td><td>Error/Skipped</td><td>Engine</td><td>trigger-rule evaluation determines rule can never satisfy</td><td>SET status=Error, Outcome=Skipped; recurse</td></tr>
+<tr><td>T13</td><td>New/* or InProgress/Claimed</td><td>Error/Cancelled</td><td>Caller</td><td><code>Cancel</code>/<code>CancelScope</code></td><td>CAS status ∈ {New,InProgress}→Error; recurse if fail-fast</td></tr>
+<tr><td>T14</td><td>any node with live successors</td><td>Error/Removed (successors only)</td><td>Caller</td><td><code>RemoveNode</code>/<code>RemoveEdge</code></td><td>successors' dep can no longer resolve ⇒ SET Error/Removed; the removed node is hard-deleted</td></tr>
+<tr><td>T15</td><td>Success or Error (terminal)</td><td>— (deleted)</td><td>Caller/GC</td><td>retention sweep past TTL and subscriber low-water mark</td><td>DELETE node + tombstone bookkeeping</td></tr>
+</tbody></table></div>
+<p>Invariants this table preserves (12 §1.6): every row that changes <code>Status</code> writes exactly one
+<code>Outcome</code> in the same op; <strong>T6 and T10 are the only rows requiring the fencing CAS at the point of
+the mutation</strong> — every other actor either only ever originates a transition (Caller/Engine) or is
+itself gated transitively through T6/T7/T8/T10; nothing transitions out of <code>Success</code> except T15
+(no <code>AddEdge</code> may re-block a terminal node by default — <code>WithReopen()</code> is an explicit, separately
+named, unshipped-in-v1 opt-in, ADR-23-adjacent, flagged in Open Questions).</p>
+<hr>
+<h2 id="6-storage-port-dagstore">6. Storage port (<code>dagstore</code>)<a class="anchor" href="#6-storage-port-dagstore" aria-label="Link to this section">#</a></h2>
+<pre><code class="language-go"><span class="tok-kw">package</span> dagstore
+
+<span class="tok-kw">import</span> (
+	<span class="tok-str">"context"</span>
+	<span class="tok-str">"errors"</span>
+	<span class="tok-str">"time"</span>
+)
+
+<span class="tok-com">// Version is an opaque, backend-defined optimistic-concurrency token</span>
+<span class="tok-com">// (Vitess topo.Version shape). Never construct or compare one directly.</span>
+<span class="tok-kw">type</span> Version <span class="tok-kw">interface</span>{ String() <span class="tok-kw">string</span> }
+
+<span class="tok-com">// ClaimToken is opaque and backend-defined, carries the fencing epoch.</span>
+<span class="tok-kw">type</span> ClaimToken <span class="tok-kw">interface</span>{ String() <span class="tok-kw">string</span> }
+
+<span class="tok-kw">type</span> NodeStatus <span class="tok-kw">uint8</span>
+
+<span class="tok-kw">const</span> (
+	StatusNew NodeStatus = <span class="tok-kw">iota</span>
+	StatusInProgress
+	StatusSuccess
+	StatusError
+)
+
+<span class="tok-kw">type</span> Node <span class="tok-kw">struct</span> {
+	Scope      <span class="tok-kw">string</span>
+	ID         <span class="tok-kw">string</span>
+	Status     NodeStatus
+	Payload    []<span class="tok-kw">byte</span>
+	LeaseEpoch <span class="tok-kw">uint64</span>    <span class="tok-com">// ADR-06 — present even when Status != InProgress (last-seen value)</span>
+	Deadline   time.Time <span class="tok-com">// zero if no worker currently holds it</span>
+	UpdatedAt  time.Time
+	Seq        <span class="tok-kw">uint64</span> <span class="tok-com">// ADR-20</span>
+}
+
+<span class="tok-kw">type</span> Edge <span class="tok-kw">struct</span>{ Scope, From, To <span class="tok-kw">string</span> }
+
+<span class="tok-kw">var</span> (
+	ErrNotFound        = errors.New(<span class="tok-str">"dagstore: node not found"</span>)
+	ErrVersionMismatch = errors.New(<span class="tok-str">"dagstore: version mismatch"</span>)
+	ErrAlreadyExists   = errors.New(<span class="tok-str">"dagstore: node already exists"</span>)
+	ErrCapability      = errors.New(<span class="tok-str">"dagstore: capability not supported by this backend"</span>)
+)
+
+<span class="tok-com">// Store is the mandatory core (ADR-16). Every backend implements exactly</span>
+<span class="tok-com">// this and nothing more to be usable at all — memcached does NOT implement</span>
+<span class="tok-com">// this interface (ADR-17); it implements NodeCache instead (§6.1 below).</span>
+<span class="tok-kw">type</span> Store <span class="tok-kw">interface</span> {
+	GetNode(ctx context.Context, scope, id <span class="tok-kw">string</span>) (Node, Version, <span class="tok-kw">error</span>)
+	PutNode(ctx context.Context, n Node, expected Version) (Version, <span class="tok-kw">error</span>)
+	CreateNode(ctx context.Context, n Node) (Version, <span class="tok-kw">error</span>)
+
+	<span class="tok-com">// Transition is atomic w.r.t. any other Transition/PutNode racing on the</span>
+	<span class="tok-com">// same node. Backends use native single-record atomics; never emulated</span>
+	<span class="tok-com">// as a lowest-common-denominator loop when the backend has something</span>
+	<span class="tok-com">// better. See conformance test T-ATOMIC-TRANSITION.</span>
+	Transition(ctx context.Context, scope, id <span class="tok-kw">string</span>, from, to NodeStatus) <span class="tok-kw">error</span>
+
+	<span class="tok-com">// AddEdges is atomic per call: either every edge is visible or none is</span>
+	<span class="tok-com">// (T-EDGE-BATCH-ATOMICITY). A backend lacking multi-key transactions</span>
+	<span class="tok-com">// refuses via ErrCapability rather than offering partial semantics.</span>
+	AddEdges(ctx context.Context, edges ...Edge) <span class="tok-kw">error</span>
+
+	DeleteNode(ctx context.Context, scope, id <span class="tok-kw">string</span>) <span class="tok-kw">error</span>
+	Close(ctx context.Context) <span class="tok-kw">error</span>
+}
+
+<span class="tok-com">// --------------------------------------------------------- optional facets (ADR-16)</span>
+
+<span class="tok-kw">type</span> Lister <span class="tok-kw">interface</span> {
+	ListNodes(ctx context.Context, scope, cursor <span class="tok-kw">string</span>, limit <span class="tok-kw">int</span>) (nodes []Node, next <span class="tok-kw">string</span>, err <span class="tok-kw">error</span>)
+}
+
+<span class="tok-com">// ReadyQueue grants exactly-once-in-flight claims fleet-wide and starts the</span>
+<span class="tok-com">// ack-timeout clock in the same atomic operation as the grant (ADR-07).</span>
+<span class="tok-kw">type</span> ReadyQueue <span class="tok-kw">interface</span> {
+	ClaimReady(ctx context.Context, scope <span class="tok-kw">string</span>, ackTimeout time.Duration) (Node, ClaimToken, <span class="tok-kw">error</span>)
+	Ack(ctx context.Context, token ClaimToken) <span class="tok-kw">error</span>
+	Nack(ctx context.Context, token ClaimToken) <span class="tok-kw">error</span>
+}
+
+<span class="tok-com">// TimeoutSweeper discovers claims whose deadline has elapsed. May be called</span>
+<span class="tok-com">// inline by the claim path (preferred, ADR-07) or on a ticker; either way</span>
+<span class="tok-com">// every write it performs is fenced on the token it observed (ADR-06).</span>
+<span class="tok-kw">type</span> TimeoutSweeper <span class="tok-kw">interface</span> {
+	SweepTimedOut(ctx context.Context, scope <span class="tok-kw">string</span>, now time.Time) (<span class="tok-kw">int</span>, <span class="tok-kw">error</span>)
+}
+
+<span class="tok-com">// EventStream fans transitions/doorbells to subscribers. Truthfully report</span>
+<span class="tok-com">// durability tier via CapabilityReporter — do not silently reimplement</span>
+<span class="tok-com">// pub/sub badly on a backend that can't do better (ADR-19, resolves the</span>
+<span class="tok-com">// open question in 06 via 10's per-event-kind durability split).</span>
+<span class="tok-kw">type</span> EventStream <span class="tok-kw">interface</span> {
+	Subscribe(ctx context.Context, scope <span class="tok-kw">string</span>) (&lt;-<span class="tok-kw">chan</span> Event, <span class="tok-kw">error</span>)
+}
+
+<span class="tok-kw">type</span> ConditionalDeleter <span class="tok-kw">interface</span> {
+	DeleteNodeIf(ctx context.Context, scope, id <span class="tok-kw">string</span>, expected Version) <span class="tok-kw">error</span>
+}
+
+<span class="tok-kw">type</span> Event <span class="tok-kw">struct</span> {
+	Scope, NodeID <span class="tok-kw">string</span>
+	Kind          EventKind
+	From, To      NodeStatus
+	Seq           <span class="tok-kw">uint64</span>
+	At            time.Time
+}
+
+<span class="tok-kw">type</span> EventKind <span class="tok-kw">uint8</span>
+
+<span class="tok-kw">const</span> (
+	TransitionEvent EventKind = <span class="tok-kw">iota</span>
+	MustClaimEvent
+)
+
+<span class="tok-com">// --------------------------------------------------------- capability discovery</span>
+
+<span class="tok-kw">type</span> CapabilityReporter <span class="tok-kw">interface</span>{ Capabilities() CapabilitySet }
+
+<span class="tok-kw">type</span> CapabilitySet <span class="tok-kw">uint32</span>
+
+<span class="tok-kw">const</span> (
+	CapList CapabilitySet = <span class="tok-num">1</span> &lt;&lt; <span class="tok-kw">iota</span>
+	CapReadyQueue
+	CapTimeoutSweep
+	CapEventStream
+	CapEventStreamDurable <span class="tok-com">// NodeStatusChanged tier is at-least-once, not just best-effort (ADR-19/10 §7.2)</span>
+	CapConditionalDelete
+	CapMultiKeyAtomicEdges
+)
+
+<span class="tok-kw">func</span> (cs CapabilitySet) Has(c CapabilitySet) <span class="tok-kw">bool</span> { <span class="tok-kw">return</span> cs&amp;c != <span class="tok-num">0</span> }
+
+<span class="tok-com">// --------------------------------------------------------- memcached's actual role (ADR-17)</span>
+
+<span class="tok-com">// NodeCache is the ONLY interface a memcached adapter implements. It is a</span>
+<span class="tok-com">// read-through/invalidate-on-write decorator in front of a real Store, not</span>
+<span class="tok-com">// a Store itself — see §7 capability matrix.</span>
+<span class="tok-kw">type</span> NodeCache <span class="tok-kw">interface</span> {
+	Get(ctx context.Context, scope, id <span class="tok-kw">string</span>) (Node, <span class="tok-kw">bool</span>, <span class="tok-kw">error</span>)
+	SetIfAbsent(ctx context.Context, n Node) <span class="tok-kw">error</span>
+	Invalidate(ctx context.Context, scope, id <span class="tok-kw">string</span>) <span class="tok-kw">error</span>
+}</code></pre>
+<hr>
+<h2 id="7-per-backend-capability-matrix">7. Per-backend capability matrix<a class="anchor" href="#7-per-backend-capability-matrix" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Guarantee</th><th>In-memory</th><th>Redis</th><th>PostgreSQL</th><th>Memcached</th></tr></thead>
+<tbody>
+<tr><td><code>Store</code> core (CRUD + fenced <code>Transition</code>)</td><td>Yes — sharded map + per-shard <code>RWMutex</code>, <code>Version</code> = incrementing <code>uint64</code></td><td>Yes — HASH per node + Lua/Function CAS on a <code>rev</code> field</td><td>Yes — one row/scope-partition, <code>Version</code> = explicit <code>revision</code> column</td><td><strong>No — never implements <code>Store</code></strong></td></tr>
+<tr><td><code>AddEdges</code> batch atomicity (<code>CapMultiKeyAtomicEdges</code>)</td><td>Yes — global scope lock for the call's duration</td><td>Yes — one Lua/Function touching all keys under the <code>{scope}</code> hash tag</td><td>Yes — one SQL transaction</td><td>N/A</td></tr>
+<tr><td><code>Lister</code></td><td>Yes — in-process index</td><td>Yes — per-scope ZSET of member IDs</td><td>Yes — indexed <code>WHERE scope=$1</code> keyset pagination</td><td>No — no scan primitive at any protocol version</td></tr>
+<tr><td><code>ReadyQueue</code> (atomic claim+lease, fenced)</td><td>Yes — buffered channel + pending-set + <code>AfterFunc</code> per claim</td><td>Yes — ZSET (<code>ZPOPMIN</code>) fused with lease HASH write, one Function call</td><td>Yes — <code>SKIP LOCKED</code> CTE chained into <code>UPDATE…RETURNING</code></td><td>No — no multi-key atomic, no ordered structure</td></tr>
+<tr><td><code>TimeoutSweeper</code></td><td>Yes — min-heap on a ticker</td><td>Yes — deadline ZSET, <code>ZRANGEBYSCORE …LIMIT</code></td><td>Yes — partial index <code>WHERE status='in_progress'</code> on <code>lease_deadline</code></td><td>No — must bound and document a max in-flight ceiling if ever attempted (not shipped)</td></tr>
+<tr><td><code>EventStream</code> — <code>NodeStatusChanged</code> tier</td><td>Durable (in-process fan-out under the write lock)</td><td>Durable — Streams consumer group + PEL, <code>XAUTOCLAIM</code></td><td>Durable — outbox table + relay, <code>pg_notify</code> as latency hint only</td><td>Best-effort polling only, documented as degraded</td></tr>
+<tr><td><code>EventStream</code> — <code>NodeReady</code> tier</td><td>Best-effort, coalescing</td><td>Best-effort — plain pub/sub over the same Stream</td><td>Best-effort — <code>LISTEN</code>/<code>NOTIFY</code>, 8000-byte payload cap</td><td>Best-effort — poll interval is the floor</td></tr>
+<tr><td><code>ConditionalDeleter</code></td><td>Yes</td><td>Yes — Lua script</td><td>Yes — <code>DELETE…WHERE revision=$2</code></td><td><strong>Yes</strong> — <code>md key C&lt;token&gt;</code> on the meta protocol is a genuine single-key conditional delete (the one facet memcached honestly earns)</td></tr>
+<tr><td>Clock authority for deadlines</td><td>monotonic <code>time.Now()</code></td><td><code>TIME</code> inside Lua</td><td><code>clock_timestamp()</code>, never <code>now()</code></td><td>N/A (no deadlines owned)</td></tr>
+<tr><td>Fencing token (<code>lease_epoch</code>)</td><td>mutex-guarded <code>uint64</code></td><td>Lua-scripted <code>HINCRBY</code></td><td><code>lease_epoch = lease_epoch + 1</code> in the claim <code>UPDATE</code></td><td>N/A</td></tr>
+<tr><td>Cross-instance work distribution</td><td>trivially single-owner (shared in-process)</td><td>native (<code>ZPOPMIN</code> atomicity)</td><td>native (<code>SKIP LOCKED</code>)</td><td>N/A — not a <code>ReadyQueue</code></td></tr>
+<tr><td>Durability across crash/failover</td><td>none (process-lifetime only)</td><td>documented gap: async replication by default, ~1s loss window unless <code>WAIT</code>/<code>WAITAOF</code> opted in per call</td><td>full — WAL-logged <code>nodes</code>/<code>edges</code>/<code>events</code>; <code>leases</code> table intentionally <code>UNLOGGED</code></td><td>none — extstore explicitly non-durable, eviction indistinguishable from "never existed"</td></tr>
+<tr><td>Recommended max scale (this design's target)</td><td>bounded by one process's RAM; benchmark target 1M nodes</td><td>1M nodes/scope comfortably; one scope = one Cluster hash-slot ceiling</td><td>1M nodes/scope with partitioned <code>nodes</code>/<code>events</code> tables and tuned autovacuum</td><td>cache-only; no independent node-count ceiling since it never owns the graph</td></tr>
+</tbody></table></div>
+<hr>
+<h2 id="8-repository-layout">8. Repository layout<a class="anchor" href="#8-repository-layout" aria-label="Link to this section">#</a></h2>
+<p>Multi-module monorepo (ADR-31, 15 §1.5). Only <code>cmd/dagworkerd</code> is allowed to import everything;
+every other module resolves the minimum dependency set its job requires.</p>
+<pre><code>dag-worker-go/
+├── go.mod                      module .../dagworker            — core only, near-zero deps
+├── go.work                     dev-only convenience; not consumed by external `go get`
+├── docs/
+│   ├── adr/                    one file per ADR-NN from §3, immutable once accepted
+│   └── research/                this synthesis + the 12+2 source dossiers
+│
+├── dagworker.go, options.go     public Manager/Option surface (§4)
+├── errors.go                    sentinel + typed error taxonomy
+├── status.go, phase.go          Status/Phase/Outcome/Reason (§5)
+├── event.go, subscribe.go        Bus/Subscription types (ADR-19/20/22)
+│
+├── internal/
+│   ├── engine/                  scheduler core: Kahn ready-set, trigger-rule eval, Seal/Health
+│   ├── topo/                    Pearce–Kelly incremental order + cycle rejection (ADR-04)
+│   ├── lease/                   fenced claim/ack/extend/sweep protocol (ADR-06/07/08/10)
+│   ├── clock/                   Clock interface + real/fake implementations (08 §11)
+│   ├── ready/                   per-(scope,kind) ready-set, sharded (09 §2.3)
+│   ├── interner/                string→int32 handle interning (09 §1.4)
+│   └── slab/                    generation-counted handle allocator (09 §1.6)
+│
+├── dagstore/                     storage port — Store core + optional facets (§6); no backend code
+│   └── dagstoretest/             RunConformance suite (ADR-18); Harness interface
+│
+├── storage/
+│   ├── memory/                   default backend: sharded map, CSR-with-slack adjacency (ADR-28)
+│   │   └── go.mod                same module as core, OR folded into root — zero extra deps either way
+│   ├── redis/
+│   │   └── go.mod                module .../storage/redis — only this module resolves go-redis
+│   │       (hash+ZSET+Lua/Functions for lease path; Streams for EventStream, §7)
+│   ├── postgres/
+│   │   └── go.mod                module .../storage/postgres — only this module resolves pgx
+│   │       (SKIP LOCKED, partitioned nodes/events, UNLOGGED leases, outbox+NOTIFY)
+│   └── memcached/
+│       └── go.mod                module .../storage/memcached — NodeCache decorator only (ADR-17)
+│
+├── adapters/                       optional network adapters — dagworker core never imports these
+│   ├── grpc/
+│   │   └── go.mod                  module .../adapters/grpc
+│   └── http/
+│       └── go.mod                  module .../adapters/http  — resource+RPC hybrid (14 §1-5)
+│
+├── cmd/
+│   └── dagworkerd/
+│       └── go.mod                  module .../cmd/dagworkerd — composition root, imports everything
+│                                    (config layering, health/ready, graceful shutdown — 15 Part 2)
+│
+├── examples/
+│   └── go.mod                      own module, kept out of every real module's graph
+│
+└── test/
+    ├── feature/                    behavioral tests, run in parallel, backend-agnostic via dagstoretest
+    ├── perf/                       TestComplexity_* ratio-guard tests + 1M-node benchmark suite (09 §4)
+    ├── storage/                    per-backend conformance + concurrency stress (11)
+    ├── chaos/                      seeded chaos-wrapper around the in-memory store (11)
+    └── e2e/
+        └── docker-compose.test.yml  Redis/Postgres/Memcached on custom non-default ports, gated by
+                                     DAGWORKER_INTEGRATION=1, health-checked via depends_on</code></pre>
+<hr>
+<h2 id="9-phased-delivery-plan">9. Phased delivery plan<a class="anchor" href="#9-phased-delivery-plan" aria-label="Link to this section">#</a></h2>
+<p>Each phase is independently shippable and tagged; none requires a public API break in a later
+phase (the load-bearing constraint from ADR-13/14).</p>
+<p><strong>v0.1 — Correctness kernel, single backend.</strong>
+In-memory <code>Store</code> only. Full public API surface (§4). Kahn ready-set (ADR-03), Pearce–Kelly cycle
+rejection (ADR-04), fenced claim/ack/extend/sweep (ADR-06/07/08/10) with <code>P=1</code> pure pull
+competition (ADR-13). Four-value <code>Status</code> + <code>Outcome.Reason</code> (ADR-01). <code>Bus.Subscribe</code> +
+<code>Reserver</code> as two interfaces (ADR-19), in-process only. <code>dagstoretest.RunConformance</code> written
+against this first backend. Property tests (rapid) for no-double-lease/eventual-readiness/
+antichain/acyclicity. Ships as <code>v0.1.0</code>, usable standalone by any host that doesn't need shared
+storage across processes.</p>
+<p><strong>v0.2 — PostgreSQL backend.</strong>
+<code>storage/postgres</code> module. <code>SKIP LOCKED</code> claim (04 §14.1), fenced ack keyed by <code>lease_epoch</code>
+(04 §14.2), partitioned <code>nodes</code>/<code>events</code> tables from day one (04 §10), <code>UNLOGGED leases</code>
+(04 §11), outbox+<code>NOTIFY</code> event delivery (04 §3, 10 §5.4). Runs the same conformance suite.
+<code>docker-compose.test.yml</code> and <code>DAGWORKER_INTEGRATION=1</code> gate introduced here.</p>
+<p><strong>v0.3 — Redis backend.</strong>
+<code>storage/redis</code> module. HASH+ZSET+Lua/Function lease path (05 §9, §15), Streams-based
+<code>EventStream</code> (05 §10), <code>{scope}</code> hash-tag discipline for Cluster-readiness (05 §9). Same
+conformance suite passes. Cross-backend <code>TestComplexity_*</code> ratio guards (09 §4) become a required
+CI job across all three real backends.</p>
+<p><strong>v0.4 — Memcached NodeCache + 1M-node benchmark suite.</strong>
+<code>storage/memcached</code> module, <code>NodeCache</code> only (ADR-17), wrapping any of the three real backends.
+The mandated 1,000,000-node benchmark suite is built out here per backend (in-memory, Redis,
+Postgres) with <code>benchstat</code>-tracked nightly regression jobs and same-run dimensionless CI ratio
+gates (09 §4). This is the first release the project can honestly call "benchmarked at 1M nodes
+on every backend."</p>
+<p><strong>v0.5 — Multi-instance work distribution, v0.2→v0.3 (07 §7.3).</strong>
+Internal virtual-partition layer (<code>P=32-64</code> default) with the naive modulo assignment first,
+then swapped for HRW + bounded-load capping — an internal refactor behind the swappable interface
+from ADR-14, no public API change. Storage-backed heartbeat membership (03 §5d, 07 §5.1).
+Leader-elected sweep-shard rebalancing only (ADR-15).</p>
+<p><strong>v0.6 — Dynamic-DAG hardening.</strong>
+Batch <code>AddNodes</code> atomicity and caps (12 §2.6), five trigger rules (ADR-30), <code>Full Jitter</code> retry
+policy wired into <code>ClaimOption</code> (ADR-12), <code>Scope.Health()</code> reason-aware aggregate (12 §1.5.4),
+retention/GC with subscriber low-water mark (12 §6). <code>WithReopen()</code> remains explicitly unshipped
+(Open Questions §11).</p>
+<p><strong>v0.7 — Optional network surface.</strong>
+<code>adapters/grpc</code>, <code>adapters/http</code> (14), <code>cmd/dagworkerd</code> composition root with layered config,
+<code>/healthz</code>/<code>/readyz</code> split, graceful shutdown ordering (15 Part 2). These modules are entirely
+optional; core's dependency graph is unaffected by their existence.</p>
+<p><strong>v0.8 — Verification hardening.</strong>
+TLA+ spec of the lease/ack/timeout state machine (11), same-process Porcupine linearizability
+check as a per-PR gate, seeded chaos harness exercising the four core properties under adversarial
+timing, security review pass.</p>
+<p><strong>v1.0 — API freeze.</strong>
+<code>Store</code> interface, event envelope, and on-storage schema (<code>schema_version</code>) frozen. 95%+ aggregate
+coverage gate enforced. Full cross-backend benchmark report published with methodology and
+hardware disclosed (River's own discipline, 01 §12.1). Independent semver per module from here on
+(ADR-31); core crossing to a breaking <code>Store</code> change requires <code>/v2</code> per Go's import-compatibility
+rule.</p>
+<hr>
+<h2 id="10-contradictions-between-dossiers-resolved">10. Contradictions between dossiers, resolved<a class="anchor" href="#10-contradictions-between-dossiers-resolved" aria-label="Link to this section">#</a></h2>
+<h3 id="10-1-idempotent-decrement-structure-packed-bitmap-vs-per-node-set">10.1 Idempotent-decrement structure: packed bitmap vs. per-node SET<a class="anchor" href="#10-1-idempotent-decrement-structure-packed-bitmap-vs-per-node-set" aria-label="Link to this section">#</a></h3>
+<p><strong>02</strong> (incremental-topo) recommends a <strong>packed per-edge satisfied-bitmap</strong> as the default
+idempotency mechanism, citing a ~600-1000× storage advantage over a per-node SET at 1M-node/
+out-degree-3 scale (§8.5-8.6). <strong>05</strong> (Redis backend, and by extension the reasoning independently
+supports Postgres's <code>edges.satisfied</code> boolean design in <strong>04</strong>) recommends a <strong>per-node SET of
+not-yet-satisfied predecessor IDs</strong>, explicitly <em>not</em> primarily for idempotency (the fencing-token</p>
+<ul>
+<li>status guard on <code>complete_node</code> already makes that path idempotent) but because **dynamic edge</li>
+</ul>
+<p>removal needs addressable, per-predecessor cancellation** that a bitmap addressed by a
+dense-slot-assigned-at-insert-time cannot express without a slot-versioning/generation scheme that
+neither dossier fully designs (02's own Open Questions flags this explicitly: "How does the
+packed-bitmap edge-slot scheme survive node/edge removal?").</p>
+<p><strong>Resolution:</strong> ship the <strong>per-node SET / per-edge-boolean design</strong> (ADR-05) as the default across
+all three real backends (Redis SET, Postgres <code>edges.satisfied</code> column, in-memory adjacency+pending
+set), because (a) edge removal is a named requirement in the brief ("possibly" removed, and §2.4 of
+dossier 12 treats it as a first-class transition, T14), (b) it gives free per-node observability
+("what is this stuck node still waiting on" via <code>SMEMBERS</code>/a <code>WHERE satisfied=false</code> query) that
+operators will need in production, and (c) the storage multiplier 02 computes (~225-270 MB vs
+~366 KiB at 1M nodes/3M edges) is real but not disqualifying at the scale this project targets — it
+is a single-digit percentage of the ~1-1.3 GB steady-state Postgres footprint 04 §16.1 computes for
+the whole schema. Revisit the packed bitmap only as a documented v2 memory optimization, and only
+once a generation-counter/slot-versioning scheme for safe removal is designed — do not ship it as
+the default while that gap remains open.</p>
+<h3 id="10-2-redis-lease-state-hand-rolled-hash-zset-vs-native-streams-consumer-groups">10.2 Redis lease state: hand-rolled hash+ZSET vs. native Streams consumer groups<a class="anchor" href="#10-2-redis-lease-state-hand-rolled-hash-zset-vs-native-streams-consumer-groups" aria-label="Link to this section">#</a></h3>
+<p><strong>03</strong> (leases) and <strong>05</strong> (Redis) both flag this as unresolved: Streams' <code>XCLAIM</code>/<code>XAUTOCLAIM</code>
+give PEL bookkeeping, poison-pill delivery counts, and cursor-based batch reclaim for free, but
+Streams' idle-time model cannot express "this specific node's deadline, set by the caller at claim
+time" — only "idle longer than the <em>claimer's</em> chosen threshold." A hand-rolled HASH (node record)</p>
+<ul>
+<li>ZSET (deadline index) design <em>can</em> express a per-node deadline natively but reimplements what</li>
+</ul>
+<p>Streams gives for free elsewhere.</p>
+<p><strong>Resolution: use both, for different facets, which is not actually a contradiction once
+decomposed.</strong> The <strong>lease/claim path</strong> (<code>ReadyQueue</code>, <code>TimeoutSweeper</code>) uses the HASH+ZSET+Lua/
+Function design from 05 §15, because it is the only one of the two that can express a
+caller-chosen per-claim deadline. The <strong>event bus</strong> (<code>EventStream</code>) uses Redis Streams, because it
+is unambiguously the right primitive for durable, replayable, consumer-group fan-out (05 §10, 10
+§7.2) and neither dossier disputes that once the two facets are treated separately. This resolves
+06's own open question ("is EventStream required to guarantee at-least-once… or is a truthfully
+capability-flagged weaker tier acceptable") by construction: Redis's <code>EventStream</code> facet reports
+<code>CapEventStreamDurable</code> because Streams-with-PEL genuinely earns it, which Redis's plain pub/sub
+alone would not.</p>
+<h3 id="10-3-cycle-check-cost-model-full-pearce-kelly-renumbering-vs-single-node-rank-bump">10.3 Cycle-check cost model: full Pearce–Kelly renumbering vs. single-node rank bump<a class="anchor" href="#10-3-cycle-check-cost-model-full-pearce-kelly-renumbering-vs-single-node-rank-bump" aria-label="Link to this section">#</a></h3>
+<p><strong>02</strong> recommends implementing full Pearce–Kelly (bounded bidirectional DFS, affected-region
+renumbering) as the primary mechanism. <strong>04</strong>'s concrete Postgres DDL (§14.4) ships a <strong>simplified
+single-node rank bump</strong> in the slow-path fallback and explicitly flags it as an approximation whose
+fast-path hit rate "should be validated... before committing to it long-term," i.e. a deliberately
+lighter v1 than 02's own recommendation.</p>
+<p><strong>Resolution:</strong> ship 04's single-node rank-bump approximation for v0.1/v0.2 across all backends
+(it preserves the load-bearing invariant — <code>ord(u) &lt; ord(v)</code> for every direct edge — and is
+materially simpler to get right under a deadline), instrumented with a fast-path-hit-rate metric
+from day one. Escalate to full Pearce–Kelly affected-region renumbering only if that metric shows
+degradation on real DAG shapes (the exact empirical trigger both 02's and 12's Open Questions call
+for). This is a sequencing resolution, not a disagreement: both dossiers agree PK is the right
+family; they disagree only on how much of it to build before measuring, and the measurement-first
+position wins per this project's own "benchmark before publishing tuned numbers" discipline (04 §16).</p>
+<h3 id="10-4-minimum-go-version-1-22-floor-11-vs-1-25-floor-08">10.4 Minimum Go version: 1.22 floor (11) vs. 1.25 floor (08)<a class="anchor" href="#10-4-minimum-go-version-1-22-floor-11-vs-1-25-floor-08" aria-label="Link to this section">#</a></h3>
+<p><strong>11</strong> (testing) argues for pinning "go 1.22+ (prefer 1.25)" and separately raises as an open
+question whether 1.25 is too aggressive a floor for enterprise adoption, suggesting a 1.23+
+fallback with hand-rolled <code>errgroup</code>/excluded synctest tests as a hedge. <strong>08</strong> (Go API) argues
+flatly for <strong>≥1.25</strong> to get <code>sync.WaitGroup.Go</code> and GA <code>testing/synctest</code> with no
+<code>GOEXPERIMENT</code> flag, on the grounds that a greenfield library has no legacy user base to protect.</p>
+<p><strong>Resolution: 1.25, per 08 (ADR-29).</strong> This is a genuinely time-sensitive decision and the
+resolution leans on the calendar: Go 1.25 shipped <code>sync.WaitGroup.Go</code> and GA <code>testing/synctest</code>
+well over a year before this document's writing date, so "too aggressive for enterprise adoption"
+— the concern 11 raises — has had a full release cycle to resolve itself in practice. A library
+with zero existing users pays no compatibility cost for requiring a modern toolchain, and the
+<code>context.AfterFunc</code>-based lease-timeout design (ADR-07/08 §9.3) and the <code>synctest</code>-based
+deterministic timeout tests (11) both depend on this floor being real, not conditionally
+compiled. If a future release genuinely needs to widen the floor for adoption reasons, that is a
+<code>go.mod</code> <code>go</code> directive bump decision to make with real user data, not a speculative hedge to build
+now.</p>
+<h3 id="10-5-public-status-count-5-values-01-s-own-early-framing-vs-4-values-12-s-considered-design">10.5 Public status count: 5 values (01's own early framing) vs. 4 values (12's considered design)<a class="anchor" href="#10-5-public-status-count-5-values-01-s-own-early-framing-vs-4-values-12-s-considered-design" aria-label="Link to this section">#</a></h3>
+<p><strong>01</strong>'s executive recommendations (written from the prior-art survey alone, before the dedicated
+state-machine dossier existed) propose a <strong>5-value</strong> public vocabulary: <code>new / in-progress /
+success / error / error-timeout</code>, explicitly keeping timeout as a peer of error. <strong>12</strong> (the
+dossier whose entire scope is the state machine, and which cross-references 01's own comparison
+table) argues decisively for <strong>4 values</strong>, with timeout folded into <code>Outcome.Reason</code>, and observes
+that 01's own §17 comparison table is the evidence <em>for</em> the 4-value design once read carefully:
+"no production system reviewed makes timeout its own peer of success/failure."</p>
+<p><strong>Resolution: 4 values (ADR-01), per 12.</strong> This is not really two dossiers disagreeing so much as
+01's early framing being superseded by 12's later, more careful reading of the same evidence — 01's
+own survey data (Step Functions' <code>States.Timeout</code> as an error <em>name</em>, Cloud Tasks'
+<code>DEADLINE_EXCEEDED</code> as a <em>response status</em> not a task state, Temporal's four timeout <em>kinds</em>
+all resolving to workflow-level <code>Failed</code>/<code>TimedOut</code>) supports 12's conclusion more than 01's own
+initial 5-value recommendation. Treat 12 as authoritative on state-machine questions; 01 remains
+authoritative on everything else it covers (leasing precedent, work-claiming taxonomy, prior-art
+failure modes).</p>
+<h3 id="10-6-sweeper-coordination-zero-coordination-by-construction-vs-an-implied-leader-elected-sweeper">10.6 Sweeper coordination: zero-coordination-by-construction vs. an implied leader-elected sweeper<a class="anchor" href="#10-6-sweeper-coordination-zero-coordination-by-construction-vs-an-implied-leader-elected-sweeper" aria-label="Link to this section">#</a></h3>
+<p><strong>03</strong> and <strong>07</strong> both state plainly that correctness never requires sweeper coordination — the
+fencing epoch alone makes duplicate sweeping merely wasteful, never wrong — and that cross-instance
+sharding of the sweep is a pure efficiency optimization. <strong>04</strong>, discussing Postgres specifically,
+raises as an open question whether the sweeper "should be one global process per storage cluster or
+one advisory-lock-elected leader per scope," which reads as if leader election might be load-bearing
+for that backend.</p>
+<p><strong>Resolution:</strong> no contradiction once read precisely — 04's own advisory-lock section (§5) frames
+leader election for the sweeper as <em>"strictly cheaper... when the only thing being coordinated is
+'run this loop somewhere,'"</em> i.e. an efficiency choice, matching 03/07 exactly. Adopt the
+zero-coordination-by-construction design as the correctness baseline on every backend (inline
+reclaim via the same fenced primitive the claim path uses is even simpler than a background
+sweeper at all, per ADR-07), and offer an <strong>optional</strong> advisory-lock/heartbeat-elected sweeper loop
+per scope purely to avoid redundant scanning once benchmarking shows it matters (ADR-15's leader-
+election carve-out already covers this).</p>
+<hr>
+<h2 id="11-open-questions-for-the-project-owner">11. Open questions for the project owner<a class="anchor" href="#11-open-questions-for-the-project-owner" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong><code>WithReopen()</code> — ship it at all?</strong> Re-blocking a completed <code>Success</code>/<code>Error</code> node is explicitly
+designed as an opt-in escape hatch (12 §2.2) but is <strong>not</strong> in the v0.1-v0.6 phased plan above.
+Shipping it means adding an 8th <code>Reason</code> value (<code>ReasonReopened</code>) and designing an audit-log
+shape distinct from current <code>Outcome</code> (12's own Open Questions flags this as unresolved). Decide
+whether this ships in v1.0 or is deferred indefinitely as a documented non-goal.
+<em>Recommendation: defer past v1.0; nothing in the phased plan blocks adding it later as a
+backward-compatible opt-in.</em></li>
+<li><strong>Node-level heartbeat during long-running work.</strong> The brief specifies a single flat per-node
+timeout (closer to Faktory's <code>reserve_for</code> model than Temporal's four-timeout model). Should a
+worker be able to report mid-flight progress (a Temporal-Activity-Heartbeat/Conductor-
+<code>callbackAfterSeconds</code> analogue) to reset its own deadline without a full <code>Extend</code> round trip, or
+is <code>Extend</code> (already in §4) sufficient? This is a product-shape decision, not an engineering one
+— it depends on whether the target host workloads include long-running external jobs (minutes to
+hours) where a single timeout value is awkward to size.
+<em>Recommendation: <code>Extend</code> as designed already covers this; do not add a separate heartbeat RPC
+unless a concrete workload demonstrates <code>Extend</code>'s call overhead matters.</em></li>
+<li><strong>Go ≥1.25 floor — confirmed acceptable?</strong> ADR-29/§10.4 resolves this decisively for the design,
+but it is worth the owner explicitly signing off given it forecloses adoption by Go shops
+pinned to older toolchains. If the target embedder base skews conservative, this should be
+revisited before v0.1 tags, not after.</li>
+<li><strong>Does <code>dagworkerd</code> (the optional daemon + gRPC/HTTP adapters, dossiers 14-15) belong in this
+project's v1.0 scope at all, or is it a separate, later initiative?</strong> The phased plan places it
+at v0.7 as an optional, non-blocking module, but the brief's original scope ("library embedded
+into a host program") does not obviously require a standalone daemon. Confirm whether shipping a
+network-facing daemon is in scope before the multi-module repository layout (§8) is finalized,
+since removing it later is cheap (delete a module) but adding it as an afterthought reshapes the
+module boundary decisions made in ADR-31.</li>
+<li><strong>Retention/GC defaults.</strong> 24h terminal-node TTL and 72h max-subscriber-lag (12 §6.3, matching
+River's own defaults) are reasonable for job-queue-shaped workloads but may be wrong for a host
+running very long-lived batch DAGs where "the run" spans days. Confirm these defaults or specify
+per-workload overrides the library should expose more prominently.</li>
+<li><strong>Is Memcached support, reinterpreted as "cache-only, never a <code>Store</code>," an acceptable reading of
+the original brief's "must also support Redis, Memcached, and PostgreSQL backends"?</strong> Every
+dossier that touches Memcached (03, 05, 06) converges independently on the same conclusion: it
+cannot honestly be a durable backend for this workload. Confirm the owner is fine with Memcached
+appearing in the public capability matrix as a cache decorator rather than a peer backend,
+since this is a meaningful narrowing of the original requirement as literally stated.</li>
+<li><strong>Cross-scope partition pooling for the v0.5 work-distribution upgrade</strong> (07's own open
+question): should virtual partitions be namespaced strictly per-scope, or pooled across scopes on
+one shared instance-assignment ring? This is deferred past v1.0 in the phased plan but the
+decision shapes how much rework v0.5 vs. a hypothetical v1.1 requires — worth a preliminary
+steer now if the target deployment shape is "many small scopes" vs. "few huge scopes."</li>
+<li><strong>Untrusted/third-party workers as a deployment shape.</strong> Several dossiers (03 Open Questions,
+06 Open Questions) flag that the fencing-token design assumes cooperative, trusted workers (a
+plain integer epoch, not a signed/HMAC token). If the project's roadmap ever includes workers not
+controlled by the same operator as the library instances, the trust model needs revisiting before
+v1.0 freezes the wire shape of <code>LeaseEpoch</code>/<code>ClaimToken</code> — this is cheap to decide now and
+expensive to retrofit once <code>/v2</code> is required to change it.</li>
+</ol>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/research/00-synthesis.md" rel="noopener noreferrer">View source: docs/research/00-synthesis.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

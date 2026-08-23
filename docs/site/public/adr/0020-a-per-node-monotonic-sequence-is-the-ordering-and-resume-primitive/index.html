@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADR-0020: A per-node monotonic sequence is the ordering and resume primitive · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/adr/0020-a-per-node-monotonic-sequence-is-the-ordering-and-resume-primitive/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#adr-0020-a-per-node-monotonic-sequence-is-the-ordering-and-resume-primitive">ADR-0020: A per-node monotonic sequence is the ordering and resume primitive</a></li>
+<ul>
+<li><a href="#context">Context</a></li>
+<li><a href="#decision">Decision</a></li>
+<li><a href="#consequences">Consequences</a></li>
+<ul>
+<li><a href="#positive">Positive</a></li>
+<li><a href="#negative">Negative</a></li>
+<li><a href="#neutral">Neutral</a></li>
+</ul>
+<li><a href="#alternatives-considered">Alternatives considered</a></li>
+<li><a href="#references">References</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="adr-0020-a-per-node-monotonic-sequence-is-the-ordering-and-resume-primitive">ADR-0020: A per-node monotonic sequence is the ordering and resume primitive<a class="anchor" href="#adr-0020-a-per-node-monotonic-sequence-is-the-ordering-and-resume-primitive" aria-label="Link to this section">#</a></h1>
+<ul>
+<li><strong>Status:</strong> Accepted</li>
+<li><strong>Date:</strong> 2026-08-22</li>
+<li><strong>Deciders:</strong> Vladyslav Kazantsev (project owner)</li>
+<li><strong>Amends:</strong> —</li>
+<li><strong>Backing research:</strong> docs/research/10-event-bus-and-delivery-semantics.md §3, §5.2, §6</li>
+</ul>
+<h2 id="context">Context<a class="anchor" href="#context" aria-label="Link to this section">#</a></h2>
+<p>A subscriber to the observation feed (ADR-0019) needs exactly one ordering guarantee that is
+load-bearing: it must never see <code>Success</code> before <code>InProgress</code> for the <em>same</em> node. It needs no
+guarantee at all about the relative order of two unrelated nodes' transitions, because no correct
+scheduling decision anywhere in the system depends on knowing which of two independent nodes
+"came first" in wall-clock time — the causal relationship that actually matters (a child cannot
+become ready before its parents succeed) is enforced by the DAG structure itself, in the same
+atomic write that flips state, not by the ordering of the event stream (10 §3.3). This is the
+direct generalization of Kafka's own load-bearing guarantee: ordering only within one partition,
+none across partitions (10 §3.2) — here the "partition" is a single node's own lifecycle.</p>
+<p>A single global total order — one counter incrementing across every write in a scope — is easy to
+reach for (it's what a naive "just add an auto-increment column" design produces) but it serializes
+every writer in the scope through one point of contention, exactly the throughput trade Kafka's own
+documentation calls out for its single-partition case. At the mandated 1,000,000-node scale, with
+many nodes completing concurrently across shards/connections, that serialization point would
+become the system's ceiling, for a guarantee almost nothing needs.</p>
+<p>The read-your-writes problem (10 §5) is the second forcing function: a subscriber that gets told
+"node X is now <code>Success</code>" and immediately reads storage for X's result can observe stale data if
+the event and the write are not provably associated with the same version. Carrying a version
+number in the event that the subsequent read can be compared against turns an invisible
+correctness bug into a cheap, detectable, retryable condition (<code>if readSeq &lt; event.Seq { retry }</code>)
+— and this version number is free to compute if it is the same counter already used for ordering.</p>
+<p>Finally, every durable pub/sub system that allows disconnect-and-resume needs a resume cursor, and
+every one of them (Kafka offsets, Redis Stream IDs, Postgres LSNs/outbox row IDs, etcd MVCC
+revisions) defines what happens when a cursor points behind retained history: it is never silently
+served from a wrong position, it is reported as expired (10 §6, ADR-0021).</p>
+<h2 id="decision">Decision<a class="anchor" href="#decision" aria-label="Link to this section">#</a></h2>
+<p>Every node carries one field, <code>Seq uint64</code>, bumped exactly once, atomically, in the same storage
+write as any state-changing mutation to that node (<code>Claim</code>/<code>Complete</code>/<code>Extend</code>/<code>Sweep</code> per AMD-2,
+or an <code>AddEdges</code> write that changes the node's <code>pending</code> state). <code>Seq</code> starts at <code>1</code> on
+<code>CreateNode</code> and never decreases or resets for the life of the node.</p>
+<pre><code class="language-go"><span class="tok-kw">type</span> Node <span class="tok-kw">struct</span> {
+    <span class="tok-com">// ...</span>
+    Seq Seq <span class="tok-com">// per-node monotonic; ADR-0020</span>
+}
+<span class="tok-kw">type</span> Seq <span class="tok-kw">uint64</span>
+
+<span class="tok-kw">type</span> Event <span class="tok-kw">struct</span> {
+    Seq      Seq    <span class="tok-com">// the Seq of the write that produced this event</span>
+    Scope    Scope
+    NodeID   NodeID
+    Kind     EventKind
+    From, To Status
+    At       time.Time
+}</code></pre>
+<p><code>Seq</code> does three jobs with one field:</p>
+<ol>
+<li><strong>Ordering within a node.</strong> A subscriber compares <code>Seq</code> values for the same <code>NodeID</code> and
+discards or reorders anything <code>&lt;= lastSeen[NodeID]</code> — trivial duplicate/replay detection with
+zero coordination.</li>
+<li><strong>Staleness token.</strong> After receiving an event with <code>Seq = s</code> for node <code>n</code>, a subsequent read of
+<code>n</code> that returns <code>readSeq &lt; s</code> is provably stale; the caller retries the read (with backoff)
+instead of acting on old data. This is mandatory practice for every subscriber that reads
+storage after an event and is documented as such on <code>Event</code>.</li>
+<li><strong>Resume unit, single-node case.</strong> <code>SubscribeOptions{Filter: NodeFilter(id), From: s}</code> resumes
+delivery of node <code>id</code>'s own events strictly after <code>s</code>. This case needs no additional machinery:
+<code>Seq</code> values for one node are already a total order.</li>
+</ol>
+<p><strong>Scope-wide resume is opt-in, and uses a second, explicit counter, never the per-node <code>Seq</code>
+reinterpreted.</strong> <code>SubscribeOptions</code> gains a <code>GlobalOrder bool</code> field:</p>
+<pre><code class="language-go"><span class="tok-kw">type</span> SubscribeOptions <span class="tok-kw">struct</span> {
+    Scope       Scope
+    Filter      Filter
+    From        Seq
+    GlobalOrder <span class="tok-kw">bool</span> <span class="tok-com">// opt-in: From is a ScopeSeq, not a per-node Seq</span>
+    BufferSize  <span class="tok-kw">int</span>
+    Overflow    OverflowPolicy
+    Durable     <span class="tok-kw">bool</span>
+}</code></pre>
+<ul>
+<li><code>GlobalOrder == false</code> (default): a scope-wide <code>Subscribe</code> (no <code>NodeID</code> filter) requires
+<code>From == 0</code> ("start from now"). There is no cross-node resume cursor in the default mode — the
+documented recovery procedure for a caller that needs to catch up after a disconnect is the one
+ADR-0021 specifies: read current state, then resubscribe from now. This keeps the default,
+common case free of any serialization cost.</li>
+<li><code>GlobalOrder == true</code>: the backend additionally assigns a strictly increasing <code>ScopeSeq</code> at
+write-commit time, scoped to the whole <code>Scope</code>, and <code>From</code> is interpreted against that counter
+for that subscription. This is the one path that pays Kafka's single-partition serialization
+cost, and it is paid only by callers who explicitly ask for "one merged timeline to render," per
+the ADR-19 seed's own framing. A backend that cannot produce this counter without a global lock
+(none of the three required backends are in this position — Postgres has <code>outbox.id</code>, Redis has
+the Stream's own monotonic ID, in-memory has a scope-level atomic counter available for the
+asking) documents the throughput cost in its package doc rather than silently degrading.</li>
+</ul>
+<p><code>ScopeSeq</code> is a distinct exported type (<code>type ScopeSeq uint64</code>) from <code>Seq</code>; a <code>GlobalOrder</code>
+subscription's events still carry the node-level <code>Seq</code> too (for staleness-token purposes), so
+opting into global order never removes the per-node ordering/dedup guarantee, it only adds a
+second, more expensive one on top.</p>
+<h2 id="consequences">Consequences<a class="anchor" href="#consequences" aria-label="Link to this section">#</a></h2>
+<h3 id="positive">Positive<a class="anchor" href="#positive" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>Zero cross-node coordination in the default path: no distributed clock, no vector clock, no
+single serialization point, matching the actual ordering need (10 §3.3) exactly rather than
+over-delivering a guarantee nothing consumes.</li>
+<li>One field does staleness-detection, dedup, and single-node resume — no separate version column
+and no separate cursor type need to be designed, stored, or kept consistent with each other.</li>
+<li>The expensive mode (<code>GlobalOrder</code>) is opt-in and its cost is visible in the type system
+(<code>ScopeSeq</code>, a <code>bool</code> the caller must set) rather than hidden behind a <code>Subscribe</code> call that
+looks free but silently serializes every writer in the scope.</li>
+</ul>
+<h3 id="negative">Negative<a class="anchor" href="#negative" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>A scope-wide subscriber that wants delivery order across nodes but does not want to pay the
+<code>GlobalOrder</code> serialization cost has no third option — this is a deliberate binary choice, not a
+spectrum, and a future request for a cheaper partial order (e.g., per-<code>Kind</code> ordering) would need
+a new ADR, not a parameter tweak.</li>
+<li>Two counter types (<code>Seq</code>, <code>ScopeSeq</code>) in the public API is one more concept for an integrator to
+learn than a single unified sequence number would be; this is judged worth it because conflating
+them would either weaken the per-node guarantee's cheapness or silently impose the global-order
+cost on every caller.</li>
+</ul>
+<h3 id="neutral">Neutral<a class="anchor" href="#neutral" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>Each backend is free to have its own internal delivery-position bookkeeping (a Redis Stream ID,
+a Postgres outbox row ID) distinct from the <code>Seq</code>/<code>ScopeSeq</code> types exposed to callers — those
+remain implementation details of the adapter's own resumability, exactly as dossier 10 §5.4
+recommends, and are never leaked across the storage port boundary (ADR-0016).</li>
+</ul>
+<h2 id="alternatives-considered">Alternatives considered<a class="anchor" href="#alternatives-considered" aria-label="Link to this section">#</a></h2>
+<p><strong>One global auto-increment counter per scope, always on, no opt-in.</strong> Rejected: this is Kafka's
+own single-partition-topic trade made mandatory for every caller regardless of need — it forces
+every write in a scope through one serialization point at exactly the scale (1,000,000 nodes) this
+project is designed not to bottleneck on (10 §3.2, §3.3).</p>
+<p><strong>Vector clocks or Lamport clocks for genuine causal ordering across nodes.</strong> Rejected: the causal
+relationship that matters here (parent-succeeds-before-child-ready) is already enforced by the DAG
+structure and the storage layer's atomic read-check-write, which makes an event-stream-level causal
+clock pure overhead solving a problem that does not exist at this layer (10 §3.1, §3.3).</p>
+<p><strong>An opaque <code>Cursor string</code> type at the public API</strong> (the shape dossier 10 §11 proposes at its own
+interface layer) instead of a typed <code>Seq</code>/<code>ScopeSeq</code>. Rejected for the public surface: an opaque
+string cursor hides the staleness-token use (job 2 above) behind a type callers cannot compare or
+reason about, and this library's read-your-writes fix depends on <code>Event.Seq</code> being directly
+comparable to a freshly-read <code>Node.Seq</code> — an opaque cursor cannot serve that second purpose without
+becoming, in effect, <code>Seq</code> again with extra indirection. Backends remain free to use an opaque
+cursor internally for their own delivery bookkeeping (see Neutral, above).</p>
+<h2 id="references">References<a class="anchor" href="#references" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>docs/research/10-event-bus-and-delivery-semantics.md §3.1–§3.3, §5.1–§5.2, §6</li>
+<li>docs/research/00-synthesis.md §3 (ADR-20 seed), §4 (<code>Seq</code>, <code>Event</code>), §5 (state-machine table)</li>
+<li>Kafka partition ordering — https://pulse.support/kb/kafka-ordering-guarantees</li>
+<li>Lamport, "Time, Clocks, and the Ordering of Events in a Distributed System" (happened-before) — https://www.cs.cmu.edu/~dga/15-712/S11/lectures/04-clocks.pdf</li>
+</ul>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/adr/0020-a-per-node-monotonic-sequence-is-the-ordering-and-resume-primitive.md" rel="noopener noreferrer">View source: docs/adr/0020-a-per-node-monotonic-sequence-is-the-ordering-and-resume-primitive.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

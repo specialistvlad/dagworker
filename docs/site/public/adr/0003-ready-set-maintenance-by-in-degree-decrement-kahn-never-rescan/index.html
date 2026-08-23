@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADR-0003: Ready-set maintenance by in-degree decrement (Kahn), never rescan · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/adr/0003-ready-set-maintenance-by-in-degree-decrement-kahn-never-rescan/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#adr-0003-ready-set-maintenance-by-in-degree-decrement-kahn-never-rescan">ADR-0003: Ready-set maintenance by in-degree decrement (Kahn), never rescan</a></li>
+<ul>
+<li><a href="#context">Context</a></li>
+<li><a href="#decision">Decision</a></li>
+<li><a href="#consequences">Consequences</a></li>
+<ul>
+<li><a href="#positive">Positive</a></li>
+<li><a href="#negative">Negative</a></li>
+<li><a href="#neutral">Neutral</a></li>
+</ul>
+<li><a href="#alternatives-considered">Alternatives considered</a></li>
+<li><a href="#references">References</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="adr-0003-ready-set-maintenance-by-in-degree-decrement-kahn-never-rescan">ADR-0003: Ready-set maintenance by in-degree decrement (Kahn), never rescan<a class="anchor" href="#adr-0003-ready-set-maintenance-by-in-degree-decrement-kahn-never-rescan" aria-label="Link to this section">#</a></h1>
+<ul>
+<li><strong>Status:</strong> Accepted</li>
+<li><strong>Date:</strong> 2026-08-22</li>
+<li><strong>Deciders:</strong> Vladyslav Kazantsev (project owner)</li>
+<li><strong>Amends:</strong> —</li>
+<li><strong>Backing research:</strong> docs/research/02-incremental-topological-scheduling.md §1, §5.1, §7, §8.6</li>
+</ul>
+<h2 id="context">Context<a class="anchor" href="#context" aria-label="Link to this section">#</a></h2>
+<p>The library's mandated scale is 1,000,000 nodes per scope. At that scale, any operation whose cost
+is proportional to graph size rather than to the size of the <em>change</em> being processed is
+disqualifying — dossier 09's performance discipline expresses this as CI-gated dimensionless
+ratios, not absolute latencies, precisely because "does this stay fast as the graph grows" is the
+actual question, not "is this fast today." Ready-set computation is the operation performed most
+often in the system's lifetime — once per node completion, at minimum — so its asymptotic shape
+determines the shape of the whole system.</p>
+<p>Kahn's 1962 algorithm already contains the answer, if read for the right idea. The textbook
+presentation runs Kahn from scratch — <code>O(V+E)</code> — to produce one full topological order. That is the
+wrong thing to imitate literally in a live scheduler: re-running Kahn from <code>L ← ∅</code> after every
+completion is exactly the naive-rescan design this ADR rejects. But the <em>inner loop</em> of Kahn's
+algorithm — for the node just popped, walk its out-edges and decrement each successor's counter,
+enqueueing any that hit zero — is already an amortized-O(1)-per-edge streaming algorithm once you
+stop rebuilding the outer loop from scratch. Dossier 02 makes the amortized argument precisely: no
+single completion is bounded better than <code>O(outdeg(n))</code> in the worst case (a fan-out hub), but no
+adversary can make the <em>sum</em> across the DAG's entire life worse than <code>O(E)</code>, because the aggregate-
+method argument charges each edge exactly once, at the moment its tail node finishes. This is the
+entire content of "the sublinear ready-set requirement": treat every node completion as a single
+Kahn "pop," never as a trigger to re-derive readiness by scanning.</p>
+<p>Two forcing details keep this correct once the DAG becomes dynamic rather than static, both from
+dossier 02 §1.3:</p>
+<ol>
+<li>A node inserted after some of its declared predecessors have already finished must have its
+<code>pending</code> counter initialized <em>at insertion time</em> by inspecting each predecessor's current
+status — not initialized to raw in-degree and then blindly decremented later, and not assumed to
+start at the full predecessor count.</li>
+<li>An edge inserted whose predecessor <code>u</code> is already terminal-success must be born <em>pre-satisfied</em>
+— never incremented at all — or the target waits forever for a signal that will never arrive
+because <code>u</code> has already fired its one completion event.</li>
+</ol>
+<p>Both of these are "compare-and-decide" operations, not blind <code>INCR</code>/<code>DECR</code> calls — the general
+principle that a raw counter update is not sufficient once delivery can be duplicated or graph
+shape can change concurrently is developed fully in ADR-0005, which this ADR depends on for the
+concrete decrement primitive's idempotency.</p>
+<h2 id="decision">Decision<a class="anchor" href="#decision" aria-label="Link to this section">#</a></h2>
+<p>Maintain one <code>pending[v]</code> counter per node — the count of not-yet-satisfied predecessor edges — as
+long-lived state, and update the ready set through exactly one code path: the completion decrement.
+No other code path ever adds a node to the ready set.</p>
+<pre><code class="language-go"><span class="tok-com">// OnNodeTerminal is called exactly once per node reaching a terminal Status</span>
+<span class="tok-com">// (Success or Error — a terminal Error still resolves its outgoing edges for</span>
+<span class="tok-com">// dependency-counting purposes; trigger-rule evaluation, ADR-0030, decides</span>
+<span class="tok-com">// separately whether each successor proceeds, is skipped, or fails).</span>
+<span class="tok-com">// out(n) is n's adjacency list, CSR-encoded (dossier 02 §7.2).</span>
+<span class="tok-kw">func</span> (s *Scheduler) OnNodeTerminal(n NodeID) (readyNow []NodeID) {
+    <span class="tok-kw">for</span> _, m := <span class="tok-kw">range</span> s.out(n) {
+        <span class="tok-kw">if</span> s.resolveEdge(n, m) { <span class="tok-com">// idempotent per-edge resolution, ADR-0005</span>
+            <span class="tok-kw">if</span> s.pending[m].Add(-<span class="tok-num">1</span>) == <span class="tok-num">0</span> {
+                readyNow = <span class="tok-kw">append</span>(readyNow, m)
+            }
+        }
+    }
+    <span class="tok-kw">return</span> readyNow
+}</code></pre>
+<p>Node/edge insertion follows the compare-and-decide rule from §1.3 of the research, not a blind
+increment:</p>
+<ul>
+<li><code>AddNode</code> with predecessor <code>p</code>: if <code>p.Status == StatusSuccess</code>, the edge is born satisfied (no
+increment); if <code>p.Status == StatusError</code>, the new node is immediately <code>Error/UpstreamFailed</code>
+(T11) rather than <code>New</code> — it is never inserted onto the ready set only to be evicted a moment
+later; otherwise <code>pending++</code> and the edge is recorded unsatisfied.</li>
+<li><code>AddEdge</code> into an already-<code>Ready</code> node (<code>pending == 0</code>) must pop the node back out of the ready
+set and increment <code>pending</code> in the <strong>same atomic operation</strong> as the edge insert (T5) — a worker
+claiming the node in the gap between "edge recorded" and "counter incremented" is a correctness
+bug, not a performance one, and every backend's storage primitive for this operation must
+guarantee it (cross-reference: the storage port's fenced mutation primitives, ADR-0016).</li>
+</ul>
+<p>Scope-wide "is everything done" is answered by a <em>separate</em> O(1) counter (ADR-0024), never by
+summing or scanning <code>pending[]</code> values — mixing the two questions turns an O(1) check into an O(n)
+one for no benefit.</p>
+<h2 id="consequences">Consequences<a class="anchor" href="#consequences" aria-label="Link to this section">#</a></h2>
+<h3 id="positive">Positive<a class="anchor" href="#positive" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>Ready-set maintenance costs <code>O(outdeg(n))</code> per completion and <code>O(E)</code> total across the DAG's whole
+life — the textbook amortized bound, and the entire content of the "sublinear ready-set"
+requirement stated in dossier 02 §1.2.</li>
+<li>The rule is uniform across every actor that can complete a node — worker <code>Ack</code>/<code>Nack</code>, sweeper
+timeout, engine-driven cancellation/upstream-failure propagation — because "decrement out-edges
+on terminal transition" is actor-agnostic; there is exactly one ready-set-mutation code path to
+audit for correctness.</li>
+<li>Because the decrement is folded into the same atomic write as the terminal-status transition
+(ADR-0002's state table, T7/T8/T10/T11/T12/T13), a successor becoming ready is never observably
+out of sync with its predecessor's completion — no window exists where the predecessor is
+terminal but the successor's counter hasn't yet reflected it.</li>
+</ul>
+<h3 id="negative">Negative<a class="anchor" href="#negative" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>A single high-fan-out "hub" node's completion is an <code>O(outdeg(n))</code> operation that cannot be
+amortized away for that one call — a node with 100,000 successors produces one large atomic write.
+This is accepted as the correct cost model (the aggregate bound is what matters, not
+worst-single-call latency) but must be documented as a known tail-latency shape, and the storage
+port's fan-out write (ADR-0016, AMD-2) must handle it as a bulk operation, not <code>N</code> individual
+round trips.</li>
+<li>The design requires every backend to implement the decrement as part of a single atomic
+mutation alongside the terminal-status write (never a separate round trip) — this is a mandatory
+backend obligation, not an optional optimization, and rules out any backend whose native
+primitives cannot express it.</li>
+</ul>
+<h3 id="neutral">Neutral<a class="anchor" href="#neutral" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>This ADR only fixes <em>how</em> the ready set is updated (the decrement rule and its atomicity
+requirement); the concrete idempotency mechanism for <code>resolveEdge</code> (per-edge boolean vs. bare
+counter vs. packed bitmap) is ADR-0005's decision, and the cycle-safety of edge insertion itself
+is ADR-0004's.</li>
+</ul>
+<h2 id="alternatives-considered">Alternatives considered<a class="anchor" href="#alternatives-considered" aria-label="Link to this section">#</a></h2>
+<p><strong>Full-graph rescan per event</strong> (re-run Kahn from <code>L ← ∅</code> on every completion, or an equivalent
+"recompute readiness for the whole scope" SQL aggregate query per completion). Rejected outright:
+<code>O(V+E)</code> per event at 1,000,000-node scale is disqualifying on arithmetic alone, and it is exactly
+the anti-pattern dossier 02 opens by warning against — imitating Kahn's <em>outer loop</em> rather than its
+inner one.</p>
+<p><strong>Poll-based readiness</strong> (a periodic sweep that scans for <code>pending == 0</code> nodes not yet enqueued,
+instead of an event-driven push on every decrement). Rejected: turns an O(1)-per-edge push into an
+O(n)-per-tick scan, and introduces a latency floor (the poll interval) with no correctness benefit
+over the push-based decrement, which dossier 02 §5.1 treats as strictly dominant once the decrement
+is made idempotent (ADR-0005).</p>
+<p><strong>Recompute <code>pending</code> from a live <code>COUNT</code> over unresolved edges on every readiness check</strong> (rather
+than maintaining a resident counter). Rejected: turns every single readiness check into a query
+proportional to in-degree, defeating the entire point of caching the count — the resident-counter
+design is what makes the check itself O(1) rather than merely making the <em>update</em> efficient.</p>
+<h2 id="references">References<a class="anchor" href="#references" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>Kahn, A. B. (1962). "Topological sorting of large networks." <em>Communications of the ACM</em>, 5(11),
+558–562. https://dl.acm.org/doi/10.1145/368996.369025</li>
+<li>docs/research/02-incremental-topological-scheduling.md §1, §5.1, §7, §8.6</li>
+<li>docs/research/00-synthesis.md §2.1 (hot path), §3 (ADR-03 seed), §5 (state-machine table, T3)</li>
+</ul>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/adr/0003-ready-set-maintenance-by-in-degree-decrement-kahn-never-rescan.md" rel="noopener noreferrer">View source: docs/adr/0003-ready-set-maintenance-by-in-degree-decrement-kahn-never-rescan.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

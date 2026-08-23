@@ -1,0 +1,789 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADR-0037: The gRPC, HTTP, and daemon network surface is in scope and optional · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/adr/0037-network-surface-in-scope/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#adr-0037-the-grpc-http-and-daemon-network-surface-is-in-scope-and-optional">ADR-0037: The gRPC, HTTP, and daemon network surface is in scope and optional</a></li>
+<ul>
+<li><a href="#context">Context</a></li>
+<li><a href="#decision">Decision</a></li>
+<li><a href="#consequences">Consequences</a></li>
+<ul>
+<li><a href="#positive">Positive</a></li>
+<li><a href="#negative">Negative</a></li>
+<li><a href="#neutral">Neutral</a></li>
+</ul>
+<li><a href="#alternatives-considered">Alternatives considered</a></li>
+<li><a href="#references">References</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="adr-0037-the-grpc-http-and-daemon-network-surface-is-in-scope-and-optional">ADR-0037: The gRPC, HTTP, and daemon network surface is in scope and optional<a class="anchor" href="#adr-0037-the-grpc-http-and-daemon-network-surface-is-in-scope-and-optional" aria-label="Link to this section">#</a></h1>
+<ul>
+<li><strong>Status:</strong> Accepted</li>
+<li><strong>Date:</strong> 2026-08-22</li>
+<li><strong>Deciders:</strong> Vladyslav Kazantsev (project owner)</li>
+<li><strong>Amends:</strong> —</li>
+<li><strong>Backing research:</strong> docs/research/13-grpc-worker-protocol.md §1-6, §11, §14-16; docs/research/14-http-json-worker-protocol.md §0-6, §9.2; docs/research/15-daemon-packaging-and-ops.md Part 2; docs/research/00-synthesis.md §9 (v0.7), §11 item 4</li>
+</ul>
+<h2 id="context">Context<a class="anchor" href="#context" aria-label="Link to this section">#</a></h2>
+<p>The design synthesis's own Open Question #4 asked the owner to confirm, before the module
+boundary in ADR-0031 was finalized, whether <code>dagworkerd</code> — a standalone daemon plus gRPC and
+HTTP/JSON adapters over the core library — belongs in this project's scope at all, since the
+original brief only asked for "a library embedded into a host program." <strong>The owner's decision is
+that it does: the network surface is in scope.</strong> This is not a hedge or a "maybe later" — it
+changes what ADR-0031's module list must contain (<code>adapters/grpc</code>, <code>adapters/http</code>,
+<code>cmd/dagworkerd</code>) and it is the reason two entire dossiers (13, 14) exist as load-bearing design
+documents rather than speculative appendices.</p>
+<p>The reason a remote worker protocol is worth designing carefully, rather than bolted on, is
+concrete: the framing goal is that a worker written in Python, Node, Rust, or Java can participate
+in the DAG without embedding Go at all, which is impossible without a wire protocol, and the wire
+protocol has real failure modes if designed carelessly. Three RPC dispatch shapes exist in
+production systems that solve "tell a remote worker here is a node, you have N seconds": unary
+long-poll (Temporal's <code>PollActivityTaskQueue</code>), server-streaming push (which hits a flow-control
+trap — a fast producer can outrun a slow consumer with no backpressure signal short of the TCP
+window itself), and bidirectional streaming with an explicit credit protocol (Envoy xDS's
+nonce/ack, Kubernetes CRI's explicit rejection of a push model for exec/attach). Dossier 13's
+central argument, worked through with real <code>.proto</code> and real failure modes, is that unary long-
+poll plus HTTP/2's own per-connection stream-concurrency limit (<code>MaxConcurrentStreams</code>) already
+<em>is</em> dagworker's credit protocol for free — a bespoke credit/ack layer on top would solve a
+flow-control problem this workload does not have, at real implementation cost for every worker-
+language SDK.</p>
+<p>The HTTP surface exists for a different, non-overlapping audience: "clients that just want <code>curl</code>
+and a JSON parser," per dossier 14's design stance, not a mechanically-derived transcoding of the
+gRPC surface. <code>grpc-gateway</code> was evaluated directly against this requirement and rejected on three
+concrete frictions (§ Decision below) — chiefly that it cannot produce real Server-Sent Events for
+the event stream and that it drags <code>google.golang.org/grpc</code> into the HTTP adapter's dependency
+graph for a user who wants only HTTP, defeating the entire point of <code>adapters/http</code> being its own
+module (ADR-0031).</p>
+<p>Both adapters and the daemon are, and must remain, strictly optional: nothing about their
+existence may touch what a core-only embedder resolves, builds, or tests. ADR-0031 already
+establishes this as a module-boundary fact (core, <code>adapters/grpc</code>, and <code>adapters/http</code> are three
+separate <code>go.mod</code> files); this ADR states the corresponding hard rule explicitly and specifies
+<em>how</em> it is enforced, because "core has zero import edge to either" is a claim that must be
+checked by tooling, not left as a promise in a README.</p>
+<h2 id="decision">Decision<a class="anchor" href="#decision" aria-label="Link to this section">#</a></h2>
+<p><strong>1. The network surface ships as part of this project's scope</strong>, per the owner's decision on
+Open Question #4: <code>adapters/grpc</code>, <code>adapters/http</code>, and <code>cmd/dagworkerd</code> (ADR-0031) are real,
+maintained modules, phased at v0.7 in the synthesis's delivery plan (§9), not a deferred or
+optional-in-the-roadmap-sense initiative.</p>
+<p><strong>2. The gRPC protocol is Temporal-style unary long-poll plus an etcd-shaped <code>Watch</code> stream</strong> —
+exactly the hybrid dossier 13 specifies, and no more than that hybrid:</p>
+<ul>
+<li><code>WorkerService</code> exposes <code>ClaimNode</code> (long-polls server-side until a ready node exists or
+<code>poll_timeout</code> elapses — an unset <code>lease</code> in the response means "no work, re-call immediately,"
+exactly Temporal's empty-<code>task_token</code> convention, never an error), <code>ExtendLease</code> (heartbeat),
+<code>CompleteNode</code>, and <code>FailNode</code> — all four keyed by an opaque, server-issued <code>task_token</code> that
+also carries a plain <code>fencing_token int64</code> in the clear for storage backends that CAS on a
+bare integer (ADR-0006). A worker's capacity is expressed by how many concurrent <code>ClaimNode</code>
+calls it keeps in flight, never by a credit field.</li>
+<li><code>ControlService</code> exposes DAG mutation/inspection (<code>AddNodes</code>, <code>AddEdges</code>, <code>GetNode</code>,
+<code>CancelNode</code>) plus <code>Watch(stream WatchRequest) returns (stream WatchResponse)</code>: client-assigned
+<code>watch_id</code> multiplexes multiple independent watches over one connection, <code>start_revision</code>
+resumes from a prior cursor, and a <code>compacted_revision</code> reject path is implemented from day one
+— etcd's own <code>Watch</code> resume contract, not a bespoke one.</li>
+<li><code>WorkerService</code> and <code>ControlService</code> are separate gRPC services specifically so a worker's mTLS
+identity never needs <code>AddNodes</code>/<code>CancelNode</code> privileges by default (dossier 13 §11).</li>
+<li>No third, generic push-dispatch RPC exists. The proto lives at
+<code>proto/dagworker/v1/{node,worker_service,control_service,watch}.proto</code>, generated Go is
+committed to the repo (a public cross-language wire contract, not a build artifact — <code>go get</code>
+must work with zero local <code>buf</code>/<code>protoc</code> toolchain), and non-Go SDKs are produced from the same
+schema published to the Buf Schema Registry on every merge to <code>main</code>.</li>
+</ul>
+<p><strong>3. The HTTP protocol is a Consul-style blocking query plus SSE with <code>Last-Event-ID</code> as the
+resume cursor, errors as RFC 9457 <code>application/problem+json</code>:</strong></p>
+<ul>
+<li>CRUD-shaped resources (<code>PUT</code>/<code>GET</code>/<code>PATCH</code>+<code>If-Match</code>/<code>DELETE</code> on
+<code>/v1/scopes/{scope}/nodes/{node}</code> and <code>.../edges/{from}..{to}</code>) use standard HTTP semantics;
+ETag/<code>If-Match</code> is the optimistic-concurrency mechanism (RFC 9110 §13), mandatory on <code>PATCH</code>
+(missing header ⇒ 428, never silent last-writer-wins).</li>
+<li>The one genuinely RPC-shaped operation, <code>POST /v1/scopes/{scope}/nodes:claim</code>, is a collection-
+level custom method (AIP-136), not a pretend resource creation — a client cannot address the
+lease it is about to receive. It blocks server-side on a client-supplied <code>wait</code> (Consul's
+blocking-query shape), clamped to <code>[0s, 60s]</code> server-side with <code>rand(0, wait/16)</code> jitter against
+thundering-herd reconnects, and returns <strong>204 No Content</strong> (never <code>200 {"leases": []}</code>) when no
+work turns up before <code>wait</code> elapses.</li>
+<li>Ack (<code>:complete</code>/<code>:fail</code>/<code>:renew</code>) is keyed by the same fencing token as gRPC (<code>X-Fencing-Token</code>
+header), not a bolted-on <code>Idempotency-Key</code> — the fencing token already is the idempotency key
+for these calls, and a stale token returns <code>409 Conflict</code> with <code>application/problem+json</code>.</li>
+<li>The event stream (<code>GET /v1/scopes/{scope}/events</code>) is <strong>SSE primary</strong>
+(<code>text/event-stream</code>, <code>event: node.status</code> / <code>event: work.available</code>, one monotonic <code>id:</code>
+sequence, <code>X-Accel-Buffering: no</code>, a <code>: heartbeat</code> comment every 15s), because the browser
+<code>EventSource</code> API's automatic <code>Last-Event-ID</code> reconnect header <strong>is</strong> the resume-cursor design
+with zero client code. <strong>NDJSON long-poll is the documented fallback</strong>
+(<code>?mode=poll&amp;cursor=...&amp;wait=...</code>, reusing the same blocking-query mechanics) for intermediaries
+that fully buffer <code>text/event-stream</code> regardless of headers. WebSocket is rejected as the
+primary channel: the event stream is one-directional server→client, and WebSocket buys nothing
+while giving up <code>EventSource</code>'s free reconnect-with-cursor semantics.</li>
+<li>Every error is <code>application/problem+json</code> per RFC 9457, against a fixed per-API problem-type
+registry (<code>lease-expired</code> → 409, <code>cycle-detected</code> → 422, <code>node-exists</code> → 409, <code>scope-unknown</code> →
+404, <code>cursor-too-old</code> → 410, <code>precondition-failed</code> → 412, <code>precondition-required</code> → 428,
+<code>rate-limited</code> → 429) — the 409/422/412 split is deliberate and fixed: 412 only for ETag/
+If-Match failures, 409 for conflicts a client resolves by re-reading and retrying, 422 for
+requests that can never succeed against any state.</li>
+<li>The HTTP surface is <strong>hand-written against a spec-first OpenAPI 3.1 document</strong>, generated with
+<code>oapi-codegen</code>'s strict-server mode — <strong>not</strong> derived from the <code>.proto</code> via <code>grpc-gateway**.</code>grpc-gateway<code>was evaluated and rejected on three concrete grounds: it degrades streaming to
+plain NDJSON with no</code>Last-Event-ID<code>/heartbeat/</code>EventSource<code>support at all; its wire shape is
+protobuf's naming and path-collision conventions wearing a REST costume, not what a</code>curl<code>user
+expects; and it would pull</code>google.golang.org/grpc<code>into</code>adapters/http`'s dependency graph for
+a user who wants only HTTP — directly violating this ADR's own zero-import-edge principle one
+layer down.</li>
+</ul>
+<p><strong>4. <code>cmd/dagworkerd</code></strong> is the composition root that hosts both adapters (ADR-0031) — config
+layering, <code>/healthz</code>/<code>/readyz</code> split, graceful shutdown that actively releases the replica's
+in-flight leases rather than passively waiting out their timeout, RED/USE metrics. It is the only
+module permitted to import both adapter modules and a storage backend simultaneously.</p>
+<p><strong>5. Hard rule, enforced structurally: the core module has zero import edge to either adapter.</strong>
+This is not a lint convention or a code-review checklist item — it is a build-time guarantee that
+follows directly from ADR-0031's module split, checked two ways:</p>
+<pre><code class="language-bash"><span class="tok-com"># Run inside the core module's own directory, in CI, on every PR touching core:</span>
+go mod tidy -diff        <span class="tok-com"># must produce NO diff — a stray import of grpc/net/http-adapter</span>
+                          <span class="tok-com"># code anywhere in core would force a `require` line `tidy` adds,</span>
+                          <span class="tok-com"># failing this check in the same PR that introduced it</span>
+go list -deps ./...   | grep -E <span class="tok-str">'google\.golang\.org/grpc|dagworker/adapters/(grpc|http)'</span> \
+                       &amp;&amp; <span class="tok-kw">exit</span> <span class="tok-num">1</span> || <span class="tok-kw">exit</span> <span class="tok-num">0</span></code></pre>
+<p>Because core is its own Go module (ADR-0031), it is structurally impossible for it to compile
+against <code>adapters/grpc</code> or <code>adapters/http</code> without an explicit <code>require</code> line appearing in core's
+own <code>go.mod</code> — a change that is visible in the diff of any PR that introduces it and that
+<code>go mod tidy</code> will flag if the import is removed without cleaning up the requirement. This is a
+categorically stronger guarantee than "the linter didn't complain," which is what "not enforced
+by convention" means here.</p>
+<h2 id="consequences">Consequences<a class="anchor" href="#consequences" aria-label="Link to this section">#</a></h2>
+<h3 id="positive">Positive<a class="anchor" href="#positive" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>A worker in any language can participate via generated stubs off the published Buf Schema
+Registry module, or via plain <code>curl</code>/any HTTP client against the OpenAPI-documented surface —
+the framing goal ("Python/Node/Rust/Java workers can participate") is actually deliverable, not
+merely theoretically possible from a <code>.proto</code> file nobody outside the Go build can consume.</li>
+<li>Every protocol choice reuses proven, cited precedent (Temporal, etcd, Consul, Nomad, Stripe,
+AIP-136, RFC 9457) rather than inventing new wire semantics — this is a direct reduction in
+protocol-design risk versus a bespoke design.</li>
+<li>HTTP/2's own flow control being the credit protocol means the worker SDK needs no bespoke
+backpressure logic to implement correctly — a real simplification for every third-party SDK
+author.</li>
+<li>The zero-import-edge guarantee is checkable in under a second in CI (<code>go mod tidy -diff</code>), so it
+cannot silently regress between reviews.</li>
+</ul>
+<h3 id="negative">Negative<a class="anchor" href="#negative" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>The project now maintains three independently-versioned public contracts instead of one: the Go
+API (ADR-0027), the gRPC wire schema (<code>buf breaking</code>, FILE category), and the OpenAPI/HTTP
+contract — each with its own backward-compatibility discipline and its own place a breaking
+change can leak from.</li>
+<li>Real operational surface is added that a pure-library project would not carry: mTLS/token
+issuance split between <code>WorkerService</code> and <code>ControlService</code>, gRPC's well-known L4-load-balancer
+connection-pinning trap (requiring the worker SDK to default to <code>dns:///</code> + <code>round_robin</code> and
+the server to set <code>MaxConnectionAge</code>), and SSE-specific reverse-proxy configuration
+(<code>X-Accel-Buffering: no</code>) that must be documented for every deployer.</li>
+<li>Two adapter conformance/contract test suites, two sets of API documentation, and two additional
+CI jobs are now permanent maintenance surface, on top of the storage-backend conformance suite
+(ADR-0018).</li>
+</ul>
+<h3 id="neutral">Neutral<a class="anchor" href="#neutral" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>The v0.7 phased-plan placement (synthesis §9) is unaffected by this decision being made now
+rather than later — the module boundary was already going to be <code>adapters/grpc</code>/<code>adapters/http</code>/
+<code>cmd/dagworkerd</code> regardless of exactly when in the roadmap they ship real functionality.</li>
+<li>Both adapters remain fully removable — delete a module — without touching core or each other,
+since neither imports the other (ADR-0031); this decision does not foreclose descoping the
+daemon later if the owner's priorities change.</li>
+</ul>
+<h2 id="alternatives-considered">Alternatives considered<a class="anchor" href="#alternatives-considered" aria-label="Link to this section">#</a></h2>
+<p><strong>Descope the network surface entirely, ship library-only.</strong> This was the synthesis's own live
+open question (§11 item 4). Rejected: the owner made an explicit decision to include it, on the
+grounds that a standalone daemon is what actually makes "workers in any language" true rather than
+aspirational.</p>
+<p><strong>A third, generic bidirectional push-dispatch RPC</strong> (Envoy xDS ADS's nonce/ack shape, or
+Kubernetes CRI's exec/attach streaming shape) as the primary claim mechanism. Rejected per dossier
+13 §2-4: both precedents solve a <em>convergence</em> or <em>interactive-session</em> problem, not a work-
+distribution-with-backpressure problem; HTTP/2's stream-concurrency limit already gives dagworker
+a credit protocol for free once <code>MaxConcurrentStreams</code> is set deliberately, so a bespoke
+credit/ack layer on top adds implementation cost across every worker-language SDK for a guarantee
+the transport already provides.</p>
+<p><strong><code>grpc-gateway</code>-derived HTTP surface</strong>, sharing one <code>.proto</code> source of truth with gRPC. Rejected
+per dossier 14 §9.2 on three concrete, sourced grounds (streaming degrades to plain NDJSON with no
+<code>Last-Event-ID</code>, wire shape carries protobuf-generator naming conventions rather than idiomatic
+REST JSON, and it pulls the entire gRPC dependency tree into the HTTP adapter) — each of which
+directly contradicts a requirement this ADR states elsewhere (real SSE, a <code>curl</code>-first surface,
+zero forced gRPC dependency for HTTP-only consumers).</p>
+<p><strong>WebSocket as the primary event transport.</strong> Rejected per dossier 14 §5.4: the stream is
+one-directional server→client by design; WebSocket's bidirectionality is unused cost, it breaks
+under more intermediaries than SSE, and it forfeits <code>EventSource</code>'s automatic
+reconnect-with-<code>Last-Event-ID</code> behavior entirely, requiring every client to hand-roll what SSE
+gives for free.</p>
+<p><strong>A single shared credential/mTLS surface for <code>WorkerService</code> and <code>ControlService</code>.</strong> Rejected per
+dossier 13 §11 recommendation 7: collapsing them means a worker's identity would carry
+<code>AddNodes</code>/<code>CancelNode</code> privileges from the very first deployment, cheap to avoid now and
+expensive to retrofit once real worker fleets hold long-lived certificates issued under the
+combined scope.</p>
+<h2 id="references">References<a class="anchor" href="#references" aria-label="Link to this section">#</a></h2>
+<ul>
+<li>docs/research/13-grpc-worker-protocol.md §1-4 (dispatch-shape argument), §5 (full <code>.proto</code>), §6 (Watch/etcd), §11 (AuthN/Z), §14-16 (repo layout, recommendations)</li>
+<li>docs/research/14-http-json-worker-protocol.md §1-2 (resource design, blocking query), §3-4 (fencing token, ETag), §5 (SSE), §6 (RFC 9457), §9.2 (grpc-gateway rejection)</li>
+<li>docs/research/15-daemon-packaging-and-ops.md Part 2 (daemon config, health/readiness, shutdown ordering)</li>
+<li><a href="https://docs.temporal.io/" rel="noopener noreferrer">Temporal <code>WorkflowService</code> — <code>PollActivityTaskQueue</code></a> — long-poll/task-token precedent</li>
+<li><a href="https://etcd.io/docs/v3.5/learning/api/#watch-api" rel="noopener noreferrer">etcd <code>Watch</code> RPC</a> — resume-by-revision precedent</li>
+<li><a href="https://developer.hashicorp.com/consul/api-docs/features/blocking" rel="noopener noreferrer">Consul blocking queries</a> — <code>wait</code>/index/jitter precedent</li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc9457" rel="noopener noreferrer">RFC 9457 — Problem Details for HTTP APIs</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc9110.html#name-conditional-requests" rel="noopener noreferrer">RFC 9110 §13 — HTTP Conditional Requests</a> — ETag/If-Match</li>
+<li><a href="https://google.aip.dev/136" rel="noopener noreferrer">Google AIP-136 — Custom Methods</a> — <code>:claim</code> verb justification</li>
+<li><a href="https://html.spec.whatwg.org/multipage/server-sent-events.html" rel="noopener noreferrer">WHATWG Server-Sent Events spec</a> — <code>Last-Event-ID</code>, <code>id:</code>, <code>retry:</code></li>
+<li><a href="https://github.com/grpc-ecosystem/grpc-gateway" rel="noopener noreferrer">grpc-ecosystem/grpc-gateway</a> — evaluated and rejected, §9.2</li>
+<li><a href="https://kubernetes.io/blog/2018/11/07/grpc-load-balancing-on-kubernetes-without-tears/" rel="noopener noreferrer">Kubernetes blog — gRPC Load Balancing on Kubernetes without Tears</a> — L4-pinning trap</li>
+</ul>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/adr/0037-network-surface-in-scope.md" rel="noopener noreferrer">View source: docs/adr/0037-network-surface-in-scope.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

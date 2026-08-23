@@ -1,0 +1,729 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADR-0032: Priority is a first-class ready-set ordering key · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/adr/0032-priority-is-a-first-class-ready-set-ordering-key/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#adr-0032-priority-is-a-first-class-ready-set-ordering-key">ADR-0032: Priority is a first-class ready-set ordering key</a></li>
+<ul>
+<li><a href="#context">Context</a></li>
+<li><a href="#decision">Decision</a></li>
+<li><a href="#consequences">Consequences</a></li>
+<ul>
+<li><a href="#positive">Positive</a></li>
+<li><a href="#negative">Negative</a></li>
+<li><a href="#neutral">Neutral</a></li>
+</ul>
+<li><a href="#alternatives-considered">Alternatives considered</a></li>
+<li><a href="#references">References</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="adr-0032-priority-is-a-first-class-ready-set-ordering-key">ADR-0032: Priority is a first-class ready-set ordering key<a class="anchor" href="#adr-0032-priority-is-a-first-class-ready-set-ordering-key" aria-label="Link to this section">#</a></h1>
+<ul>
+<li><strong>Status:</strong> Accepted</li>
+<li><strong>Date:</strong> 2026-08-22</li>
+<li><strong>Deciders:</strong> Vladyslav Kazantsev (project owner)</li>
+<li><strong>Amends:</strong> —</li>
+<li><strong>Backing research:</strong> docs/research/05-redis-backend.md §3, §15.2; docs/research/04-postgres-backend.md
+§6, §14.1; docs/research/07-work-distribution-across-instances.md §1.1; docs/research/01-prior-art-workflow-engines.md
+§12.1</li>
+</ul>
+<h2 id="context">Context<a class="anchor" href="#context" aria-label="Link to this section">#</a></h2>
+<p>The public API surface already declares <code>Node.Priority int16</code> with no ADR backing it — this must
+be justified or dropped. It is kept: every backend surveyed for the ready-set structure natively
+supports priority ordering at negligible extra cost over plain FIFO, and every real system in the
+prior-art survey that ships a work queue at all ships a priority column next to it (River's
+<code>ORDER BY priority DESC, id ASC</code>, 01 §12.1; Postgres's own <code>nodes_ready_idx</code> composite index, 04
+§6). Dropping it would not simplify any backend — it would just move the feature into application
+code on top of the library, reproducing the same "claim, inspect, release-and-retry" waste pattern
+ADR-0032's sibling decision on Kind-partitioned claims (12 §5.4) already argues against for
+worker-capability matching.</p>
+<p>The concrete design question is the ordering key's exact shape, because each backend's atomic
+claim primitive expresses order differently. Redis's <code>ZPOPMIN</code> needs one <code>float64</code> score per
+member — there is no second sort column (05 §3). PostgreSQL's <code>SKIP LOCKED</code> claim reads a real
+multi-column B-tree index and needs no packing at all (04 §6, §14.1). The in-memory backend's
+sharded ready structure is native Go, where a comparator can read struct fields directly. A single
+ADR needs to fix all three so a node claimed under identical priority-and-arrival conditions is
+ordered the same way regardless of which backend is in use — "priority" must mean one thing across
+the whole capability matrix, not three loosely-compatible approximations.</p>
+<p>PostgreSQL's <code>SKIP LOCKED</code> claim query does <strong>not</strong> give a hard priority guarantee under
+concurrent claimers: if the highest-priority ready row is locked by another in-flight transaction,
+the query skips it and returns a lower-priority row to a different claimer first (04 §6). This is
+not a bug to route around — it is the accepted cost of <code>SKIP LOCKED</code>'s whole non-blocking design,
+and it must be documented as a soft guarantee rather than silently promised as strict.</p>
+<p>Because priority strictly orders the ready-set on every backend, a scope whose highest tier is
+kept perpetually non-empty can, in principle, starve everything below it indefinitely — no dossier
+in this series designs an anti-starvation mechanism, and this ADR must take an explicit,
+implementable position rather than leaving the question open.</p>
+<h2 id="decision">Decision<a class="anchor" href="#decision" aria-label="Link to this section">#</a></h2>
+<p><strong><code>Node.Priority</code> stays as <code>int16</code> in the public API. Higher numeric value is served first; the
+zero value (<code>0</code>) is "normal" priority, matching every other zero-value-is-safe default in this
+design.</strong> Ties within the same priority value are broken by arrival order (FIFO) — a node that
+became ready earlier is claimed before one that became ready later at the same priority.</p>
+<p><strong>Ordering key per backend:</strong></p>
+<ul>
+<li><strong>Redis (ZSET score, <code>float64</code>):</strong> pack an inverted, offset priority into the high bits and a
+32-bit monotonic FIFO sequence (the low 32 bits of the node's <code>Seq</code>, ADR-0020) into the low bits,
+so ascending score order — the order <code>ZPOPMIN</code> pops in — is exactly "highest priority first, then
+earliest-ready first":
+<pre><code>rank  := uint32(0xFFFF) - uint32(int32(priority) + 32768)   // 0 = priority 32767 (highest)
+score := float64(rank)*4294967296.0 + float64(uint32(seq))  // rank*2^32 + fifoSeq</code></pre>
+<p><code>65535 * 2^32 ≈ 2.815e14</code>, well inside <code>float64</code>'s exact-integer range (<code>2^53 ≈ 9.007e15</code>), so no
+precision is lost across the full <code>int16</code> range. The FIFO component wraps at <code>2^32</code>
+(~4.3 billion ready events); wraparound degrades the tie-break to approximately-FIFO at the wrap
+boundary only, never incorrectly — this is a fairness nuance, not a correctness defect, and is
+scoped per <code>(scope, kind)</code> ready-set so the practical wrap horizon is per-partition, not global.
+<code>ZADD</code> on this score; <code>ZPOPMIN key N</code> claims the top N in one round trip fused with lease
+bookkeeping via the same Lua Function the claim path already uses (05 §15.2).</p>
+</li>
+<li><strong>PostgreSQL (composite B-tree index, no packing needed):</strong>
+<pre><code class="language-sql"><span class="tok-kw">CREATE</span> <span class="tok-kw">INDEX</span> nodes_ready_idx <span class="tok-kw">ON</span> dagw.nodes (scope, priority DESC, node_id)
+    <span class="tok-kw">WHERE</span> status = <span class="tok-str">'ready'</span>;</code></pre>
+<p><code>node_id</code> is the table's <code>GENERATED ALWAYS AS IDENTITY</code> column, monotonic globally and therefore
+monotonic within any single scope's subsequence — ascending <code>node_id</code> is a valid FIFO order
+within a scope with no separate sequence column required. The claim query is
+<code>ORDER BY priority DESC, node_id FOR UPDATE SKIP LOCKED LIMIT $n</code> (04 §14.1), scanning this index
+only — it never touches a row outside the <code>ready</code> partial index regardless of scope size.
+<strong>This ordering is soft under concurrent claimers</strong> (04 §6): <code>SKIP LOCKED</code> skips a row already
+locked by a concurrent transaction and returns the next unlocked row in index order instead,
+which can hand out a lower-priority node before a higher-priority one that happened to be
+contended at that instant. Document this explicitly in the public API's <code>Priority</code> field comment.</p>
+</li>
+<li><strong>In-memory (heap comparator, native Go, no packing needed):</strong> one <code>container/heap</code>-compatible
+min-heap per <code>(scope, kind)</code> shard, comparator:
+<pre><code class="language-go"><span class="tok-kw">func</span> (h *readyHeap) Less(i, j <span class="tok-kw">int</span>) <span class="tok-kw">bool</span> {
+    <span class="tok-kw">if</span> h.items[i].Priority != h.items[j].Priority {
+        <span class="tok-kw">return</span> h.items[i].Priority &gt; h.items[j].Priority <span class="tok-com">// higher priority pops first</span>
+    }
+    <span class="tok-kw">return</span> h.items[i].Seq &lt; h.items[j].Seq <span class="tok-com">// FIFO within the same priority</span>
+}</code></pre>
+<p><code>heap.Pop</code> returns the highest-priority, earliest-ready item; this is the exact same total order
+as the Redis packing above and the Postgres index above, expressed natively instead of packed,
+and is a <strong>hard</strong> guarantee on this backend (no <code>SKIP LOCKED</code>-style contention skip exists for a
+single mutex-guarded heap).</p>
+</li>
+</ul>
+<p><strong>The starvation question: v1 ships no anti-starvation aging. Priority ordering is strict.</strong> A
+scope whose higher-priority tier stays continuously non-empty can starve lower tiers indefinitely
+on every backend except to the (soft) extent Postgres's <code>SKIP LOCKED</code> contention accidentally lets
+a lower-priority row through. This is a documented, caller-manageable risk, not a hidden footgun:
+the mitigation the library actually ships is <strong><code>Kind</code>-partitioned ready-sets</strong> (12 §5.4) — a host
+that needs a latency-sensitive class of low-priority work protected from a busy high-priority tier
+gives that class its own <code>Kind</code>, which has its own ready-set entirely untouched by another <code>Kind</code>'s
+priority ordering. A future opt-in aging policy (<code>effective_priority = priority +
+floor(waiting_duration / agingInterval)</code>) is a <strong>named, reserved, unshipped</strong> extension point —
+it is not part of this ADR's decision and must not be implemented speculatively.</p>
+<h2 id="consequences">Consequences<a class="anchor" href="#consequences" aria-label="Link to this section">#</a></h2>
+<h3 id="positive">Positive<a class="anchor" href="#positive" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>One ordering semantic, three faithful backend expressions — a caller sees the same relative
+claim order (priority, then FIFO) regardless of which backend the host chose, modulo Postgres's
+documented soft guarantee under contention.</li>
+<li>Claim-N stays a single round trip on every backend: <code>ZPOPMIN key N</code> on Redis, one indexed
+<code>SKIP LOCKED … LIMIT N</code> scan on Postgres, one heap-pop loop in-memory — priority ordering adds no
+extra round trip anywhere.</li>
+<li><code>Kind</code> already existing as the worker-capability-matching partition key (12 §5.4) means the
+starvation mitigation requires no new mechanism — it reuses a structure the library ships anyway.</li>
+</ul>
+<h3 id="negative">Negative<a class="anchor" href="#negative" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>Redis's packed score is opaque bit-math that must be documented precisely and tested for
+boundary values (<code>priority = -32768</code>, <code>priority = 32767</code>, <code>seq</code> near a <code>2^32</code> wrap) — a subtle
+encoding bug here silently reorders the ready-set rather than crashing.</li>
+<li>Strict priority ordering with no aging is a real starvation risk for a workload the host
+misconfigures (e.g., every node submitted at the same high priority, defeating the field's
+purpose) — the library does not protect a caller from this by design.</li>
+</ul>
+<h3 id="neutral">Neutral<a class="anchor" href="#neutral" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>Postgres's soft guarantee under <code>SKIP LOCKED</code> contention means "priority" has a slightly
+different strength on that backend than on Redis or in-memory — this must be stated plainly in
+the public <code>Priority</code> field's doc comment, not treated as a portability bug to fix later.</li>
+</ul>
+<h2 id="alternatives-considered">Alternatives considered<a class="anchor" href="#alternatives-considered" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>Drop <code>Priority</code> entirely, ship FIFO-only ready-sets</strong>: rejected — every backend's natural
+ready-set structure (Redis ZSET, Postgres composite index, an in-memory heap) supports priority
+at effectively the cost of a comparator, and every mature system surveyed with a comparable queue
+ships one (River, 01 §12.1); dropping it pushes the need into application-level claim-inspect-
+requeue loops, which is strictly worse for both latency and code complexity than the field
+costing.</li>
+<li><strong>Plain LIST/FIFO-only Redis structure to save ~15 bytes/member</strong>: rejected per 05 §3's own
+conclusion — losing priority now to save a small per-member memory cost is "a bad trade against a
+well-known limitation coming back later as a feature request"; removing priority later is easy,
+adding it back under load is not.</li>
+<li><strong>A separate priority queue per tier instead of one ordered structure</strong>: rejected — this
+reproduces <code>Kind</code>-partitioning's mechanism for a purpose <code>Kind</code> is already better suited to
+(coarse worker-capability routing), while making claim-N across tiers require multiple round
+trips instead of the single <code>ZPOPMIN</code>/indexed-scan/heap-pop this ADR's design gives for free.</li>
+<li><strong>Built-in priority aging in v1</strong>: rejected as premature — no surveyed system in this design's
+research corpus specifies a validated aging formula for this exact workload shape (bursty,
+dependency-driven readiness, not Poisson arrivals), and shipping an unvalidated anti-starvation
+heuristic risks masking real misconfiguration rather than fixing it; the <code>Kind</code>-partitioning
+mitigation is available immediately with zero new mechanism.</li>
+</ul>
+<h2 id="references">References<a class="anchor" href="#references" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><a href="https://github.com/riverqueue/river" rel="noopener noreferrer">River — priority claim query</a></li>
+<li>docs/research/05-redis-backend.md §3 (ZSET vs. LIST vs. SET vs. Stream, priority packing)</li>
+<li>docs/research/04-postgres-backend.md §6, §14.1 (<code>nodes_ready_idx</code>, <code>SKIP LOCKED</code> soft ordering)</li>
+<li>docs/research/12-dag-semantics-and-state-machine.md §5.4 (<code>Kind</code>-partitioned ready-sets)</li>
+<li>ADR-0020 (<code>Seq</code>, reused as the FIFO tie-break source); ADR-0023 (per-scope, per-<code>Kind</code> ready-set
+isolation this ADR's starvation mitigation depends on)</li>
+</ul>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/adr/0032-priority-is-a-first-class-ready-set-ordering-key.md" rel="noopener noreferrer">View source: docs/adr/0032-priority-is-a-first-class-ready-set-ordering-key.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

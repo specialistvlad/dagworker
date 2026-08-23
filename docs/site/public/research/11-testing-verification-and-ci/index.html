@@ -1,0 +1,1863 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Testing, Verification, and CI for a Concurrent Go DAG Scheduler · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/research/11-testing-verification-and-ci/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#testing-verification-and-ci-for-a-concurrent-go-dag-scheduler">Testing, Verification, and CI for a Concurrent Go DAG Scheduler</a></li>
+<ul>
+<li><a href="#1-go-test-tooling-mechanics-and-gotchas">1. Go test tooling: mechanics and gotchas</a></li>
+<ul>
+<li><a href="#1-1-t-parallel-and-the-loop-variable-trap">1.1 t.Parallel() and the loop-variable trap</a></li>
+<li><a href="#1-2-race-what-it-proves-and-what-it-costs">1.2 -race: what it proves and what it costs</a></li>
+<li><a href="#1-3-shuffle-for-order-dependence-bugs">1.3 -shuffle for order-dependence bugs</a></li>
+<li><a href="#1-4-count-for-flake-detection">1.4 -count for flake detection</a></li>
+<li><a href="#1-5-testing-synctest-deterministic-virtual-time-ga-in-go-1-25">1.5 testing/synctest: deterministic virtual time (GA in Go 1.25)</a></li>
+<li><a href="#1-6-fuzzing-graph-mutation-sequences">1.6 Fuzzing graph mutation sequences</a></li>
+<li><a href="#1-7-property-based-testing-pgregory-net-rapid-vs-leanovate-gopter">1.7 Property-based testing: pgregory.net/rapid vs leanovate/gopter</a></li>
+</ul>
+<li><a href="#2-correctness-verification-beyond-unit-tests">2. Correctness verification beyond unit tests</a></li>
+<ul>
+<li><a href="#2-1-deterministic-simulation-testing-foundationdb-tigerbeetle">2.1 Deterministic simulation testing (FoundationDB, TigerBeetle)</a></li>
+<li><a href="#2-2-linearizability-checking-porcupine-and-the-jepsen-elle-approach">2.2 Linearizability checking: Porcupine and the Jepsen/Elle approach</a></li>
+<li><a href="#2-3-lightweight-formal-modelling-is-tla-worth-it-here">2.3 Lightweight formal modelling: is TLA+ worth it here?</a></li>
+</ul>
+<li><a href="#3-coverage-mechanics">3. Coverage mechanics</a></li>
+<ul>
+<li><a href="#3-1-the-basic-profile-coverprofile-and-coverpkg">3.1 The basic profile: -coverprofile and -coverpkg</a></li>
+<li><a href="#3-2-integration-coverage-via-gocoverdir-go-1-20">3.2 Integration coverage via GOCOVERDIR (Go 1.20+)</a></li>
+<li><a href="#3-3-excluding-generated-code">3.3 Excluding generated code</a></li>
+<li><a href="#3-4-what-legitimately-cannot-be-covered-and-keeping-the-number-honest">3.4 What legitimately cannot be covered, and keeping the number honest</a></li>
+</ul>
+<li><a href="#4-integration-infrastructure">4. Integration infrastructure</a></li>
+<ul>
+<li><a href="#4-1-testcontainers-go-vs-a-hand-written-docker-compose-file-an-honest-comparison">4.1 testcontainers-go vs a hand-written Docker Compose file — an honest comparison</a></li>
+<li><a href="#4-2-fixed-ports-and-readiness-in-docker-compose-yml">4.2 Fixed ports and readiness in docker-compose.yml</a></li>
+<li><a href="#4-3-one-suite-every-backend-a-table-of-factories">4.3 One suite, every backend: a table of factories</a></li>
+<li><a href="#4-4-keeping-integration-tests-off-the-default-go-test-path">4.4 Keeping integration tests off the default go test ./... path</a></li>
+</ul>
+<li><a href="#5-ci-pipeline-design-github-actions">5. CI pipeline design (GitHub Actions)</a></li>
+<ul>
+<li><a href="#5-1-matrix-over-go-versions-and-backends">5.1 Matrix over Go versions and backends</a></li>
+<li><a href="#5-2-service-containers-vs-compose-in-ci">5.2 Service containers vs Compose in CI</a></li>
+<li><a href="#5-3-caching">5.3 Caching</a></li>
+<li><a href="#5-4-golangci-lint-in-ci">5.4 golangci-lint in CI</a></li>
+<li><a href="#5-5-benchmark-regression-tracking">5.5 Benchmark regression tracking</a></li>
+<li><a href="#5-6-coverage-thresholds-and-required-status-checks">5.6 Coverage thresholds and required status checks</a></li>
+</ul>
+<li><a href="#6-strict-linting-a-concrete-golangci-lint-v2-configuration">6. Strict linting: a concrete golangci-lint v2 configuration</a></li>
+<ul>
+<li><a href="#6-1-deliberately-not-enabled-and-why">6.1 Deliberately not enabled, and why</a></li>
+<li><a href="#6-2-the-v2-migration-point-restated-precisely">6.2 The v2 migration point, restated precisely</a></li>
+</ul>
+<li><a href="#recommendations-for-dag-worker-go">Recommendations for dag-worker-go</a></li>
+<li><a href="#open-questions">Open questions</a></li>
+<li><a href="#sources">Sources</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="testing-verification-and-ci-for-a-concurrent-go-dag-scheduler">Testing, Verification, and CI for a Concurrent Go DAG Scheduler<a class="anchor" href="#testing-verification-and-ci-for-a-concurrent-go-dag-scheduler" aria-label="Link to this section">#</a></h1>
+<p>Scope: how to get real concurrency confidence — not just a coverage number — for a library
+that leases DAG nodes to external workers across multiple pluggable storage backends and
+multiple concurrent process instances. Ordered: (1) Go test tooling mechanics and gotchas,
+(2) correctness verification beyond unit tests, (3) coverage mechanics, (4) integration
+infrastructure, (5) CI pipeline design, (6) strict linting configuration.</p>
+<hr>
+<h2 id="1-go-test-tooling-mechanics-and-gotchas">1. Go test tooling: mechanics and gotchas<a class="anchor" href="#1-go-test-tooling-mechanics-and-gotchas" aria-label="Link to this section">#</a></h2>
+<h3 id="1-1-t-parallel-and-the-loop-variable-trap">1.1 <code>t.Parallel()</code> and the loop-variable trap<a class="anchor" href="#1-1-t-parallel-and-the-loop-variable-trap" aria-label="Link to this section">#</a></h3>
+<p><code>t.Parallel()</code> signals that a test should run concurrently with (and only with) other
+parallel tests in the same parent; the parent test function returns immediately after all
+its <code>t.Parallel()</code> subtests have been started, and those subtests then run concurrently
+against each other once the parent and its siblings finish their own sequential bodies.
+This has three concrete gotchas that matter for a project betting hard on parallel test
+suites:</p>
+<p><strong>1. Pre-1.22 loop-variable capture.</strong> Before Go 1.22, a <code>for</code> loop declared one variable
+per loop, reused every iteration. Capturing it in a closure handed to <code>t.Run</code> + <code>t.Parallel</code>
+without rebinding meant every subtest goroutine could observe the <em>final</em> loop value once
+the outer loop returned:</p>
+<pre><code class="language-go"><span class="tok-com">// BROKEN prior to Go 1.22</span>
+<span class="tok-kw">for</span> _, tc := <span class="tok-kw">range</span> cases {
+    t.Run(tc.name, <span class="tok-kw">func</span>(t *testing.T) {
+        t.Parallel()          <span class="tok-com">// outer loop has already advanced by the time this runs</span>
+        checkNode(t, tc.node) <span class="tok-com">// tc may be the last case's value for every subtest</span>
+    })
+}</code></pre>
+<p>The fix before 1.22 was the well-known <code>tc := tc</code> rebind inside the loop body before the
+closure. <strong>Go 1.22 changed loop semantics so each iteration gets its own copy of the loop
+variable</strong>, which "naturally prevents the common bug where all goroutines reference the
+same loop variable" — the shadowing idiom becomes unnecessary from 1.22 onward, but any
+module whose <code>go.mod</code> still pins <code>go 1.21</code> or lower does not get the new semantics even on
+a newer toolchain, so the version pin in <code>go.mod</code> (not just the installed <code>go</code> binary)
+is what gates this fix — <a href="https://go.dev/doc/go1.22" rel="noopener noreferrer">Go 1.22 release notes</a>. Since this
+project targets O(1)/O(log n) hot paths and heavy <code>t.Parallel()</code> use, <strong>pin <code>go 1.22</code> or
+later in <code>go.mod</code></strong> and do not rely on the shadow idiom as a safety net for anything written
+against a floor below that.</p>
+<p><strong>2. <code>t.Cleanup</code> ordering.</strong> <code>Cleanup</code> "registers a function to be called when the test (or
+subtest) and all its subtests complete. Cleanup functions will be called in last added,
+first called order" (LIFO) — <a href="https://pkg.go.dev/testing#T.Cleanup" rel="noopener noreferrer"><code>pkg.go.dev/testing</code></a>.
+For a DAG-store test this matters concretely: if a test opens a Redis client, then opens a
+transaction/lease on top of it, cleanups must be registered lease-close <em>then</em>
+client-close, in that order, so that LIFO unwinds the lease first — registering them in
+the wrong order deadlocks or leaks under <code>-race</code> when the client is torn down before the
+lease that depends on it. <code>Cleanup</code> runs even when the test fails or calls <code>t.Fatal</code>,
+which is precisely why storage backend tests should prefer it over bare <code>defer</code> for
+resource teardown that must survive assertion failures.</p>
+<p><strong>3. <code>t.Setenv</code> is incompatible with <code>t.Parallel()</code>.</strong> "Because Setenv affects the whole
+process, it cannot be used in parallel tests or tests with parallel ancestors" —
+<a href="https://pkg.go.dev/testing#T.Setenv" rel="noopener noreferrer"><code>pkg.go.dev/testing</code></a>. Calling <code>t.Setenv</code> in a test
+that also calls (or whose parent called) <code>t.Parallel()</code> fails the test immediately. For
+this project the practical corollary: never gate backend selection (<code>DAG_STORAGE_BACKEND</code>,
+Redis/Postgres DSNs) with <code>t.Setenv</code> inside a parallel table-driven suite — pass
+configuration as explicit function/struct parameters into the backend-factory table
+(§4.3) instead of environment mutation, which also sidesteps the whole class of "who
+resets the env var" ordering bugs between sibling parallel tests.</p>
+<p><strong>4. Interaction with <code>TestMain</code>.</strong> Package-level parallel tests are still gated by
+<code>GOMAXPROCS</code> and the <code>-parallel</code> flag (default: matches <code>-cpu</code>, itself defaulting to
+<code>GOMAXPROCS</code>); pool-per-test setups (spinning up N in-memory stores per subtest) should
+size worker pools relative to <code>runtime.GOMAXPROCS(0)</code>, not a hardcoded constant, or CI
+runners with 2 vCPUs will serialize what the test author assumed was parallel.</p>
+<h3 id="1-2-race-what-it-proves-and-what-it-costs">1.2 <code>-race</code>: what it proves and what it costs<a class="anchor" href="#1-2-race-what-it-proves-and-what-it-costs" aria-label="Link to this section">#</a></h3>
+<p>The race detector instruments memory accesses and flags concurrent unsynchronized
+access where at least one is a write. Two properties matter for how much to trust it:</p>
+<ul>
+<li><strong>It only reports races that actually execute.</strong> Per the official docs: "the race
+detector only finds races that happen at runtime, so it can't find races in code paths
+that are not executed" —
+<a href="https://go.dev/doc/articles/race_detector" rel="noopener noreferrer">Go race detector article</a>. A race-free
+<code>-race</code> run over a suite with 60% coverage says nothing about the other 40%. This is
+the single strongest argument in this whole dossier for <strong>combining <code>-race</code> with high
+coverage and with <code>-shuffle</code>/<code>-count</code> (below) rather than treating a green <code>-race</code> run
+as a correctness certificate</strong> — it is a <em>lower bound</em> on bugs found, not an upper bound
+on bugs present.</li>
+<li><strong>Overhead is real but bounded and known</strong>: memory usage rises 5–10x and CPU time
+2–20x depending on the program, requires cgo (a C compiler on non-Darwin platforms),
+and needs 8 extra bytes per <code>defer</code>/<code>recover</code> on the calling goroutine that are not
+reclaimed until the goroutine exits — meaning long-lived worker-pool goroutines that
+<code>defer</code>/<code>recover</code> in a tight per-task loop can leak memory under <code>-race</code> in ways that
+won't show up in <code>runtime.ReadMemStats</code> — <a href="https://go.dev/doc/articles/race_detector" rel="noopener noreferrer">same article</a>.
+For this project's target of a 1,000,000-node benchmark, run the <em>functional</em>
+concurrency suite under <code>-race</code> on every push, but keep the 1M-node performance
+benchmarks <strong>out</strong> of the race build (§5) — the slowdown and memory multiplier would
+make them either too slow to run in CI or misleading as performance numbers.</li>
+<li>Supported platforms are limited to <code>darwin/{amd64,arm64}</code>, <code>freebsd/amd64</code>,
+<code>linux/{amd64,arm64(48-bit VMA),ppc64le,riscv64}</code>, <code>windows/amd64</code> — plan the CI matrix
+(§5) around this; there is no race detector for <code>linux/386</code> or 32-bit ARM, so those
+targets (if ever supported) get concurrency confidence only from the other layers below.</li>
+</ul>
+<h3 id="1-3-shuffle-for-order-dependence-bugs">1.3 <code>-shuffle</code> for order-dependence bugs<a class="anchor" href="#1-3-shuffle-for-order-dependence-bugs" aria-label="Link to this section">#</a></h3>
+<p><code>go test -shuffle=on</code> (Go 1.17+) randomizes the order tests and subtests within a package
+run, and <code>-shuffle=N</code> reproduces a specific ordering by seed; when <code>-shuffle=on</code> is used
+without an explicit seed the tool prints the seed it picked so a failing run can be
+replayed exactly. For a DAG library where tests share an in-memory store singleton or a
+package-level scope registry, <code>-shuffle=on</code> is the cheapest way to catch <strong>tests that
+silently depend on execution order</strong> — e.g., a "scope created implicitly on first use"
+test that only passes because an earlier test already created that scope. Run it in a
+dedicated CI job (not by default locally, to keep default runs deterministic for
+bisecting) and log the seed on every CI run so a flake is reproducible from the log alone.</p>
+<h3 id="1-4-count-for-flake-detection">1.4 <code>-count</code> for flake detection<a class="anchor" href="#1-4-count-for-flake-detection" aria-label="Link to this section">#</a></h3>
+<p><code>-count=N</code> reruns the test binary's tests N times without using the test cache;
+<code>-count=1</code> is "the idiomatic way to disable test caching explicitly" —
+<a href="https://pkg.go.dev/cmd/go" rel="noopener noreferrer"><code>pkg.go.dev/cmd/go</code></a>. For flake-hunting, <code>-count=50</code> (or more)
+combined with <code>-race -shuffle=on</code> on a specific package under suspicion is the standard
+Go idiom for turning a "sometimes fails in CI" report into a locally reproducible
+failure; this is also exactly the technique <code>benchstat</code> expects for benchmarks — see
+§5.5 — where <code>-count=10</code> is the documented floor for statistically meaningful
+before/after comparisons. Bake a <code>make flaky-check PKG=./storage/redis COUNT=200</code> target
+into the repo up front; do not build this workflow only after the first CI flake report.</p>
+<h3 id="1-5-testing-synctest-deterministic-virtual-time-ga-in-go-1-25">1.5 <code>testing/synctest</code>: deterministic virtual time (GA in Go 1.25)<a class="anchor" href="#1-5-testing-synctest-deterministic-virtual-time-ga-in-go-1-25" aria-label="Link to this section">#</a></h3>
+<p><code>testing/synctest</code> graduated from experimental (<code>GOEXPERIMENT=synctest</code> under Go 1.24) to
+general availability in Go 1.25; the old experimental API is still reachable under the
+flag through Go 1.25 but is removed in Go 1.26 —
+<a href="https://go.dev/doc/go1.25" rel="noopener noreferrer">Go 1.25 release notes</a>. This is the single most relevant new
+piece of stdlib tooling for the per-node lease-timeout requirement in this project's
+brief.</p>
+<p><strong>Mechanics</strong>, from the <a href="https://pkg.go.dev/testing/synctest" rel="noopener noreferrer"><code>testing/synctest</code> package docs</a>:</p>
+<ul>
+<li><code>synctest.Test(t, f)</code> runs <code>f</code> inside an isolated <strong>"bubble"</strong>: a group of goroutines
+whose <code>time</code> package calls are redirected to a fake clock private to that bubble. The
+bubble's clock starts at midnight UTC on 2000-01-01 and only advances when <strong>every
+goroutine in the bubble is "durably blocked"</strong> — meaning blocked in a way only another
+goroutine in the same bubble can unblock (channel send/receive on a bubble-created
+channel, <code>sync.Cond.Wait</code>, <code>sync.WaitGroup.Wait</code> after an in-bubble <code>Add</code>, <code>time.Sleep</code>).
+Network I/O, syscalls, and plain mutex contention do <strong>not</strong> count as durable blocking —
+a goroutine parked on a real socket read will simply never let the bubble's clock move,
+which matters if the lease-timeout code path also does I/O inside the timed section.</li>
+<li><code>synctest.Wait()</code> blocks the calling goroutine until every <em>other</em> goroutine in the
+bubble is durably blocked — the tool for asserting "the scheduler has settled" before
+making assertions.</li>
+<li><code>synctest.Sleep(d)</code> is <code>time.Sleep(d)</code> immediately followed by <code>Wait()</code> — sleep the
+virtual clock forward <em>and</em> wait for the rest of the bubble to react to it, which is
+the idiom for "advance past this node's lease deadline and let the timeout-sweeper
+goroutine observe it."</li>
+<li>Restrictions: <code>Test</code> panics if called from inside an existing bubble; the <code>*testing.T</code>
+passed to the bubble body cannot call <code>T.Run</code>, <code>T.Parallel</code>, or <code>T.Deadline</code>; timers,
+tickers, and channels created inside a bubble panic if operated on from outside it, and
+a <code>sync.WaitGroup</code> becomes bound to whichever bubble first calls <code>Add</code>/<code>Go</code> on it.</li>
+</ul>
+<p><strong>Direct application to this project</strong>: the lease-timeout state machine ("worker did not
+ack within the per-node timeout → mark error-with-timeout") is exactly the kind of code
+<code>synctest</code> exists for. A real test shape:</p>
+<pre><code class="language-go"><span class="tok-kw">func</span> TestLeaseTimeout_MarksNodeErrorTimeout(t *testing.T) {
+    synctest.Test(t, <span class="tok-kw">func</span>(t *testing.T) {
+        store := newInMemoryStore()
+        sched := NewScheduler(store, WithDefaultLeaseTimeout(<span class="tok-num">30</span>*time.Second))
+
+        nodeID := mustEnqueueReadyNode(t, store)
+        lease, err := sched.Lease(context.Background(), WorkerID(<span class="tok-str">"w1"</span>))
+        <span class="tok-kw">if</span> err != <span class="tok-kw">nil</span> { t.Fatal(err) }
+        <span class="tok-kw">if</span> lease.NodeID != nodeID { t.Fatalf(<span class="tok-str">"got %v, want %v"</span>, lease.NodeID, nodeID) }
+
+        <span class="tok-com">// Advance the bubble's virtual clock exactly past the lease deadline and let</span>
+        <span class="tok-com">// the internal timeout-sweeper (a goroutine started by NewScheduler) react.</span>
+        synctest.Sleep(<span class="tok-num">31</span> * time.Second)
+
+        status, err := store.NodeStatus(context.Background(), nodeID)
+        <span class="tok-kw">if</span> err != <span class="tok-kw">nil</span> { t.Fatal(err) }
+        <span class="tok-kw">if</span> status != StatusErrorTimeout {
+            t.Fatalf(<span class="tok-str">"status = %v, want StatusErrorTimeout"</span>, status)
+        }
+    })
+}</code></pre>
+<p>This runs in microseconds of wall-clock time regardless of the configured timeout, is
+100% deterministic (no <code>time.Sleep(31*time.Second)</code> racing a background goroutine's
+polling interval), and — critically — <strong>only works if the scheduler's internal
+sweeper goroutine is started from inside the bubble</strong> (e.g. inside <code>NewScheduler</code> called
+within the <code>synctest.Test</code> closure) and uses <code>time.Now</code>/<code>time.After</code>/<code>context.WithTimeout</code>
+rather than a hand-rolled ticker sourced from <code>runtime.nanotime</code> or an externally-injected
+non-<code>time</code>-package clock. <strong>This is an architectural constraint worth writing into the
+ADR now</strong>: the internal scheduler must do all its timing exclusively through the stdlib
+<code>time</code> package (or a thin wrapper over it) precisely so that wrapping the whole component
+under test in <code>synctest.Test</code> is sufficient — no separate hand-rolled fake-clock
+abstraction is needed for the timeout logic, which is a meaningful simplification over
+what pre-1.25 Go projects had to build by hand.</p>
+<h3 id="1-6-fuzzing-graph-mutation-sequences">1.6 Fuzzing graph mutation sequences<a class="anchor" href="#1-6-fuzzing-graph-mutation-sequences" aria-label="Link to this section">#</a></h3>
+<p><code>go test -fuzz=FuzzX</code> (native since Go 1.18) mutates byte-level inputs against a corpus
+seeded by <code>f.Add()</code> calls and files under <code>testdata/fuzz/{FuzzTestName}/</code>; supported
+argument types are limited to <code>string</code>, <code>[]byte</code>, the integer/float families, and <code>bool</code>
+— <a href="https://go.dev/security/fuzz/" rel="noopener noreferrer"><code>go.dev/security/fuzz</code></a>. A DAG mutation sequence is not
+naturally one of those types, so the standard pattern is <strong>encode a sequence of graph
+operations as a byte string and decode it inside the fuzz target</strong>:</p>
+<pre><code class="language-go"><span class="tok-kw">type</span> opKind <span class="tok-kw">byte</span>
+
+<span class="tok-kw">const</span> (
+    opAddNode opKind = <span class="tok-kw">iota</span>
+    opAddEdge
+    opRemoveNode
+    opComplete
+    opFail
+)
+
+<span class="tok-kw">func</span> FuzzDAGMutationsPreserveAcyclicity(f *testing.F) {
+    f.Add([]<span class="tok-kw">byte</span>{<span class="tok-kw">byte</span>(opAddNode), <span class="tok-num">1</span>, <span class="tok-kw">byte</span>(opAddNode), <span class="tok-num">2</span>, <span class="tok-kw">byte</span>(opAddEdge), <span class="tok-num">1</span>, <span class="tok-num">2</span>})
+    f.Fuzz(<span class="tok-kw">func</span>(t *testing.T, raw []<span class="tok-kw">byte</span>) {
+        g := newGraph()
+        <span class="tok-kw">for</span> ops := decodeOps(raw); <span class="tok-kw">len</span>(ops) &gt; <span class="tok-num">0</span>; ops = ops[<span class="tok-num">1</span>:] {
+            <span class="tok-kw">switch</span> ops[<span class="tok-num">0</span>].kind {
+            <span class="tok-kw">case</span> opAddNode:
+                g.AddNode(ops[<span class="tok-num">0</span>].id)
+            <span class="tok-kw">case</span> opAddEdge:
+                <span class="tok-com">// AddEdge must reject anything that would introduce a cycle;</span>
+                <span class="tok-com">// it must never leave the graph in a state with a cycle.</span>
+                _ = g.AddEdge(ops[<span class="tok-num">0</span>].from, ops[<span class="tok-num">0</span>].to)
+            <span class="tok-kw">case</span> opRemoveNode:
+                g.RemoveNode(ops[<span class="tok-num">0</span>].id)
+            }
+            <span class="tok-kw">if</span> g.HasCycle() {
+                t.Fatalf(<span class="tok-str">"cycle introduced by op sequence: %v"</span>, ops)
+            }
+        }
+    })
+}</code></pre>
+<p><code>decodeOps</code> must be <strong>total</strong> (never panic on garbage bytes — return an empty/truncated
+op list instead), because the fuzzer will throw arbitrary byte garbage at it and a panic
+inside decoding, rather than inside the graph logic, produces false-positive crash
+reports that waste triage time. Keep the fuzz target itself allocation-light and free of
+global state per the docs' requirement that targets be "fast, deterministic, and
+state-free" to run safely in parallel. In CI, run <code>go test -run=FuzzDAGMutations...</code>
+<strong>without</strong> <code>-fuzz</code> so the seed corpus replays as ordinary regression tests on every push
+(cheap, deterministic); run the actual fuzzer (<code>-fuzz=... -fuzztime=5m</code>) as a separate,
+scheduled (nightly/weekly) job, and commit any crasher it finds under
+<code>testdata/fuzz/...</code> so it becomes a permanent regression test — this is the officially
+recommended split, since "fuzzing won't report any issues that would already be caught
+by an existing test."</p>
+<h3 id="1-7-property-based-testing-pgregory-net-rapid-vs-leanovate-gopter">1.7 Property-based testing: <code>pgregory.net/rapid</code> vs <code>leanovate/gopter</code><a class="anchor" href="#1-7-property-based-testing-pgregory-net-rapid-vs-leanovate-gopter" aria-label="Link to this section">#</a></h3>
+<p>Both give you generators + shrinking; the meaningful difference for a <strong>stateful DAG
+scheduler</strong> is the model-based testing API.</p>
+<p><strong><code>pgregory.net/rapid</code></strong> — <a href="https://pkg.go.dev/pgregory.net/rapid" rel="noopener noreferrer"><code>pkg.go.dev/pgregory.net/rapid</code></a>:
+values are drawn with <code>rapid.IntRange(min, max).Draw(t, "label")</code>-style calls directly
+against generators (<code>Int</code>, <code>SliceOf</code>, <code>MapOf</code>, <code>StringOf</code>, <code>OneOf</code>, <code>Custom</code>, <code>Make[V]()</code>
+for reflection-based generation, <code>Filter</code>), integrates directly with <code>*testing.T</code> via
+<code>rapid.Check(t, prop)</code>, and — the piece that matters here — <strong><code>t.Repeat</code> implements
+stateful/model-based testing directly</strong>:</p>
+<pre><code class="language-go"><span class="tok-kw">func</span> TestSchedulerStateMachine(t *testing.T) {
+    rapid.Check(t, <span class="tok-kw">func</span>(t *rapid.T) {
+        real := NewScheduler(newInMemoryStore(), WithDefaultLeaseTimeout(time.Minute))
+        model := newReferenceModel() <span class="tok-com">// trivial in-memory map-based reimplementation</span>
+
+        t.Repeat(<span class="tok-kw">map</span>[<span class="tok-kw">string</span>]<span class="tok-kw">func</span>(*rapid.T){
+            <span class="tok-str">"addNode"</span>: <span class="tok-kw">func</span>(t *rapid.T) {
+                id := rapid.StringMatching(<span class="tok-str">`[a-z]{3,8}`</span>).Draw(t, <span class="tok-str">"id"</span>)
+                deps := rapid.SliceOfN(rapid.SampledFrom(model.NodeIDs()), <span class="tok-num">0</span>, <span class="tok-num">3</span>).Draw(t, <span class="tok-str">"deps"</span>)
+                realErr := real.AddNode(id, deps)
+                modelErr := model.AddNode(id, deps)
+                <span class="tok-kw">if</span> (realErr == <span class="tok-kw">nil</span>) != (modelErr == <span class="tok-kw">nil</span>) {
+                    t.Fatalf(<span class="tok-str">"AddNode divergence: real=%v model=%v"</span>, realErr, modelErr)
+                }
+            },
+            <span class="tok-str">"lease"</span>: <span class="tok-kw">func</span>(t *rapid.T) {
+                l, err := real.TryLease(rapid.StringMatching(<span class="tok-str">`w[0-9]`</span>).Draw(t, <span class="tok-str">"worker"</span>))
+                model.RecordLease(l, err)
+            },
+            <span class="tok-str">""</span>: <span class="tok-kw">func</span>(t *rapid.T) { <span class="tok-com">// invariant check, runs before/after every action</span>
+                <span class="tok-kw">if</span> !real.InFlightSet().IsAntichain(real.Graph()) {
+                    t.Fatal(<span class="tok-str">"in-flight set is not an antichain"</span>)
+                }
+            },
+        })
+    })
+}</code></pre>
+<p>The empty-string key in <code>t.Repeat</code>'s map is the documented hook for invariant checks that
+run around every action — exactly the shape needed for "check the antichain property
+after every mutation" without hand-rolling the plumbing.</p>
+<p><strong><code>leanovate/gopter</code></strong> — <a href="https://github.com/leanovate/gopter" rel="noopener noreferrer"><code>github.com/leanovate/gopter</code></a>:
+older (ScalaCheck-lineage), ships a separate <code>commands</code> package for model-based/stateful
+testing where you define a <code>Commands</code> interface (<code>NewSystemUnderTest</code>,
+<code>InitialState</code>, plus a set of <code>Command</code>s each with <code>Run</code>/<code>NextState</code>/<code>PreCondition</code>/
+<code>PostCondition</code>) that the framework then sequences and shrinks — more ceremony than
+rapid's <code>t.Repeat</code>, but the explicit <code>PreCondition</code>/<code>PostCondition</code> separation can be
+clearer for larger command sets. <strong>Recommendation: <code>pgregory.net/rapid</code>.</strong> It is
+actively maintained, integrates natively with <code>*testing.T</code> (no separate runner, so it
+composes with <code>-run</code>, <code>-race</code>, and coverage instrumentation for free), and its
+<code>t.Repeat</code> model matches this project's need almost exactly. Reserve <code>gopter</code> only if a
+contributor already has a large investment in gopter-style commands elsewhere.</p>
+<p><strong>Concrete properties to encode for this scheduler</strong> (each maps to a <code>t.Repeat</code> action
+set + the empty-string invariant hook above):</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Property</th><th>How to check it in the invariant hook</th></tr></thead>
+<tbody>
+<tr><td>No node is ever leased twice concurrently</td><td>Maintain a <code>map[NodeID]WorkerID</code> of currently-out leases in the <em>test</em> (not the model), updated on every successful <code>Lease</code>/<code>Ack</code>; fail if a <code>Lease</code> call returns a node already present in that map.</td></tr>
+<tr><td>Every node whose predecessors all succeeded eventually becomes ready</td><td>After each batch of actions, if a node's <code>PredecessorsSucceeded()</code> holds true (checked against the model graph) and it isn't already terminal, assert it is either <code>Ready</code> now or reachable to <code>Ready</code> within the next <code>N</code> reference-model ticks — this is a liveness property, so bound it: assert it holds after quiescence (<code>synctest.Wait()</code>-style settling), not at arbitrary interleavings.</td></tr>
+<tr><td>The in-flight set is always an antichain of the unfinished subgraph</td><td>After every action, compute <code>InFlightSet()</code>; for every pair <code>(a,b)</code> in it, assert neither is a (transitive) predecessor of the other in the current graph. This directly encodes "no node is being worked on while something it depends on, or that depends on it, is also being worked on" — cheap to check with a precomputed reachability index (§ topology reasoning belongs in the graph-algorithms dossier, not here) but here it's simply an O(k²) pairwise check over the small in-flight set <code>k</code>, which is fine inside a test.</td></tr>
+<tr><td>Acyclicity is preserved under any interleaving of inserts</td><td>Run <code>AddEdge</code>/<code>AddNode</code>/<code>RemoveNode</code> actions in random order (rapid picks the order) and assert <code>HasCycle() == false</code> after every single mutation, not just at the end — a property test that only checks the final state can miss a transient cycle that a concurrent reader could have observed mid-mutation; if edges are added non-atomically (e.g., "check no cycle" then "insert edge" as two separate store calls) that gap is exactly the TOCTOU bug this property is designed to surface once the test is extended to interleave two goroutines each running a <code>t.Repeat</code> action stream against the <em>same</em> store (see §2.1 below for making that interleaving deterministic rather than best-effort).</td></tr>
+</tbody></table></div>
+<hr>
+<h2 id="2-correctness-verification-beyond-unit-tests">2. Correctness verification beyond unit tests<a class="anchor" href="#2-correctness-verification-beyond-unit-tests" aria-label="Link to this section">#</a></h2>
+<p>Property tests catch violations of properties you thought to state, against
+interleavings the Go scheduler happens to produce on your laptop. Neither of those is
+enough for a system whose entire value proposition is "correct under concurrent access
+from multiple processes against shared storage." Three techniques go further.</p>
+<h3 id="2-1-deterministic-simulation-testing-foundationdb-tigerbeetle">2.1 Deterministic simulation testing (FoundationDB, TigerBeetle)<a class="anchor" href="#2-1-deterministic-simulation-testing-foundationdb-tigerbeetle" aria-label="Link to this section">#</a></h3>
+<p><strong>FoundationDB's approach.</strong> FoundationDB runs "a deterministic simulation of an entire
+FoundationDB cluster within a single-threaded process," modeling machines, disks (including
+the possibility of a disk filling up), and the network, and then deliberately injecting
+"failure modes at the network, machine, and datacenter levels, including connection
+failures, degradation of machine performance, machine shutdowns or reboots" — running
+simulated time at roughly "a 10-1 factor of real-to-simulated time" and, over the
+company's history, accumulating what the team estimates as "the equivalent of roughly
+one trillion CPU-hours of simulation" —
+<a href="https://apple.github.io/foundationdb/testing.html" rel="noopener noreferrer">Apple's FoundationDB testing docs</a>.
+Will Wilson's talk "Testing Distributed Systems w/ Deterministic Simulation" is the
+canonical narrative source for <em>why</em> this works and <em>how much</em> it paid off: per a
+detailed write-up of the talk, "In the entire history of the company, I think we only
+ever had one or two bugs reported by a customer. Ever," and Jepsen's Kyle Kingsbury
+reportedly declined to run his usual test suite against FoundationDB because he expected
+it to turn up nothing — <a href="https://notes.eatonphil.com/2024-08-20-deterministic-simulation-testing.html" rel="noopener noreferrer">Phil Eaton's DST write-up</a>.
+The mechanism: FoundationDB's actor-model language (Flow) compiles cooperative
+coroutines that only ever yield at well-defined points, all scheduled by one single
+thread, so a seeded PRNG fully determines execution order, timer firing order, and fault
+injection (their <code>BUGGIFY</code> macro randomly flips designated fault-injection points on/off
+per run, weighted by the seed). Wilson's own emphasis, per that write-up: the DST
+<em>harness</em> is only the enabling infrastructure — "the vast majority of the work" is the
+ongoing, iterative tuning of distributions, workloads, and fault-injection points to keep
+discovering untested corners of the state space; a DST harness that never gets refined
+after the initial build under-delivers badly relative to its cost.</p>
+<p><strong>TigerBeetle's VOPR.</strong> TigerBeetle runs the same idea as a dedicated tool, described as
+"a simulated environment where an entire cluster, running real code, is subjected to all
+kinds of network, storage and process faults, at 1000x speed," running "24/7 on 1024
+cores, fuzzing the latest version of the database," with fault injection across network
+(latency/loss/partition), storage (corruption, latency, I/O failure), and process
+(crash/hang/timing) — <a href="https://docs.tigerbeetle.com/concepts/safety/" rel="noopener noreferrer">TigerBeetle safety docs</a>.
+It is even playable interactively at <code>sim.tigerbeetle.com</code>. TigerBeetle's engineering
+discipline (Zig, static allocation, "TigerStyle" borrowing from NASA's Power of Ten rules)
+exists specifically to keep the system's behavior simulation-friendly: no dynamic
+allocation failure modes to model, no hidden OS-thread nondeterminism to fight.</p>
+<p><strong>Why Go makes this structurally harder, and the honest options.</strong> The core requirement
+of DST is <em>single-threaded, cooperatively-scheduled execution driven by one seeded PRNG</em>
+— every source of nondeterminism (goroutine scheduling order, <code>map</code> iteration order,
+<code>time.Now</code>, <code>crypto/rand</code>, OS-level I/O timing) must be either eliminated or routed
+through that one seed. Go's runtime scheduler is preemptive and multi-threaded by
+default and gives you no supported hook to make it single-threaded and seed-driven. Per
+the same write-up, real-world attempts confirm this is not a solved problem in Go:
+Polar Signals compiled their application to WebAssembly (whose Go runtime target <em>is</em>
+single-threaded) to get single-threaded execution, then forked the Go runtime itself to
+control goroutine-scheduling randomness via an environment variable; the write-up
+characterizes the Resonate project's alternative approach as "also looks cumbersome."
+<strong>Recommendation for this project</strong>: full FoundationDB/TigerBeetle-grade DST (fork the
+runtime or compile to WASM) is disproportionate for a library, not a database kernel.
+Instead, build a <strong>narrower, honest approximation</strong> that captures 80% of the value at
+a fraction of the cost:</p>
+<ol>
+<li><strong>Inject every source of time and randomness.</strong> The scheduler's internal clock is
+<code>time.Now</code>/<code>time.After</code> exclusively (§1.5) — already required for <code>synctest</code>
+compatibility, and it is the same discipline DST needs. Inject a <code>*rand.Rand</code> (or
+<code>math/rand/v2</code>'s <code>rand.Rand</code>) seeded explicitly into anything that makes a
+load-balancing or retry-jitter decision — never call the global <code>rand</code> functions from
+library code.</li>
+<li><strong>Force single-goroutine execution of the scheduler's <em>decision</em> logic</strong> by running
+the core lease/complete/fail state transitions behind a single mutex or a single
+dedicated goroutine reading off a channel (an actor, in effect) — this is a
+correctness-oriented design choice, not just a testing one, and it is cheap because
+the actual I/O to storage backends can still be concurrent; only the in-memory
+decision-making needs to be serialized per scope. This single-actor design is what
+makes a deterministic <em>replay</em> test tractable: drive the actor's input channel from a
+test harness that itself is single-threaded and seeded, recording the sequence of
+injected events (worker A requests lease at logical-tick 3, worker B acks node X at
+logical-tick 4, ...) so a failing sequence can be replayed byte-for-byte.</li>
+<li><strong>Build a small in-process "chaos harness"</strong> around the in-memory backend
+specifically: a wrapper store that, given a seed, randomly injects latency, a
+transient error, or a torn write (return success but don't actually commit — modeling
+a backend crash mid-operation) on a configurable fraction of calls. This is a much
+smaller engineering lift than simulating a whole network stack and it directly targets
+the property this project's owner cares most about: multiple instances racing against
+shared storage. Wrap the <em>storage interface</em>, not the network — for the Redis/
+Postgres/Memcached backends, real fault injection has to happen at the integration
+level (toxiproxy, or killing the container mid-test — see §4) since those clients own
+their own real I/O.</li>
+<li><strong>Log the seed on every failure and provide a <code>-seed</code> replay flag</strong> on the chaos
+harness's test entry point, mirroring <code>-shuffle</code>'s reproducibility contract (§1.3).</li>
+</ol>
+<p>This is explicitly <em>not</em> full DST — it will not catch a bug that only manifests through
+real OS thread-scheduling nondeterminism outside the actor — but it is a proportionate,
+buildable middle ground that directly exercises the properties in §1.7's table under
+adversarial timing, which a plain <code>-race</code>-clean property test does not.</p>
+<h3 id="2-2-linearizability-checking-porcupine-and-the-jepsen-elle-approach">2.2 Linearizability checking: Porcupine and the Jepsen/Elle approach<a class="anchor" href="#2-2-linearizability-checking-porcupine-and-the-jepsen-elle-approach" aria-label="Link to this section">#</a></h3>
+<p><strong>Porcupine</strong> — <a href="https://github.com/anishathalye/porcupine" rel="noopener noreferrer"><code>github.com/anishathalye/porcupine</code></a>
+— checks whether a recorded concurrent history of operations (each with a call time, a
+return time, an input, and an output) is consistent with <em>some</em> legal sequential
+ordering of those operations that respects real-time non-overlap constraints, i.e., is
+linearizable. It is a general-purpose Go library (not tied to any particular system) and
+documents itself as "1,000x–10,000x" faster than the earlier Knossos checker via a
+P-compositional algorithm. The API is exactly three pieces: <code>Init</code> (returns the initial
+model state), <code>Step(state, input, output) (bool, newState)</code> (the reference sequential
+semantics — "is this operation legal from this state, and what state does it produce"),
+and an optional <code>Hash</code> for faster state deduplication during the search. For this
+project's lease protocol, the model is small and mechanical to write:</p>
+<pre><code class="language-go"><span class="tok-kw">type</span> leaseModel <span class="tok-kw">struct</span> {
+    status <span class="tok-kw">map</span>[<span class="tok-kw">string</span>]<span class="tok-kw">string</span> <span class="tok-com">// nodeID -&gt; "new"|"leased"|"success"|"error"</span>
+    leasedBy <span class="tok-kw">map</span>[<span class="tok-kw">string</span>]<span class="tok-kw">string</span> <span class="tok-com">// nodeID -&gt; workerID, only present while leased</span>
+}
+
+<span class="tok-kw">type</span> leaseOp <span class="tok-kw">struct</span> {
+    kind  <span class="tok-kw">string</span> <span class="tok-com">// "lease", "ack-success", "ack-error", "timeout"</span>
+    node  <span class="tok-kw">string</span>
+    worker <span class="tok-kw">string</span>
+}
+
+<span class="tok-kw">var</span> LeaseModel = porcupine.Model{
+    Init: <span class="tok-kw">func</span>() <span class="tok-kw">interface</span>{} {
+        <span class="tok-kw">return</span> leaseModel{status: <span class="tok-kw">map</span>[<span class="tok-kw">string</span>]<span class="tok-kw">string</span>{}, leasedBy: <span class="tok-kw">map</span>[<span class="tok-kw">string</span>]<span class="tok-kw">string</span>{}}
+    },
+    Step: <span class="tok-kw">func</span>(state, input, output <span class="tok-kw">interface</span>{}) (<span class="tok-kw">bool</span>, <span class="tok-kw">interface</span>{}) {
+        st := state.(leaseModel).clone()
+        op := input.(leaseOp)
+        <span class="tok-kw">switch</span> op.kind {
+        <span class="tok-kw">case</span> <span class="tok-str">"lease"</span>:
+            <span class="tok-kw">if</span> st.status[op.node] != <span class="tok-str">"new"</span> { <span class="tok-kw">return</span> <span class="tok-kw">false</span>, st } <span class="tok-com">// illegal: double lease</span>
+            st.status[op.node] = <span class="tok-str">"leased"</span>
+            st.leasedBy[op.node] = op.worker
+        <span class="tok-kw">case</span> <span class="tok-str">"ack-success"</span>:
+            <span class="tok-kw">if</span> st.status[op.node] != <span class="tok-str">"leased"</span> || st.leasedBy[op.node] != op.worker {
+                <span class="tok-kw">return</span> <span class="tok-kw">false</span>, st <span class="tok-com">// illegal: acking a lease you don't hold</span>
+            }
+            st.status[op.node] = <span class="tok-str">"success"</span>
+        <span class="tok-com">// ... ack-error, timeout similarly</span>
+        }
+        <span class="tok-kw">return</span> <span class="tok-kw">true</span>, st
+    },
+}</code></pre>
+<p>Recording the history is the harder half in practice: every call to the scheduler's
+public API from every goroutine (and, for the multi-instance case, every process) must
+be timestamped at call and at return and serialized into Porcupine's <code>porcupine.Event</code>
+format (<code>porcupine.CheckEvents(model, events)</code>), which means the test harness needs a
+shared, monotonic, cross-process clock — for a single-process concurrency test that's
+just <code>time.Now()</code>; for a genuine multi-process test against shared Redis/Postgres it
+means either running all instances as goroutines in one test binary (simplest — gets you
+the property test on the <em>protocol</em>, not on network partitions between real processes)
+or accepting clock skew and widening the checker's tolerance, which Porcupine does not
+natively support — real cross-process linearizability testing at that level is Jepsen's
+territory, not Porcupine's.</p>
+<p><strong>Jepsen / Elle.</strong> Jepsen tests real, deployed clusters (not a model) by running a
+workload against a live system while injecting real faults (network partitions via
+<code>iptables</code>, process kills, clock skew) and then checking the resulting history for
+consistency violations; <strong>Elle</strong> (Jepsen's newer checker, distinguishing it from
+Knossos/Porcupine-style checkers) detects violations by looking for cycles in an
+inferred dependency graph over the history rather than doing exhaustive/branch-and-bound
+sequential-ordering search, which lets it scale to and diagnose weaker consistency
+models (snapshot isolation, causal consistency) that pure linearizability checkers
+aren't built for and gives it a documented advantage: when it finds a violation it can
+point at the specific cycle (a concrete "G2-item" or "G-single" anomaly) rather than
+just "not linearizable." Jepsen-style testing of this library is realistic and valuable
+specifically for the <strong>multi-instance-against-shared-storage</strong> requirement in the
+brief — spin up 2+ instances of the host program plus a real Redis/Postgres cluster in
+Docker, inject partitions with <code>pumba</code> or <code>toxiproxy</code>, and record+check the resulting
+lease history. This is heavier infrastructure than Porcupine and is realistically a
+<strong>post-1.0, backend-specific hardening project</strong> rather than a day-one CI gate; Porcupine
+against an in-process multi-goroutine harness is the right day-one investment because it
+is cheap, fast, and runs on every PR.</p>
+<h3 id="2-3-lightweight-formal-modelling-is-tla-worth-it-here">2.3 Lightweight formal modelling: is TLA+ worth it here?<a class="anchor" href="#2-3-lightweight-formal-modelling-is-tla-worth-it-here" aria-label="Link to this section">#</a></h3>
+<p><strong>Real opinion: yes, but scoped tightly to the lease state machine and the multi-instance
+lease-acquisition protocol — not the whole library.</strong> The case for formal methods on
+<em>exactly this slice</em> is strong and well-precedented: Amazon's engineers report using
+TLA+ specifically on DynamoDB-class replication and lease/lock protocols and found it
+caught "subtle bugs in complex concurrent systems" that were "hard to find by testing" —
+concurrency and timing-dependent errors in exactly the shape this project has (multiple
+racing actors, a timeout, an ack protocol) — and their guidance is to reach for formal
+methods for "high-criticality components" with "complex concurrency" where "the cost of
+failure is high and bugs are hard to find through testing," treating it as "a testing
+complement, not a replacement" — <a href="https://lamport.azurewebsites.net/tla/formal-methods-amazon.pdf" rel="noopener noreferrer">Newcombe et al., "How AWS Uses Formal Methods" (PDF via lamport.azurewebsites.net)</a>.
+Lamport's own framing is that TLA+'s core value is "eliminating fundamental design
+errors, which are hard to find and expensive to correct in code" —
+<a href="https://lamport.azurewebsites.net/tla/tla.html" rel="noopener noreferrer">Lamport's TLA+ home page</a> — i.e. it pays
+off most <em>before</em> the implementation exists, exactly the design stage this project is
+currently in.</p>
+<p>The case <em>against</em> going further (modelling the whole storage-abstraction layer, or
+every backend's specific transaction semantics in TLA+) is proportionality: this is an
+MIT-licensed library, not a payments ledger, and the team asking for it has not asked for
+a formal-methods practice — spending real calendar time getting fluent in TLA+ well
+enough to model, say, Postgres's actual isolation-level behavior faithfully would be
+weeks well spent on the wrong thing. The lease/ack/timeout state machine, by contrast, is
+small (four to six states), the interesting behavior is entirely about <em>interleaving</em>
+(exactly the class of bug testing is worst at and TLC's exhaustive model checking is
+best at), and a first spec is genuinely a one-to-two day exercise for someone who has
+done a little TLA+ before.</p>
+<p><strong>Sketch of the spec</strong> (illustrative skeleton, not exhaustive — the point is the shape):</p>
+<pre><code class="language-tla">---- MODULE LeaseProtocol ----
+EXTENDS Naturals, FiniteSets
+
+CONSTANTS Nodes, Workers, MaxTime
+
+VARIABLES
+    status,      \* [Nodes -&gt; {"new", "leased", "success", "error"}]
+    leaseOwner,  \* [Nodes -&gt; Workers \union {"none"}]
+    leaseDeadline, \* [Nodes -&gt; 0..MaxTime]
+    now          \* current logical time, 0..MaxTime
+
+TypeInvariant ==
+    /\ status \in [Nodes -&gt; {"new", "leased", "success", "error"}]
+    /\ leaseOwner \in [Nodes -&gt; Workers \union {"none"}]
+
+\* Safety property this whole exercise exists to check:
+NoDoubleLease ==
+    \A n \in Nodes :
+        status[n] = "leased" =&gt; leaseOwner[n] # "none"
+
+\* The property from the brief, stated as a TLA+ invariant:
+NeverLeasedTwiceConcurrently ==
+    \A n \in Nodes :
+        LET leasers == {w \in Workers : leaseOwner[n] = w} IN
+            Cardinality(leasers) &lt;= 1
+
+Lease(n, w) ==
+    /\ status[n] = "new"
+    /\ status' = [status EXCEPT ![n] = "leased"]
+    /\ leaseOwner' = [leaseOwner EXCEPT ![n] = w]
+    /\ leaseDeadline' = [leaseDeadline EXCEPT ![n] = now + 30]
+    /\ UNCHANGED now
+
+AckSuccess(n, w) ==
+    /\ status[n] = "leased"
+    /\ leaseOwner[n] = w
+    /\ status' = [status EXCEPT ![n] = "success"]
+    /\ UNCHANGED &lt;&lt;leaseOwner, leaseDeadline, now&gt;&gt;
+
+Timeout(n) ==
+    /\ status[n] = "leased"
+    /\ now &gt;= leaseDeadline[n]
+    /\ status' = [status EXCEPT ![n] = "error"]
+    /\ leaseOwner' = [leaseOwner EXCEPT ![n] = "none"]
+    /\ UNCHANGED &lt;&lt;leaseDeadline, now&gt;&gt;
+
+Tick ==
+    /\ now &lt; MaxTime
+    /\ now' = now + 1
+    /\ UNCHANGED &lt;&lt;status, leaseOwner, leaseDeadline&gt;&gt;
+
+Next ==
+    \/ \E n \in Nodes, w \in Workers : Lease(n, w)
+    \/ \E n \in Nodes, w \in Workers : AckSuccess(n, w)
+    \/ \E n \in Nodes : Timeout(n)
+    \/ Tick
+
+Spec == Init /\ [][Next]_&lt;&lt;status, leaseOwner, leaseDeadline, now&gt;&gt;
+
+THEOREM Spec =&gt; [](TypeInvariant /\ NeverLeasedTwiceConcurrently)
+====</code></pre>
+<p>Run this under TLC with <code>Nodes</code> and <code>Workers</code> bounded to small finite sets (e.g. 3 nodes,
+2 workers) — TLC's exhaustive state-space search will surface any interleaving that
+violates <code>NeverLeasedTwiceConcurrently</code>, including ones a human would never think to
+write as a unit test (e.g., a lease acquired at <code>now=T</code>, timed out and reassigned at
+<code>now=T+30</code>, and the <em>original</em> worker's stale ack arriving after reassignment — the
+classic "zombie worker" bug this exact spec shape is built to catch, once an <code>AckSuccess</code>
+guard for "was this the <em>current</em> lease owner" is added). Once the spec is trusted,
+<strong>the Go implementation is checked against it manually</strong> (TLA+ model checking does not
+verify Go source directly) — the payoff is a machine-checked confidence that the
+<em>protocol</em> has no double-lease interleaving, which then narrows unit/property testing to
+"does the code correctly implement this already-proven-safe protocol," a much easier
+question. Treat the TLA+ spec as a living design artifact under <code>docs/adr/</code>, not a
+one-off: update it whenever the lease state machine gains a state or transition, exactly
+the ADR-then-spec discipline already in this project's own working conventions.</p>
+<p><strong>P language, briefly</strong>: <a href="https://p-org.github.io/P/" rel="noopener noreferrer">P</a> (from the group that built the
+formal foundations later reflected in some AWS/Azure verification work) targets exactly
+"asynchronous event-driven systems" and — unlike TLA+ — can compile a P model down to
+executable C/Java code and generate systematic testing harnesses from the same spec. It
+is a heavier toolchain investment than TLA+ for a Go shop with zero existing P exposure
+and no polyglot compile target need; <strong>not recommended here</strong> — the payoff-to-onboarding-
+cost ratio favors TLA+ for a single, bounded state machine when nobody on the team has
+used either tool before.</p>
+<hr>
+<h2 id="3-coverage-mechanics">3. Coverage mechanics<a class="anchor" href="#3-coverage-mechanics" aria-label="Link to this section">#</a></h2>
+<h3 id="3-1-the-basic-profile-coverprofile-and-coverpkg">3.1 The basic profile: <code>-coverprofile</code> and <code>-coverpkg</code><a class="anchor" href="#3-1-the-basic-profile-coverprofile-and-coverpkg" aria-label="Link to this section">#</a></h3>
+<pre><code class="language-bash">go test -coverprofile=cover.out -covermode=atomic ./...
+go tool cover -func=cover.out   <span class="tok-com"># per-function %, plus a `total:` line</span>
+go tool cover -html=cover.out -o cover.html</code></pre>
+<p><code>-covermode</code> has three settings, all documented at
+<a href="https://pkg.go.dev/cmd/go" rel="noopener noreferrer"><code>pkg.go.dev/cmd/go</code></a>: <code>set</code> (did this statement run — a
+single boolean per statement, cheapest), <code>count</code> (how many times — an int counter, more
+information but not safe for racing goroutines to increment), and <code>atomic</code> (<code>count</code> but
+using atomic increments, "significantly more expensive" but correct when the same
+statement runs concurrently from multiple goroutines). <strong>Use <code>-covermode=atomic</code>
+unconditionally for this project</strong> — combining <code>go test -race -coverprofile</code> on a
+scheduler whose entire purpose is concurrent execution with the default <code>set</code> mode would
+under-count coverage of exactly the racy code paths that matter most, and the two flags
+are commonly combined anyway (the race build already pays a large overhead, so atomic's
+extra cost on top is comparatively small).</p>
+<p>By default, coverage is computed <strong>per package</strong> — a test in package <code>scheduler</code> only
+"sees" its own package's statements even if it drives code in package <code>storage</code> through
+a real call chain, unless <code>-coverpkg</code> is given. <code>-coverpkg=pattern,pattern,...</code> (or
+<code>-coverpkg=./...</code> for everything in the module) extends instrumentation to any package
+matching the given import-path patterns, which is essential here: an end-to-end test in
+<code>e2e_test</code> package that drives <code>scheduler</code> → <code>storage/redis</code> → real Redis should count
+toward <code>storage/redis</code>'s coverage number, not just <code>e2e_test</code>'s own (empty) statement
+count. <strong>Recommended default</strong>: <code>go test -coverpkg=./... -coverprofile=cover.out
+-covermode=atomic ./...</code> from the repo root, so cross-package call chains are credited
+to the packages that actually executed.</p>
+<h3 id="3-2-integration-coverage-via-gocoverdir-go-1-20">3.2 Integration coverage via <code>GOCOVERDIR</code> (Go 1.20+)<a class="anchor" href="#3-2-integration-coverage-via-gocoverdir-go-1-20" aria-label="Link to this section">#</a></h3>
+<p><code>go test -coverprofile</code> only instruments <em>test binaries</em>. A Docker-Compose-driven
+end-to-end suite that builds the host program as a real binary, starts it, and drives it
+over the network needs a different mechanism, introduced in Go 1.20 — instrument the
+<strong>production binary itself</strong>:</p>
+<pre><code class="language-bash">go build -cover -o dagworkerd -coverpkg=./... ./cmd/dagworkerd
+mkdir -p covdata
+GOCOVERDIR=covdata ./dagworkerd --config e2e.yaml &amp;
+<span class="tok-com"># ... run the actual end-to-end test suite against the running process, over the network ...</span>
+kill -TERM $!   <span class="tok-com"># graceful shutdown; coverage is flushed on normal os.Exit()/return from main,</span>
+                 <span class="tok-com"># NOT on a panic or SIGKILL — a killed-mid-test binary loses its coverage data</span></code></pre>
+<p>— <a href="https://go.dev/doc/build-cover" rel="noopener noreferrer"><code>go.dev/doc/build-cover</code></a>. This produces
+<code>covmeta.*</code>/<code>covcounters.*</code> files under <code>covdata/</code> for every run (multiple runs
+accumulate multiple counter files against the same meta file), which <code>go tool covdata</code>
+then processes:</p>
+<pre><code class="language-bash">go tool covdata percent -i=covdata                     <span class="tok-com"># quick %, per package</span>
+go tool covdata textfmt -i=covdata -o e2e.out           <span class="tok-com"># convert to go tool cover's legacy format</span>
+go tool covdata merge -i=unit_covdata,e2e_covdata -o combined_covdata   <span class="tok-com"># merge unit + e2e runs</span>
+go tool covdata percent -i=combined_covdata             <span class="tok-com"># the number that should gate CI</span></code></pre>
+<p>The critical operational detail from the docs: <strong>coverage is only written out on a clean
+exit</strong> — <code>os.Exit()</code> or a normal return from <code>main</code> — so the end-to-end test harness
+must send a graceful shutdown signal the binary handles (flushing <code>GOCOVERDIR</code> data)
+rather than <code>SIGKILL</code>ing the process, or an entire end-to-end run's coverage silently
+evaporates. For a service whose brief includes graceful timeout handling anyway, this is
+one more reason the shutdown path needs a real, tested code path rather than "the test
+harness just kills the process."</p>
+<h3 id="3-3-excluding-generated-code">3.3 Excluding generated code<a class="anchor" href="#3-3-excluding-generated-code" aria-label="Link to this section">#</a></h3>
+<p><code>go tool cover</code>/<code>covdata</code> has no first-class "exclude generated code" flag; the standard
+approach is a post-processing filter over the profile text. Generated files are
+conventionally marked with the <code>// Code generated ... DO NOT EDIT.</code> header (the exact
+convention <code>go generate</code>-based tools follow); filter them out of the merged profile
+before computing the percentage that gates CI:</p>
+<pre><code class="language-bash"><span class="tok-com"># Strip lines whose source file matches generated-code patterns before scoring.</span>
+grep -v -E <span class="tok-str">'(_mock\.go|_gen\.go|\.pb\.go):'</span> combined.out &gt; combined.filtered.out
+go tool cover -func=combined.filtered.out | tail -<span class="tok-num">1</span></code></pre>
+<p>A more robust variant scans the actual file headers rather than trusting filename
+conventions (<code>grep -l "^// Code generated .* DO NOT EDIT\.$"</code> across the tree, build an
+exclude-list, then filter the profile by that list) — filename-pattern matching is
+faster to write but silently stops working the day a generator changes its output
+filename convention.</p>
+<h3 id="3-4-what-legitimately-cannot-be-covered-and-keeping-the-number-honest">3.4 What legitimately cannot be covered, and keeping the number honest<a class="anchor" href="#3-4-what-legitimately-cannot-be-covered-and-keeping-the-number-honest" aria-label="Link to this section">#</a></h3>
+<p>Be explicit about these categories rather than padding the number with tests that
+exercise code without asserting anything about it (a well-known way coverage tools get
+gamed — a test that calls a function and checks nothing raises the percentage without
+raising confidence):</p>
+<ul>
+<li><strong>Unreachable defensive code.</strong> A <code>default: panic("unreachable")</code> branch in a switch
+over an internal-only enum, added for exhaustiveness (§6, <code>exhaustive</code> linter) rather
+than because the branch is reachable, is legitimately untestable without contriving an
+invalid enum value via unsafe casts — don't; instead mark it with a <code>// coverage-ignore:
+reason</code> comment convention and exclude it from the denominator explicitly rather than
+writing a test that manufactures an invalid state just to tick the line.</li>
+<li><strong>OS/platform-specific branches</strong> (a build-tagged file for an OS this project's CI
+matrix doesn't run) are only coverable by running CI on that OS — either add it to the
+matrix (§5.1) or explicitly exclude those files from the coverage gate with a
+documented reason, never silently.</li>
+<li><strong>True "this should never happen" storage-backend error paths</strong> — e.g., a Postgres
+driver returning a wire-protocol error type that the client library's own tests already
+guarantee cannot occur for well-formed queries — are candidates for exclusion, but only
+with a comment citing <em>why</em> (linking the upstream guarantee), so the exclusion itself
+is auditable rather than a hiding place.</li>
+<li><strong>The honest number is coverage of <em>statements the test suite asserts something
+about</em>, not statements merely executed.</strong> Since Go's tooling cannot distinguish "ran
+but nothing was asserted" from "ran and was verified," the only real defense is code
+review discipline plus mutation testing as a periodic spot-check: run
+<a href="https://github.com/avito-tech/go-mutesting" rel="noopener noreferrer"><code>go-mutesting</code></a> or a similar mutation
+tester occasionally (not on every PR — it's slow) against the highest-value packages
+(the lease/scheduling core) and confirm a high fraction of introduced mutants get
+killed by the existing suite; a 95%-statement-coverage suite that lets 40% of mutants
+survive is the textbook symptom of coverage gamed via assertion-free tests.</li>
+<li><strong>95% is a floor on the whole module, not on every file.</strong> Enforce it via
+<code>go tool covdata percent</code> / <code>go tool cover -func</code> total line in CI, but do not require
+every single file to individually clear 95% — that pressure is precisely what produces
+padding tests on genuinely hard-to-test glue code; instead spot-check per-package
+numbers in review and let the aggregate gate the merge.</li>
+</ul>
+<hr>
+<h2 id="4-integration-infrastructure">4. Integration infrastructure<a class="anchor" href="#4-integration-infrastructure" aria-label="Link to this section">#</a></h2>
+<h3 id="4-1-testcontainers-go-vs-a-hand-written-docker-compose-file-an-honest-comparison">4.1 <code>testcontainers-go</code> vs a hand-written Docker Compose file — an honest comparison<a class="anchor" href="#4-1-testcontainers-go-vs-a-hand-written-docker-compose-file-an-honest-comparison" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Docker Compose file</th><th><code>testcontainers-go</code></th></tr></thead>
+<tbody>
+<tr><td>Fixed, predictable host ports</td><td>Trivial — declare <code>"16379:6379"</code> etc. directly</td><td>Actively works against you: <a href="https://golang.testcontainers.org/" rel="noopener noreferrer">testcontainers-go docs</a> build around dynamic host-port allocation plus <strong>Ryuk</strong>, a companion "reaper" container that garbage-collects containers after a test run — getting a <em>fixed</em> port back out requires opting out of its normal mode</td></tr>
+<tr><td>Matches the brief's explicit ask ("custom non-default ports")</td><td>Yes, directly — this is exactly what Compose's <code>ports:</code> mapping is for</td><td>No — fighting the tool's default and idiomatic usage</td></tr>
+<tr><td>Per-test isolation (spin up a fresh, private container per test)</td><td>Manual — one shared Compose stack for the whole suite unless you script <code>docker compose run</code> per test</td><td>This is testcontainers' actual strength: request a fresh container from Go code per test/subtest, with automatic teardown</td></tr>
+<tr><td>Readiness gating</td><td><code>depends_on: condition: service_healthy</code> (§4.2) — coarse, at the Compose-stack level</td><td>Rich, composable per-container wait strategies (<code>wait.ForHealthCheck()</code>, <code>wait.ForListeningPort()</code>, <code>wait.ForLog()</code>, <code>wait.ForSQL()</code>, <code>wait.ForHTTP()</code>, <code>wait.ForAll(...)</code>) — <a href="https://golang.testcontainers.org/" rel="noopener noreferrer">testcontainers-go docs</a></td></tr>
+<tr><td>Local developer ergonomics</td><td><code>docker compose up</code> — works identically to how any operator would run these same databases; no Go toolchain needed to just bring the stack up for manual poking</td><td>Requires running the Go test binary; a developer who wants to <code>psql</code> into the test Postgres has no <code>docker compose up</code> to reach for unless one is also maintained</td></tr>
+<tr><td>CI dependency footprint</td><td>Docker + Compose only</td><td>Docker + Ryuk (extra container) + the testcontainers-go module and its indirect deps</td></tr>
+<tr><td>Cost of writing "the same suite against every backend"</td><td>A single <code>docker-compose.yml</code> with one service block per backend, referenced by one CI job matrix entry</td><td>A Go-side <code>map[string]func() Container</code> factory, functionally similar in spirit to §4.3 below regardless of which approach is used underneath</td></tr>
+</tbody></table></div>
+<p><strong>Recommendation: hand-written Docker Compose, per the project owner's explicit
+request for custom fixed ports.</strong> The clinching argument isn't just matching the ask —
+it's that testcontainers' central value propositions (dynamic ports + Ryuk-managed
+per-test container isolation) are specifically the two things this project does <em>not</em>
+want: it wants one well-known, stable set of ports across local dev, CI, and anyone
+debugging by hand with <code>redis-cli -p &lt;custom-port&gt;</code>, and it wants one long-lived stack
+per CI run (spinning up a fresh Postgres container per test function would be far slower
+than reusing one Postgres instance across a table-driven suite that resets state between
+cases via <code>TRUNCATE</code>/<code>DEL</code>). Where testcontainers-go would actually help — an occasional
+test that needs a container with faults injected mid-test via its exec/log/network APIs
+— consider it as a narrow, additional dependency for <em>that one test file</em>, not as the
+project's default integration harness.</p>
+<h3 id="4-2-fixed-ports-and-readiness-in-docker-compose-yml">4.2 Fixed ports and readiness in <code>docker-compose.yml</code><a class="anchor" href="#4-2-fixed-ports-and-readiness-in-docker-compose-yml" aria-label="Link to this section">#</a></h3>
+<pre><code class="language-yaml">services:
+  redis:
+    image: redis:<span class="tok-num">7.4</span>-alpine
+    ports: [<span class="tok-str">"16379:6379"</span>]          <span class="tok-com"># custom, non-default host port per the brief</span>
+    healthcheck:
+      test: [<span class="tok-str">"CMD"</span>, <span class="tok-str">"redis-cli"</span>, <span class="tok-str">"ping"</span>]
+      interval: <span class="tok-num">2</span>s
+      timeout: <span class="tok-num">2</span>s
+      retries: <span class="tok-num">15</span>
+      start_period: <span class="tok-num">5</span>s
+
+  memcached:
+    image: memcached:<span class="tok-num">1.6</span>-alpine
+    ports: [<span class="tok-str">"16211:11211"</span>]
+    healthcheck:
+      test: [<span class="tok-str">"CMD-SHELL"</span>, <span class="tok-str">"echo stats | nc -w 1 localhost 11211 | grep -q STAT"</span>]
+      interval: <span class="tok-num">2</span>s
+      timeout: <span class="tok-num">2</span>s
+      retries: <span class="tok-num">15</span>
+
+  postgres:
+    image: postgres:<span class="tok-num">17</span>-alpine
+    ports: [<span class="tok-str">"15432:5432"</span>]
+    environment:
+      POSTGRES_PASSWORD: dagworker
+      POSTGRES_DB: dagworker_test
+    healthcheck:
+      test: [<span class="tok-str">"CMD-SHELL"</span>, <span class="tok-str">"pg_isready -U postgres"</span>]
+      interval: <span class="tok-num">2</span>s
+      timeout: <span class="tok-num">2</span>s
+      retries: <span class="tok-num">15</span>
+      start_period: <span class="tok-num">5</span>s
+
+  integration-tests:
+    build: { context: ., dockerfile: Dockerfile.test }
+    depends_on:
+      redis: { condition: service_healthy }
+      memcached: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+    environment:
+      REDIS_ADDR: redis:<span class="tok-num">6379</span>          <span class="tok-com"># in-network hostname:port, not the mapped host port</span>
+      MEMCACHED_ADDR: memcached:<span class="tok-num">11211</span>
+      POSTGRES_DSN: postgres://postgres:dagworker@postgres:<span class="tok-num">5432</span>/dagworker_test?sslmode=disable</code></pre>
+<p>Two details from the <a href="https://docs.docker.com/reference/compose-file/services/" rel="noopener noreferrer">Compose spec</a>
+worth calling out precisely: <code>healthcheck.test</code> as a list must start with <code>NONE</code>, <code>CMD</code>,
+or <code>CMD-SHELL</code> (the third form runs the rest through a shell, needed for the pipe in the
+memcached check above); and <code>start_period</code> is a grace window during which failing checks
+don't count toward <code>retries</code> — set it generously for Postgres, whose first-boot
+initialization can briefly report not-ready. <code>depends_on: &lt;service&gt;: condition:
+service_healthy</code> makes Compose block starting the dependent service until the healthcheck
+passes — <a href="https://docs.docker.com/reference/compose-file/services/" rel="noopener noreferrer">Compose spec</a> — which
+is the mechanism that replaces a hand-rolled <code>wait-for-it.sh</code> polling loop.</p>
+<h3 id="4-3-one-suite-every-backend-a-table-of-factories">4.3 One suite, every backend: a table of factories<a class="anchor" href="#4-3-one-suite-every-backend-a-table-of-factories" aria-label="Link to this section">#</a></h3>
+<pre><code class="language-go"><span class="tok-kw">type</span> BackendFactory <span class="tok-kw">struct</span> {
+    Name <span class="tok-kw">string</span>
+    New  <span class="tok-kw">func</span>(tb testing.TB) Store <span class="tok-com">// returns a ready Store; tb.Cleanup handles teardown</span>
+}
+
+<span class="tok-kw">func</span> Backends() []BackendFactory {
+    <span class="tok-kw">return</span> []BackendFactory{
+        {<span class="tok-str">"inmemory"</span>, newInMemoryStoreForTest},
+        {<span class="tok-str">"redis"</span>,    newRedisStoreForTest},     <span class="tok-com">// dials REDIS_ADDR; t.Skip if unset</span>
+        {<span class="tok-str">"memcached"</span>, newMemcachedStoreForTest},
+        {<span class="tok-str">"postgres"</span>, newPostgresStoreForTest},
+    }
+}
+
+<span class="tok-kw">func</span> TestStoreContract(t *testing.T) {
+    <span class="tok-kw">for</span> _, b := <span class="tok-kw">range</span> Backends() {
+        b := b <span class="tok-com">// pre-1.22 rebind; harmless no-op at go 1.22+, keep it if go.mod floor is uncertain</span>
+        t.Run(b.Name, <span class="tok-kw">func</span>(t *testing.T) {
+            t.Parallel()
+            store := b.New(t)
+            testLeaseNeverDoubleGranted(t, store)
+            testAntichainInvariant(t, store)
+            testScopeImplicitCreation(t, store)
+            <span class="tok-com">// ... every contract test runs identically against every backend</span>
+        })
+    }
+}</code></pre>
+<p>This is the standard Go idiom for "same behavioral contract, N implementations" —
+sometimes called a conformance/contract test suite. The factory function for each real
+backend should <code>t.Skip()</code> (not fail) when its required connection info is absent, so
+<code>go test ./...</code> without Docker running still passes — pushing the actual gating into the
+build-tag/env-var mechanism below rather than into ad hoc skip logic scattered per test.</p>
+<h3 id="4-4-keeping-integration-tests-off-the-default-go-test-path">4.4 Keeping integration tests off the default <code>go test ./...</code> path<a class="anchor" href="#4-4-keeping-integration-tests-off-the-default-go-test-path" aria-label="Link to this section">#</a></h3>
+<p>Three real options, compared honestly:</p>
+<ul>
+<li><strong>Build tags</strong> (<code>//go:build integration</code>): explicit, and <code>go vet</code>/most editors respect
+build constraints correctly, but it fragments the source tree (every integration test
+file needs the tag, and a <code>_test.go</code> file <em>without</em> the tag can't share unexported
+helpers with one that has it without careful package layout) and is easy to forget.</li>
+<li><strong><code>testing.Short()</code> / <code>-short</code></strong>: inverted from what's needed here — <code>-short</code> is
+designed to skip <em>slow</em> tests within an otherwise-normal run, not to require <em>extra
+infrastructure</em> the reader may not have running. Using it for "skip if no Docker" is a
+semantic mismatch that will confuse the next contributor who reads <code>-short</code> and expects
+"faster," not "different infra requirement."</li>
+<li><strong>An environment variable</strong> (e.g. <code>DAGWORKER_INTEGRATION=1</code>), checked at the top of each
+integration test via <code>t.Skip()</code> if unset, or centralized in a <code>TestMain</code>: simplest,
+requires zero build machinery, keeps integration and unit tests in the same package
+(so they can share test helpers freely), and self-documents in the skip message
+(<code>t.Skip("set DAGWORKER_INTEGRATION=1 and start docker compose to run")</code>).</li>
+</ul>
+<p><strong>Recommendation: the environment-variable gate</strong>, combined with a package-naming
+convention (<code>storage/redis/redis_integration_test.go</code>) for human navigability rather than
+compiler enforcement. It is the lowest-ceremony option, keeps <code>go test ./...</code> fast and
+Docker-free by default (matching "unit tests always run in parallel" from the brief —
+they can't if <code>go test ./...</code> is blocked waiting on containers that aren't running), and
+the CI-only nature of the gate is exactly mirrored by CI simply setting that one env var
+before invoking the same <code>go test ./...</code> command — no separate <code>go test -tags=integration</code>
+invocation to keep in sync with the default one.</p>
+<hr>
+<h2 id="5-ci-pipeline-design-github-actions">5. CI pipeline design (GitHub Actions)<a class="anchor" href="#5-ci-pipeline-design-github-actions" aria-label="Link to this section">#</a></h2>
+<h3 id="5-1-matrix-over-go-versions-and-backends">5.1 Matrix over Go versions and backends<a class="anchor" href="#5-1-matrix-over-go-versions-and-backends" aria-label="Link to this section">#</a></h3>
+<pre><code class="language-yaml">name: ci
+on: [push, pull_request]
+
+jobs:
+  unit:
+    strategy:
+      matrix:
+        go: [<span class="tok-str">"1.24"</span>, <span class="tok-str">"1.25"</span>]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with: { go-version: <span class="tok-str">"${{ matrix.go }}"</span> }   <span class="tok-com"># setup-go caches modules by default</span>
+      - run: go build ./...
+      - run: go test -shuffle=on ./...
+
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with: { go-version: <span class="tok-str">"1.25"</span> }
+      - run: go test -race -shuffle=on -count=<span class="tok-num">1</span> ./...
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with: { go-version: <span class="tok-str">"1.25"</span> }
+      - run: go test -covermode=atomic -coverpkg=./... -coverprofile=cover.out ./...
+      - run: |
+          pct=$(go tool cover -func=cover.out | tail -<span class="tok-num">1</span> | grep -oE <span class="tok-str">'[0-9]+\.[0-9]+'</span>)
+          echo <span class="tok-str">"coverage: $pct%"</span>
+          awk -v p=<span class="tok-str">"$pct"</span> <span class="tok-str">'BEGIN { exit !(p &gt;= 95.0) }'</span>
+
+  integration:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        backend: [redis, memcached, postgres]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with: { go-version: <span class="tok-str">"1.25"</span> }
+      - run: docker compose -f docker-compose.test.yml up -d ${{ matrix.backend }}
+      - run: |
+          timeout <span class="tok-num">60</span>s bash -c \
+            <span class="tok-str">'until docker compose -f docker-compose.test.yml ps ${{ matrix.backend }} | grep -q "healthy"; do sleep 1; done'</span>
+      - env:
+          DAGWORKER_INTEGRATION: <span class="tok-str">"1"</span>
+        run: go test -race -run <span class="tok-str">"TestStoreContract/${{ matrix.backend }}"</span> ./storage/...
+      - if: always()
+        run: docker compose -f docker-compose.test.yml down -v
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with: { go-version: <span class="tok-str">"1.25"</span> }
+      - uses: golangci/golangci-lint-action@v9
+        with: { version: v2<span class="tok-num">.12</span> }</code></pre>
+<p>Splitting <strong>race</strong>, <strong>coverage</strong>, and plain <strong>unit</strong> into separate jobs (rather than one
+job doing <code>go test -race -cover</code>) is deliberate: race mode's 2–20x slowdown and 5–10x
+memory multiplier (§1.2) would otherwise inflate the coverage job's wall time for no
+benefit (coverage doesn't need race instrumentation to be <em>accurate</em>, only to also
+increment counters correctly under concurrency — hence <code>-covermode=atomic</code>, not <code>-race</code>,
+being coverage's actual concurrency-correctness requirement, §3.1); running them as
+separate jobs also means a race failure and a coverage-threshold failure show up as two
+distinctly-named, independently-rerunnable check-suite entries rather than one conflated
+red job.</p>
+<h3 id="5-2-service-containers-vs-compose-in-ci">5.2 Service containers vs Compose in CI<a class="anchor" href="#5-2-service-containers-vs-compose-in-ci" aria-label="Link to this section">#</a></h3>
+<p>GitHub Actions' native <code>services:</code> block runs containers alongside the job with port
+mapping via <code>ports: ["16379:6379"]</code>, and — for jobs running directly on the runner
+(not inside a container job) — those ports are reached over <code>localhost</code> —
+<a href="https://docs.github.com/en/actions/using-containerized-services/about-service-containers" rel="noopener noreferrer">GitHub Actions service-containers docs</a>.
+This works and is simpler to read for a <em>single</em> backend, but for this project running
+<code>docker compose -f docker-compose.test.yml up</code> in the integration job (as above) is the
+better choice specifically because <strong>it's the same file used for local development and
+end-to-end testing</strong> — a contributor debugging a failing integration test locally runs
+the literal same Compose file GitHub Actions runs, whereas GitHub's native <code>services:</code>
+syntax has no local-development equivalent and would have to be kept manually
+synchronized with a separately-maintained Compose file, doubling the surface for the
+ports/healthchecks to drift out of sync.</p>
+<h3 id="5-3-caching">5.3 Caching<a class="anchor" href="#5-3-caching" aria-label="Link to this section">#</a></h3>
+<p><code>actions/setup-go</code> (v5+) caches Go's module and build cache by default (<code>cache: true</code>),
+keyed off a hash of <code>go.mod</code>/<code>go.sum</code> by default and configurable via
+<code>cache-dependency-path</code> for multi-module repos —
+<a href="https://github.com/actions/setup-go" rel="noopener noreferrer"><code>actions/setup-go</code> README</a>. This is sufficient for
+most projects and the docs make no mention of layering <code>actions/cache</code> on top, so don't —
+an extra hand-rolled cache step would only risk cache-key drift against the one
+<code>setup-go</code> already manages. <code>golangci-lint-action</code> maintains its own separate cache for
+<code>~/.cache/golangci-lint</code>, keyed by OS, working directory, a 7-day rotation window, and a
+hash of <code>go.mod</code>, with automatic invalidation when dependencies change and a
+<code>skip-cache: true</code> escape hatch — <a href="https://github.com/golangci/golangci-lint-action" rel="noopener noreferrer"><code>golangci-lint-action</code> README</a>.</p>
+<h3 id="5-4-golangci-lint-in-ci">5.4 <code>golangci-lint</code> in CI<a class="anchor" href="#5-4-golangci-lint-in-ci" aria-label="Link to this section">#</a></h3>
+<p>Use the official <code>golangci/golangci-lint-action</code> (JS-based, not Docker, for speed) rather
+than a hand-rolled <code>go install golangci-lint &amp;&amp; golangci-lint run</code> step — it manages the
+binary version pin, restores/saves its own cache, and renders findings as GitHub
+annotations inline on the diff — <a href="https://github.com/golangci/golangci-lint-action" rel="noopener noreferrer"><code>golangci-lint-action</code> README</a>.
+Pin <code>version: v2.12</code> (or whatever the current v2.x line is) explicitly rather than
+<code>latest</code>, so a new golangci-lint release with newly-enabled-by-default linters cannot
+turn a previously-green PR red without a deliberate version bump commit.</p>
+<h3 id="5-5-benchmark-regression-tracking">5.5 Benchmark regression tracking<a class="anchor" href="#5-5-benchmark-regression-tracking" aria-label="Link to this section">#</a></h3>
+<p>Two real options: <strong><code>benchstat</code> against the base commit</strong> (run in CI, compare, fail or
+warn on regression) or <strong><code>benchmark-action/github-action-benchmark</code></strong> (persists results
+across runs, renders a trend chart, comments on PRs). <code>benchstat</code> compares two Go
+benchmark-output files, computing the <strong>median</strong> and a <strong>95% confidence interval</strong> per
+benchmark and, for A/B comparison, a <strong>Mann–Whitney U-test</strong> p-value — a <code>~</code> in its
+output means "no statistically significant difference detected"; the tool's own
+guidance is to collect <strong>at least <code>-count=10</code></strong> repetitions per side for a meaningful
+comparison — <a href="https://pkg.go.dev/golang.org/x/perf/cmd/benchstat" rel="noopener noreferrer"><code>pkg.go.dev/golang.org/x/perf/cmd/benchstat</code></a>.
+For a project whose headline goal is O(1)/O(log n) performance at 1M nodes, wire this in
+as a real CI gate, not just an informational report:</p>
+<pre><code class="language-yaml">  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { fetch-depth: <span class="tok-num">0</span> }
+      - uses: actions/setup-go@v6
+        with: { go-version: <span class="tok-str">"1.25"</span> }
+      - run: go install golang.org/x/perf/cmd/benchstat@latest
+      - run: go test -run <span class="tok-str">'^$'</span> -bench . -benchmem -count=<span class="tok-num">10</span> ./... | tee new.txt
+      - run: |
+          git checkout <span class="tok-str">"${{ github.event.pull_request.base.sha }}"</span> -- .
+          go test -run <span class="tok-str">'^$'</span> -bench . -benchmem -count=<span class="tok-num">10</span> ./... | tee old.txt
+          git checkout <span class="tok-str">"${{ github.sha }}"</span> -- .
+      - run: |
+          benchstat old.txt new.txt | tee bench-diff.txt
+          <span class="tok-com"># fail the job if any benchmark regressed by more than a threshold with p&lt;0.05 —</span>
+          <span class="tok-com"># benchstat's own output format is the input to whatever threshold script gates this</span></code></pre>
+<p><code>benchmark-action/github-action-benchmark</code> is the better fit for <em>tracking a trend over
+many commits</em> (it stores a rolling history and renders a chart, and can auto-comment
+regressions on a PR); <code>benchstat</code> run ad hoc against the PR's base commit is the better
+fit for <em>gating a single PR</em> against regression without needing a persisted history
+store. Run both is reasonable: <code>benchstat</code> as a required, blocking PR check;
+<code>benchmark-action</code> as a non-blocking dashboard for long-term trend visibility (e.g.,
+noticing a slow creeping regression that no single PR's benchstat comparison was large
+enough to flag as statistically significant).</p>
+<h3 id="5-6-coverage-thresholds-and-required-status-checks">5.6 Coverage thresholds and required status checks<a class="anchor" href="#5-6-coverage-thresholds-and-required-status-checks" aria-label="Link to this section">#</a></h3>
+<p>Compute the aggregate percentage as shown in §5.1's <code>coverage</code> job and fail the job
+outright below 95% (the <code>awk</code>-based gate above), rather than relying on a third-party
+coverage-hosting service (Codecov/Coveralls) as the sole enforcement — those add value
+for PR-diff coverage annotations and historical trend charts, but a raw <code>go tool cover</code>
+threshold check in the workflow itself has zero external dependency, zero flakiness from
+a third-party service being down, and zero risk of a misconfigured webhook silently not
+gating a merge. In branch protection, mark <code>unit</code>, <code>race</code>, <code>coverage</code>, <code>lint</code>, and each
+<code>integration (backend)</code> matrix leg as <strong>required status checks</strong> — GitHub's branch
+protection matches job names (including the matrix leg's rendered name, e.g.
+<code>integration (redis)</code>), so a new backend added to the matrix must also be added to the
+required-checks list or it silently becomes non-blocking.</p>
+<hr>
+<h2 id="6-strict-linting-a-concrete-golangci-lint-v2-configuration">6. Strict linting: a concrete <code>golangci-lint</code> v2 configuration<a class="anchor" href="#6-strict-linting-a-concrete-golangci-lint-v2-configuration" aria-label="Link to this section">#</a></h2>
+<p>golangci-lint v2 changed the config file's shape: it now requires a top-level
+<code>version: "2"</code> key, reorganizes linter settings under <code>linters:</code> with <code>default</code>/
+<code>enable</code>/<code>disable</code>/<code>settings</code> subsections, and — the biggest structural change — <strong>splits
+formatters (<code>gofmt</code>, <code>gofumpt</code>, <code>goimports</code>, <code>gci</code>) into their own top-level <code>formatters:</code>
+section</strong>, separate from <code>linters:</code>, since formatters <em>rewrite</em> code while linters only
+<em>report</em> on it — <a href="https://golangci-lint.run/docs/configuration/file/" rel="noopener noreferrer"><code>golangci-lint.run</code> configuration docs</a>.
+A repository reference of every option lives at <code>.golangci.reference.yml</code> in the
+project's own repo, and configs can be validated against a published JSON Schema.</p>
+<pre><code class="language-yaml">version: <span class="tok-str">"2"</span>
+
+run:
+  timeout: <span class="tok-num">5</span>m
+  tests: <span class="tok-kw">true</span>
+
+linters:
+  default: none   <span class="tok-com"># start from nothing; enable explicitly — see rationale below</span>
+  enable:
+    <span class="tok-com"># --- correctness / bug-finding, non-negotiable ---</span>
+    - errcheck        <span class="tok-com"># every returned error must be handled or explicitly discarded</span>
+    - govet           <span class="tok-com"># full vet suite, including shadow, loopclosure, etc.</span>
+    - staticcheck     <span class="tok-com"># SA*/ST*/QF* checks — the single highest-value linter in the list</span>
+    - ineffassign     <span class="tok-com"># assignments whose value is never used</span>
+    - unused          <span class="tok-com"># dead code / unused identifiers</span>
+
+    <span class="tok-com"># --- concurrency-specific, directly relevant to this project ---</span>
+    - bodyclose       <span class="tok-com"># http.Response.Body must be closed on every path</span>
+    - sqlclosecheck   <span class="tok-com"># sql.Rows / sql.Stmt must be closed</span>
+    - rowserrcheck    <span class="tok-com"># sql.Rows.Err() must be checked after the iteration loop</span>
+    - contextcheck    <span class="tok-com"># context must be propagated correctly, not silently dropped/replaced</span>
+    - containedctx    <span class="tok-com"># a context.Context stored in a struct field is a smell, not a pattern</span>
+    - noctx           <span class="tok-com"># HTTP requests / DB calls made without a context</span>
+
+    <span class="tok-com"># --- exhaustiveness on the public status enum (the whole point of this project) ---</span>
+    - exhaustive      <span class="tok-com"># every switch on NodeStatus must handle every case explicitly</span>
+
+    <span class="tok-com"># --- style / API-shape enforcement the owner explicitly asked for ---</span>
+    - revive          <span class="tok-com"># configurable replacement for the deprecated golint, see settings below</span>
+    - gocritic        <span class="tok-com"># broad diagnostic + style + opinionated checks</span>
+    - ireturn         <span class="tok-com"># "accept interfaces, return structs" — enforced, not just convention</span>
+    - nilnil          <span class="tok-com"># a function must not return (nil, nil) as a valid-looking success value</span>
+
+    <span class="tok-com"># --- test-suite discipline ---</span>
+    - paralleltest    <span class="tok-com"># flags missing t.Parallel() and loop-variable reuse in subtests</span>
+    - tparallel       <span class="tok-com"># flags t.Parallel() on a parent whose subtests aren't all parallel too</span>
+    - thelper         <span class="tok-com"># test helper functions must call t.Helper()</span>
+    - testifylint     <span class="tok-com"># correct usage of testify's assert/require (e.g. Equal arg order)</span>
+
+    <span class="tok-com"># --- security ---</span>
+    - gosec           <span class="tok-com"># G-series security checks (weak crypto, command injection, etc.)</span>
+
+    <span class="tok-com"># --- performance, matches the project's headline goal ---</span>
+    - prealloc        <span class="tok-com"># slices appended-to in a loop with a known bound should be preallocated</span>
+    - makezero        <span class="tok-com"># make([]T, n) then append(...) instead of make([]T, 0, n) is a length bug magnet</span>
+    - perfsprint       <span class="tok-com"># fmt.Sprintf misuse where string concatenation/strconv would do</span>
+
+    <span class="tok-com"># --- complexity ceilings ---</span>
+    - funlen
+    - cyclop
+    - gocognit
+
+    <span class="tok-com"># --- dependency and API hygiene ---</span>
+    - depguard        <span class="tok-com"># ban unapproved dependencies (see settings)</span>
+    - forbidigo       <span class="tok-com"># ban fmt.Print*/println in library code (must use structured logging)</span>
+
+  settings:
+    revive:
+      rules:
+        - name: exported                 <span class="tok-com"># exported identifiers must have doc comments</span>
+        - name: error-return              <span class="tok-com"># error must be the last return value</span>
+        - name: error-strings             <span class="tok-com"># error strings must not be capitalized / end in punctuation</span>
+        - name: context-as-argument       <span class="tok-com"># context.Context must be the first parameter</span>
+        - name: unused-parameter
+        - name: indent-error-flow
+        - name: range-val-in-closure      <span class="tok-com"># pre-1.22 loop-capture guard, harmless no-op at 1.22+</span>
+
+    exhaustive:
+      default-signifies-exhaustive: <span class="tok-kw">false</span>  <span class="tok-com"># a `default:` case must NOT be treated as covering</span>
+                                            <span class="tok-com"># every enum value — this is exactly what makes</span>
+                                            <span class="tok-com"># exhaustive catch a forgotten NodeStatus case when</span>
+                                            <span class="tok-com"># a new status is added later</span>
+      check: [switch, map]
+
+    ireturn:
+      allow: [error, empty, anon, generic, stdlib]
+      <span class="tok-com"># storage.Store, scheduler.Scheduler etc. remain interfaces at the package boundary</span>
+      <span class="tok-com"># (accepted as parameters) but constructors must return the concrete *Scheduler,</span>
+      <span class="tok-com"># *RedisStore, etc. — ireturn enforces exactly this split.</span>
+
+    gocognit:
+      min-complexity: <span class="tok-num">20</span>
+
+    cyclop:
+      max-complexity: <span class="tok-num">15</span>
+
+    funlen:
+      lines: <span class="tok-num">80</span>
+      statements: <span class="tok-num">50</span>
+
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: <span class="tok-str">"github.com/pkg/errors"</span>
+              desc: <span class="tok-str">"use stdlib errors + fmt.Errorf(\"...: %w\", err) instead"</span>
+            - pkg: <span class="tok-str">"io/ioutil"</span>
+              desc: <span class="tok-str">"deprecated since Go 1.16; use io or os directly"</span>
+
+    forbidigo:
+      forbid:
+        - pattern: <span class="tok-str">'^fmt\.Print.*$'</span>
+          msg: <span class="tok-str">"use the configured structured logger, not fmt.Print*, in library code"</span>
+
+    gosec:
+      excludes: [G104]   <span class="tok-com"># errcheck already covers unchecked errors; avoid double-reporting</span>
+
+  exclusions:
+    rules:
+      - path: <span class="tok-str">"_test\\.go"</span>
+        linters: [errcheck, gosec, funlen, cyclop, gocognit]
+        <span class="tok-com"># table-driven test bodies and test helpers legitimately run long and</span>
+        <span class="tok-com"># sometimes intentionally ignore errors from test-only setup calls</span>
+
+formatters:
+  enable:
+    - gofumpt   <span class="tok-com"># stricter superset of gofmt</span>
+    - goimports</code></pre>
+<h3 id="6-1-deliberately-not-enabled-and-why">6.1 Deliberately <strong>not</strong> enabled, and why<a class="anchor" href="#6-1-deliberately-not-enabled-and-why" aria-label="Link to this section">#</a></h3>
+<ul>
+<li><strong><code>wrapcheck</code></strong>: wrapcheck's own stated rationale is legitimate — "errors from external
+packages" should carry call-site context —
+<a href="https://github.com/tomarrell/wrapcheck" rel="noopener noreferrer"><code>tomarrell/wrapcheck</code> README</a> — but for a
+<em>library</em> whose own errors are the "external package" from its callers' point of view,
+blanket-enforcing wrap-everything produces two costs that outweigh the benefit here:
+(1) it actively fights <strong>sentinel-error and <code>errors.Is</code>/<code>errors.As</code> design</strong>, which
+this project needs for its public error taxonomy (a caller checking
+<code>errors.Is(err, dagworker.ErrNodeNotFound)</code> needs that sentinel to survive unwrapped or
+<code>%w</code>-wrapped consistently, and wrapcheck's default posture nudges every return site
+toward wrapping regardless of whether that call site is a public boundary or an
+internal one three functions deep), and (2) it's high-noise against internal-only
+helper functions where a caller two lines up already has full context. Net effect: use
+wrapping as a deliberate, reviewed API design decision at genuine package boundaries
+(documented in the ADR), not a linter-enforced blanket rule.</li>
+<li><strong><code>err113</code></strong> (the enforce-wrapped-static-errors / disallow-<code>errors.New</code>-in-conditionals
+linter): actively hostile to the sentinel-error pattern this project's public API
+needs (<code>ErrCycleDetected</code>, <code>ErrNodeNotFound</code>, etc. as package-level <code>errors.New</code>
+values checked via <code>errors.Is</code>) — enabling it would mean fighting the linter to build
+the exact error-handling API the brief implies ("nodes have a public status... error").
+Skip it.</li>
+<li><strong><code>exhaustruct</code></strong>: forces every struct literal to set every field, which is
+actively wrong for this project's public API shape — <code>LeaseOptions{Timeout:
+30*time.Second}</code> relying on zero-value defaults for everything else is the intended,
+idiomatic usage of a functional-options-adjacent config struct, and <code>exhaustruct</code>
+would force every call site to spell out every field, defeating the point of having
+sane defaults.</li>
+<li><strong><code>gochecknoglobals</code></strong> / <strong><code>gochecknoinits</code></strong>: overly blunt for a library that
+legitimately wants a small number of well-considered package-level sentinel errors and
+registered default-backend constructors; ban these via code review judgment, not a
+linter that fires on every legitimate case alongside the bad ones.</li>
+<li><strong><code>lll</code></strong> (line-length): gofumpt/goimports already produce reasonably wrapped code, and
+a hard line-length linter mostly generates busywork reformatting long but readable
+struct-literal or table-driven-test lines; not worth the friction for the benefit.</li>
+<li><strong><code>wsl</code>/<code>wsl_v5</code></strong> (whitespace linter, enforcing blank-line placement rules): highly
+opinionated beyond what gofumpt already normalizes; the marginal readability gain
+doesn't justify the churn on every PR.</li>
+<li><strong><code>godox</code></strong> (flags TODO/FIXME comments): actively counterproductive during a
+greenfield build where TODOs are a legitimate, temporary way to flag known gaps before
+the corresponding ADR/spec/test/implementation cycle catches up — enable it later,
+post-1.0, as a "no lingering TODOs before release" gate instead of a permanent one.</li>
+<li><strong><code>varnamelen</code></strong>: flags short variable names like <code>n</code> for a node or <code>i</code> for an index;
+for a graph/scheduler codebase where <code>n *Node</code>, <code>e Edge</code>, <code>w Worker</code> are the idiomatic,
+locally-scoped, highly readable names Go style already favors, this linter's
+complaints would be net noise.</li>
+</ul>
+<h3 id="6-2-the-v2-migration-point-restated-precisely">6.2 The v2 migration point, restated precisely<a class="anchor" href="#6-2-the-v2-migration-point-restated-precisely" aria-label="Link to this section">#</a></h3>
+<p>Anyone hand-writing this config against older tutorials or Stack Overflow answers will
+find v1-shaped YAML (<code>linters: enable: [...]</code> at the top level without <code>version: "2"</code>,
+formatter options mixed into <code>linters-settings</code>) — that shape is rejected by v2 binaries.
+The <strong>required, non-optional top-level key <code>version: "2"</code></strong> is the tell for which format
+a given example predates —
+<a href="https://golangci-lint.run/docs/configuration/file/" rel="noopener noreferrer"><code>golangci-lint.run</code> configuration docs</a>.
+Pin the action to a v2.x release (§5.4) and write the config in v2 shape from day one;
+there is no reason for a greenfield project in 2026 to start from v1 config and migrate
+later.</p>
+<hr>
+<h2 id="recommendations-for-dag-worker-go">Recommendations for dag-worker-go<a class="anchor" href="#recommendations-for-dag-worker-go" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>Pin <code>go 1.22</code> as the absolute floor in <code>go.mod</code></strong> (prefer <code>1.25</code> given the new
+toolchain-directive semantics and <code>synctest</code> availability) so the loop-variable fix
+and <code>testing/synctest</code> are both guaranteed available without <code>GOEXPERIMENT</code> flags.</li>
+<li><strong>Architect the scheduler's internal timing exclusively through the stdlib <code>time</code>
+package</strong> (no custom clock abstraction beyond a thin wrapper), specifically so
+<code>testing/synctest.Test</code> can wrap the lease-timeout state machine end-to-end with zero
+custom fake-clock plumbing — write this constraint into the ADR before implementation,
+not as an afterthought.</li>
+<li><strong>Serialize the core lease/complete/fail decision logic behind a single actor (mutex
+or dedicated goroutine) per scope</strong>, both as a correctness simplification and because
+it is the prerequisite for the deterministic-replay chaos harness in §2.1 — this is an
+architectural decision, make it explicit in the ADR.</li>
+<li><strong>Build the seeded chaos-wrapper store early</strong> (§2.1, item 3) — wrapping the
+in-memory backend with a seeded fault-injector is cheap, directly exercises the four
+properties in §1.7's table, and gives a <code>-seed</code>-reproducible failure mode from day
+one, well before the Redis/Postgres/Memcached backends exist.</li>
+<li><strong>Adopt <code>pgregory.net/rapid</code> with <code>t.Repeat</code> as the property-testing backbone</strong> for
+the four named properties (no double lease, eventual readiness, antichain invariant,
+acyclicity under interleaving) — write these before the scheduler implementation is
+complete, per the working-conventions failing-test-first discipline.</li>
+<li><strong>Write the lease/ack/timeout protocol as a small TLA+ spec now</strong>, during design,
+specifically to machine-check the "no node ever leased twice concurrently" and
+"no stale ack after reassignment" properties before writing Go — this is the highest
+leverage-per-hour item in this whole dossier given the project is still greenfield.</li>
+<li><strong>Adopt Porcupine for a same-process multi-goroutine linearizability test</strong> of the
+public lease API against the small reference model in §2.2 — cheap, fast, CI-eligible
+on every PR; defer Jepsen/Elle-style cross-process fault injection to a post-1.0
+hardening milestone explicitly scoped to the multi-instance-shared-storage design.</li>
+<li><strong>Use <code>docker-compose.test.yml</code> with fixed custom ports and <code>service_healthy</code> gating</strong>
+(§4.2) as the integration backbone, gated behind a single <code>DAGWORKER_INTEGRATION=1</code>
+env var (§4.4), and drive every backend through one <code>BackendFactory</code> table (§4.3) so
+the contract suite is written once and runs identically against all four backends.</li>
+<li><strong>Split CI into independent <code>unit</code> / <code>race</code> / <code>coverage</code> / <code>integration (matrix)</code> /
+<code>lint</code> / <code>benchmark</code> jobs</strong> rather than one monolithic job, gate <code>-covermode=atomic</code>
+(not <code>-race</code>) coverage at ≥95% via a plain <code>awk</code> check with no third-party coverage
+service as the sole enforcement, and require every matrix leg by name in branch
+protection.</li>
+<li><strong>Ship the v2 golangci-lint config from §6 verbatim as a starting point</strong>, explicitly
+documenting in the repo (a <code>docs/adr/000X-linting.md</code>) <em>why</em> <code>wrapcheck</code>/<code>err113</code>/
+<code>exhaustruct</code> are deliberately excluded — future contributors reaching for "just
+enable the strict error-wrapping linter" need the sentinel-error rationale
+immediately visible, not rediscovered in a PR debate.</li>
+<li><strong>Treat 95% coverage as an aggregate module-level gate, never a per-file
+requirement</strong>, and schedule an occasional (not per-PR) mutation-testing spot-check
+on the scheduler core to catch assertion-free padding tests that a raw percentage
+cannot distinguish from real coverage.</li>
+</ol>
+<h2 id="open-questions">Open questions<a class="anchor" href="#open-questions" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>How far to push the deterministic-simulation harness before it's worth forking the Go
+runtime or targeting WASM</strong> — the §2.1 middle-ground (seeded chaos-wrapper store +
+single-actor decision logic) is proportionate for v1, but if the multi-instance,
+shared-storage guarantees become the project's primary marketed differentiator, is a
+Polar-Signals-style WASM-compiled single-threaded build worth the investment for a true
+FoundationDB-grade simulation, and who maintains that fork long-term?</li>
+<li><strong>Where exactly does Jepsen/Elle-style real-cluster fault injection belong on the
+roadmap</strong> — is it a pre-1.0 gate for the Redis/Postgres backends specifically (since
+those are the ones multiple instances actually contend over), or a post-1.0 hardening
+project, and does the team have (or want to acquire) the operational Jepsen expertise
+to run and interpret it, versus contracting it out once per backend?</li>
+<li><strong>Should the TLA+ spec's scope grow to include the multi-instance work-distribution
+protocol</strong> (partition-per-scope / consistent hashing / lease stealing, per the open
+design question in the brief) once that protocol is chosen, given that inter-instance
+coordination is exactly the kind of interleaving-heavy problem TLA+ is best at, or does
+that belong in a second, separate spec written only after the distribution strategy
+itself is settled?</li>
+<li><strong>What mutation-testing tool and cadence</strong> — <code>go-mutesting</code> is unmaintained-looking;
+is there a currently-active Go mutation tester worth standardizing on, and should the
+spot-check in Recommendation 11 be a scheduled quarterly job, a pre-release gate, or
+purely ad hoc when coverage numbers look suspiciously easy?</li>
+<li><strong>Does the benchmark-regression gate (§5.5) need machine-class pinning</strong> — GitHub-hosted
+runners have documented CPU variability run-to-run; is a self-hosted, dedicated runner
+needed before <code>benchstat</code>'s p-value-based regression gate can be trusted as a hard
+blocking check rather than an advisory one, and what noise floor has to be tolerated in
+the meantime?</li>
+</ul>
+<h2 id="sources">Sources<a class="anchor" href="#sources" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><a href="https://go.dev/doc/go1.25" rel="noopener noreferrer">Go 1.25 Release Notes</a> — <code>testing/synctest</code> GA, <code>T.Attr</code>/<code>B.Attr</code>/<code>F.Attr</code>, <code>T.Output</code></li>
+<li><a href="https://pkg.go.dev/testing/synctest" rel="noopener noreferrer"><code>testing/synctest</code> package docs</a> — bubble semantics, <code>Test</code>, <code>Wait</code>, <code>Sleep</code>, durable blocking</li>
+<li><a href="https://go.dev/doc/go1.22" rel="noopener noreferrer">Go 1.22 Release Notes</a> — per-iteration loop variables, range-over-int</li>
+<li><a href="https://pkg.go.dev/testing#T.Setenv" rel="noopener noreferrer"><code>pkg.go.dev/testing</code></a> — <code>T.Setenv</code> parallel restriction, <code>T.Cleanup</code> LIFO ordering</li>
+<li><a href="https://pkg.go.dev/cmd/go" rel="noopener noreferrer"><code>pkg.go.dev/cmd/go</code></a> — <code>-covermode</code>, <code>-coverpkg</code>, <code>-count</code>, <code>-race</code> platform list</li>
+<li><a href="https://go.dev/doc/articles/race_detector" rel="noopener noreferrer">Go race detector article</a> — detection scope, overhead, platform support</li>
+<li><a href="https://go.dev/security/fuzz/" rel="noopener noreferrer">Go fuzzing docs</a> — corpus mechanics, <code>f.Add</code>, supported types, CI guidance</li>
+<li><a href="https://go.dev/doc/build-cover" rel="noopener noreferrer">Go integration coverage / <code>build-cover</code></a> — <code>-cover</code> binary builds, <code>GOCOVERDIR</code>, <code>go tool covdata</code></li>
+<li><a href="https://pkg.go.dev/pgregory.net/rapid" rel="noopener noreferrer"><code>pgregory.net/rapid</code> docs</a> — generators, <code>Check</code>, <code>T.Repeat</code> stateful testing</li>
+<li><a href="https://github.com/leanovate/gopter" rel="noopener noreferrer"><code>leanovate/gopter</code> README</a> — properties, generators, <code>commands</code> package</li>
+<li><a href="https://apple.github.io/foundationdb/testing.html" rel="noopener noreferrer">Apple's FoundationDB testing docs</a> — simulated cluster, fault injection, CPU-hour estimate</li>
+<li><a href="https://notes.eatonphil.com/2024-08-20-deterministic-simulation-testing.html" rel="noopener noreferrer">Phil Eaton, "Deterministic simulation testing" notes</a> — Will Wilson talk summary, cross-language DST implementations</li>
+<li><a href="https://docs.tigerbeetle.com/concepts/safety/" rel="noopener noreferrer">TigerBeetle safety / VOPR docs</a> — simulator description, fault domains, scale</li>
+<li><a href="https://github.com/anishathalye/porcupine" rel="noopener noreferrer"><code>anishathalye/porcupine</code> README</a> — linearizability checking API and performance</li>
+<li><a href="https://lamport.azurewebsites.net/tla/tla.html" rel="noopener noreferrer">Lamport's TLA+ home page</a> — purpose, TLC, TLAPS</li>
+<li><a href="https://lamport.azurewebsites.net/tla/formal-methods-amazon.pdf" rel="noopener noreferrer">Newcombe et al., "How AWS Uses Formal Methods" (PDF)</a> — bug categories found, cost/effort guidance</li>
+<li><a href="https://p-org.github.io/P/" rel="noopener noreferrer">P language</a> — asynchronous event-driven system modelling and code generation</li>
+<li><a href="https://golangci-lint.run/docs/configuration/file/" rel="noopener noreferrer"><code>golangci-lint.run</code> configuration docs</a> — v2 config shape, <code>version: "2"</code>, formatters split</li>
+<li><a href="https://golangci-lint.run/docs/linters/" rel="noopener noreferrer"><code>golangci-lint.run</code> linters list</a> — linter catalog by category</li>
+<li><a href="https://github.com/golangci/golangci-lint-action" rel="noopener noreferrer"><code>golangci/golangci-lint-action</code> README</a> — caching, version pinning, workflow example</li>
+<li><a href="https://github.com/actions/setup-go" rel="noopener noreferrer"><code>actions/setup-go</code> README</a> — built-in module/build caching, version syntax</li>
+<li><a href="https://docs.github.com/en/actions/using-containerized-services/about-service-containers" rel="noopener noreferrer">GitHub Actions service containers docs</a> — port mapping, localhost access</li>
+<li><a href="https://docs.docker.com/reference/compose-file/services/" rel="noopener noreferrer">Docker Compose services reference</a> — <code>healthcheck</code>, <code>depends_on.condition: service_healthy</code></li>
+<li><a href="https://golang.testcontainers.org/" rel="noopener noreferrer"><code>golang.testcontainers.org</code></a> — wait strategies, Ryuk reaper, dynamic ports</li>
+<li><a href="https://pkg.go.dev/golang.org/x/perf/cmd/benchstat" rel="noopener noreferrer"><code>pkg.go.dev/golang.org/x/perf/cmd/benchstat</code></a> — Mann-Whitney U-test, <code>-count=10</code> guidance, filter/table/row/col flags</li>
+<li><a href="https://github.com/tomarrell/wrapcheck" rel="noopener noreferrer"><code>tomarrell/wrapcheck</code> README</a> — error-wrapping rationale and configuration</li>
+<li><a href="https://github.com/butuzov/ireturn" rel="noopener noreferrer"><code>butuzov/ireturn</code> README</a> — accept-interfaces-return-structs enforcement, allow/reject config</li>
+<li><a href="https://github.com/kunwardeep/paralleltest" rel="noopener noreferrer"><code>kunwardeep/paralleltest</code> README</a> — <code>t.Parallel()</code> and loop-variable-reuse checks</li>
+<li><a href="https://github.com/nishanths/exhaustive" rel="noopener noreferrer"><code>nishanths/exhaustive</code> README</a> — exhaustive switch/map checking, <code>default-signifies-exhaustive</code></li>
+</ul>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/research/11-testing-verification-and-ci.md" rel="noopener noreferrer">View source: docs/research/11-testing-verification-and-ci.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

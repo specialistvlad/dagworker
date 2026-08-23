@@ -1,0 +1,719 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADR-0041: Amendments discovered during implementation · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/adr/0041-amendments-discovered-during-implementation/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#adr-0041-amendments-discovered-during-implementation">ADR-0041: Amendments discovered during implementation</a></li>
+<ul>
+<li><a href="#context">Context</a></li>
+<li><a href="#decision">Decision</a></li>
+<ul>
+<li><a href="#1-phase-collapses-from-nine-values-to-five-amends-adr-0002">1. Phase collapses from nine values to five — amends ADR-0002</a></li>
+<li><a href="#2-triggeralways-means-ignores-predecessors-amends-adr-0030">2. TriggerAlways means "ignores predecessors" — amends ADR-0030</a></li>
+<li><a href="#3-store-lives-in-the-root-package-amends-adr-0016-adr-0031">3. Store lives in the root package — amends ADR-0016, ADR-0031</a></li>
+<li><a href="#4-cursor-is-split-from-seq-amends-adr-0020">4. Cursor is split from Seq — amends ADR-0020</a></li>
+<li><a href="#5-full-pearce-kelly-ships-in-v1-amends-adr-0004">5. Full Pearce–Kelly ships in v1 — amends ADR-0004</a></li>
+</ul>
+<li><a href="#consequences">Consequences</a></li>
+<ul>
+<li><a href="#positive">Positive</a></li>
+<li><a href="#negative">Negative</a></li>
+<li><a href="#neutral">Neutral</a></li>
+</ul>
+<li><a href="#alternatives-considered">Alternatives considered</a></li>
+<ul>
+<li><a href="#keep-the-nine-value-phase-and-derive-reason-from-it">Keep the nine-value Phase and derive Reason from it</a></li>
+<li><a href="#a-dagtypes-package-imported-by-both-root-and-dagstore">A dagtypes package imported by both root and dagstore</a></li>
+<li><a href="#one-global-cursor-across-all-scopes">One global Cursor across all scopes</a></li>
+</ul>
+<li><a href="#references">References</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="adr-0041-amendments-discovered-during-implementation">ADR-0041: Amendments discovered during implementation<a class="anchor" href="#adr-0041-amendments-discovered-during-implementation" aria-label="Link to this section">#</a></h1>
+<ul>
+<li><strong>Status:</strong> Accepted</li>
+<li><strong>Date:</strong> 2026-08-23</li>
+<li><strong>Deciders:</strong> Vladyslav Kazantsev (project owner)</li>
+<li><strong>Amends:</strong> ADR-0002, ADR-0004, ADR-0016, ADR-0020, ADR-0030, ADR-0031</li>
+<li><strong>Backing research:</strong> docs/research/00-synthesis.md, docs/spec/01-contract.md</li>
+</ul>
+<h2 id="context">Context<a class="anchor" href="#context" aria-label="Link to this section">#</a></h2>
+<p>ADR-0001 through ADR-0040 were written from the research synthesis, before any
+code existed. Writing the type foundation and the storage port surfaced five
+places where the design as recorded was either internally inconsistent or
+strictly improvable. ADRs are immutable once accepted, so rather than editing
+them this record amends them.</p>
+<p>Each amendment below was forced by an attempt to write the thing down in Go, not
+by a change of taste. That is the useful signal: a design that cannot be typed
+is not yet a design.</p>
+<h2 id="decision">Decision<a class="anchor" href="#decision" aria-label="Link to this section">#</a></h2>
+<h3 id="1-phase-collapses-from-nine-values-to-five-amends-adr-0002">1. <code>Phase</code> collapses from nine values to five — amends ADR-0002<a class="anchor" href="#1-phase-collapses-from-nine-values-to-five-amends-adr-0002" aria-label="Link to this section">#</a></h3>
+<p>The synthesis proposed <code>Blocked/Ready/Claimed/Succeeded/Failed/TimedOut/
+UpstreamFailed/Skipped/Cancelled</code>. The last six duplicate <code>Reason</code> one for one,
+so every terminal node would carry the same fact twice in two fields that could
+disagree — and one of them would eventually be updated without the other.</p>
+<p><code>Phase</code> is now <code>Blocked</code>, <code>Scheduled</code>, <code>Ready</code>, <code>Claimed</code>, <code>Done</code>. It answers
+only the question <code>Status</code> cannot: <em>why is this node not running yet</em>. Which
+terminal outcome, and why, is <code>Status</code> and <code>Reason</code>, with exactly one
+representation.</p>
+<p><code>PhaseScheduled</code> is new and load-bearing: a node awaiting a retry backoff has
+satisfied dependencies but is not yet claimable, which is neither <code>Blocked</code> nor
+<code>Ready</code>. Without it, a retrying node has to be misfiled as one or the other.</p>
+<h3 id="2-triggeralways-means-ignores-predecessors-amends-adr-0030">2. <code>TriggerAlways</code> means "ignores predecessors" — amends ADR-0030<a class="anchor" href="#2-triggeralways-means-ignores-predecessors-amends-adr-0030" aria-label="Link to this section">#</a></h3>
+<p>As specified, <code>Always</code> fired when every predecessor was terminal, which is
+exactly <code>AllDone</code>. Two names for one rule is a bug in the vocabulary.</p>
+<p><code>TriggerAlways</code> now makes a node claimable immediately, ignoring predecessor
+state entirely, matching Airflow's <code>always</code> trigger rule. Edges into such a node
+still exist for documentation and still participate in cycle checking; they
+simply never gate it.</p>
+<h3 id="3-store-lives-in-the-root-package-amends-adr-0016-adr-0031">3. <code>Store</code> lives in the root package — amends ADR-0016, ADR-0031<a class="anchor" href="#3-store-lives-in-the-root-package-amends-adr-0016-adr-0031" aria-label="Link to this section">#</a></h3>
+<p>The plan put the port in a <code>dagstore</code> subpackage. That cannot compile: <code>Manager</code>
+must reference <code>Store</code>, so the root imports <code>dagstore</code>; and <code>Store</code>'s method
+signatures use <code>Node</code>, <code>Status</code>, <code>NodeSpec</code>, <code>ScopeConfig</code>, which the root also
+exposes — so <code>dagstore</code> must import the root. An import cycle.</p>
+<p>The three escapes are all worse than the fix. A shared <code>dagtypes</code> package splits
+the domain vocabulary away from the package users actually import, so <code>go doc</code>
+on the main package shows almost nothing. Type aliases in the root pointing at
+<code>dagstore</code> invert the dependency but leave the canonical documentation in a
+subpackage nobody reads first. Duplicating the types in both packages guarantees
+they drift.</p>
+<p><code>Store</code> therefore lives in the root package, in its own <code>store.go</code>. This is what
+the standard library does with <code>http.Handler</code> alongside <code>http.Client</code>: an
+interface implemented by others and an API consumed by others can share a
+package. Backend modules import only <code>github.com/specialistvlad/dagworker</code>,
+which has no dependencies of its own, so the cost of that import is zero.</p>
+<p>The module topology in ADR-0031 is otherwise unchanged.</p>
+<h3 id="4-cursor-is-split-from-seq-amends-adr-0020">4. <code>Cursor</code> is split from <code>Seq</code> — amends ADR-0020<a class="anchor" href="#4-cursor-is-split-from-seq-amends-adr-0020" aria-label="Link to this section">#</a></h3>
+<p>ADR-0020 gave <code>Seq</code> two jobs: a per-node monotonic counter for staleness
+detection, and the resume token for a subscription. Those are incompatible. A
+subscription spans nodes, and per-node counters are unrelated numbers — there is
+no ordering between node A's <code>Seq</code> 7 and node B's <code>Seq</code> 7, so "resume after 7"
+is meaningless for a stream.</p>
+<p>There are now two numbers:</p>
+<ul>
+<li><code>Seq</code> — per node, bumped on every write to that node. Orders that node's own
+events, and detects a stale read.</li>
+<li><code>Cursor</code> — per scope, a position in the scope's event log. Orders the stream
+and is what a reconnecting subscriber resumes from.</li>
+</ul>
+<p>This is etcd's split of per-key <code>ModRevision</code> from store-wide <code>Revision</code>, which
+exists for precisely this reason.</p>
+<p>The dossiers' warning against a monotonic counter — that it serializes every
+writer — was aimed at a <em>global</em> counter shared across scopes. A per-scope
+counter costs nothing extra, because writes within a scope are already
+serialized by the atomicity the storage port requires of every backend.</p>
+<p>Because cursors are per scope, a subscription with an empty <code>Scope</code> and a
+non-zero <code>From</code> is rejected: there is no cross-scope position to resume from.</p>
+<h3 id="5-full-pearce-kelly-ships-in-v1-amends-adr-0004">5. Full Pearce–Kelly ships in v1 — amends ADR-0004<a class="anchor" href="#5-full-pearce-kelly-ships-in-v1-amends-adr-0004" aria-label="Link to this section">#</a></h3>
+<p>The plan was to ship the single-node rank bump first and escalate to full
+Pearce–Kelly affected-region reordering only if a fast-path-hit-rate metric
+showed the approximation degrading.</p>
+<p>Writing it out, the full algorithm is roughly a hundred lines: two bounded
+depth-first searches from the edge's endpoints, then a merge that reassigns the
+union of the two regions' existing rank values in sorted order. The
+approximation is not meaningfully simpler, and it carries an obligation the real
+algorithm does not — to monitor a hit rate and to be replaced later on evidence.</p>
+<p>Shipping the correct algorithm now removes a metric, a migration, and a class of
+"why did this graph get slow" investigation. The <code>topo_fastpath_hit_ratio</code>
+metric is still exported, now purely as an observability signal rather than as
+the trigger for a planned rewrite.</p>
+<h2 id="consequences">Consequences<a class="anchor" href="#consequences" aria-label="Link to this section">#</a></h2>
+<h3 id="positive">Positive<a class="anchor" href="#positive" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>One representation of every fact: no field pair that can disagree.</li>
+<li>Subscriptions can actually resume, which ADR-0020 promised but could not deliver.</li>
+<li>Backends import one dependency-free module and implement one interface.</li>
+<li>No planned-but-unbuilt algorithm work remains in the roadmap for cycle checking.</li>
+</ul>
+<h3 id="negative">Negative<a class="anchor" href="#negative" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>The root package is larger than a purist would like. Mitigated by file
+organisation and by the fact that <code>Store</code> is the only interface a backend
+author reads.</li>
+<li><code>Cursor</code> is a second number for callers to understand. Mitigated by <code>Seq</code>
+being the only one most callers ever touch; <code>Cursor</code> appears only on <code>Event</code>
+and on <code>SubscribeOptions.From</code>.</li>
+</ul>
+<h3 id="neutral">Neutral<a class="anchor" href="#neutral" aria-label="Link to this section">#</a></h3>
+<ul>
+<li>The public API surface grows by one type and one field. Both are additive.</li>
+</ul>
+<h2 id="alternatives-considered">Alternatives considered<a class="anchor" href="#alternatives-considered" aria-label="Link to this section">#</a></h2>
+<h3 id="keep-the-nine-value-phase-and-derive-reason-from-it">Keep the nine-value <code>Phase</code> and derive <code>Reason</code> from it<a class="anchor" href="#keep-the-nine-value-phase-and-derive-reason-from-it" aria-label="Link to this section">#</a></h3>
+<p>Rejected: it inverts the dependency the wrong way. <code>Reason</code> is public and frozen;
+<code>Phase</code> is internal and explicitly carries no compatibility promise. Deriving a
+stable public value from an unstable internal one makes the internal one stable
+by accident.</p>
+<h3 id="a-dagtypes-package-imported-by-both-root-and-dagstore">A <code>dagtypes</code> package imported by both root and <code>dagstore</code><a class="anchor" href="#a-dagtypes-package-imported-by-both-root-and-dagstore" aria-label="Link to this section">#</a></h3>
+<p>Rejected: it solves the cycle but scatters the domain vocabulary across three
+packages, and <code>go doc github.com/specialistvlad/dagworker</code> — the first thing any
+evaluator runs — would show a <code>Manager</code> whose every method signature points
+somewhere else.</p>
+<h3 id="one-global-cursor-across-all-scopes">One global <code>Cursor</code> across all scopes<a class="anchor" href="#one-global-cursor-across-all-scopes" aria-label="Link to this section">#</a></h3>
+<p>Rejected for the reason the dossiers give: a single counter serializes every
+writer in the backend, turning independent scopes into contenders. Per-scope
+keeps the isolation that ADR-0023 exists to provide.</p>
+<h2 id="references">References<a class="anchor" href="#references" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><a href="https://etcd.io/docs/v3.5/learning/api/" rel="noopener noreferrer">etcd API: Revision and ModRevision</a></li>
+<li><a href="https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/dags.html#trigger-rules" rel="noopener noreferrer">Airflow trigger rules</a></li>
+<li>Pearce &amp; Kelly, "A dynamic topological sort algorithm for directed acyclic graphs", ACM JEA 11, 2007</li>
+<li>ADR-0002, ADR-0004, ADR-0016, ADR-0020, ADR-0030, ADR-0031</li>
+</ul>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/adr/0041-amendments-discovered-during-implementation.md" rel="noopener noreferrer">View source: docs/adr/0041-amendments-discovered-during-implementation.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

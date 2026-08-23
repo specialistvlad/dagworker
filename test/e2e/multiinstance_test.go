@@ -41,7 +41,7 @@ func eachSharedBackend(t *testing.T, fn func(t *testing.T, b e2e.Backend)) {
 
 // The headline claim: two instances, no coordinator, no leader, no membership
 // protocol -- and no node ever handed to both.
-func TestTwoInstancesNeverDoubleDispatch(t *testing.T) {
+func TestE2E_MultiInstance_NeverDoubleDispatch(t *testing.T) {
 	t.Parallel()
 	eachSharedBackend(t, func(t *testing.T, b e2e.Backend) {
 		t.Helper()
@@ -102,7 +102,7 @@ func TestTwoInstancesNeverDoubleDispatch(t *testing.T) {
 
 // One instance writes the graph, another runs it. Neither knows about the
 // other; the backend is the only thing they share.
-func TestOneInstanceWritesAnotherRuns(t *testing.T) {
+func TestE2E_MultiInstance_OneWritesAnotherRuns(t *testing.T) {
 	t.Parallel()
 	eachSharedBackend(t, func(t *testing.T, b e2e.Backend) {
 		t.Helper()
@@ -144,7 +144,7 @@ func TestOneInstanceWritesAnotherRuns(t *testing.T) {
 // An instance that dies mid-job loses its leases to whoever is still running.
 // Nothing coordinates this: the deadline is in storage and the fencing epoch
 // makes the recovery safe.
-func TestSurvivingInstanceRecoversADeadOnesWork(t *testing.T) {
+func TestE2E_MultiInstance_SurvivorRecoversDeadWork(t *testing.T) {
 	t.Parallel()
 	eachSharedBackend(t, func(t *testing.T, b e2e.Backend) {
 		t.Helper()
@@ -189,7 +189,7 @@ func TestSurvivingInstanceRecoversADeadOnesWork(t *testing.T) {
 
 // A node completed on one instance releases its successors for every instance,
 // because readiness lives in storage rather than in any process's memory.
-func TestFanOutCrossesInstances(t *testing.T) {
+func TestE2E_MultiInstance_FanOutCrosses(t *testing.T) {
 	t.Parallel()
 	eachSharedBackend(t, func(t *testing.T, b e2e.Backend) {
 		t.Helper()
@@ -237,7 +237,7 @@ func TestFanOutCrossesInstances(t *testing.T) {
 
 // Scopes are isolated: two instances working different scopes in the same
 // database never see each other's nodes.
-func TestScopesAreIsolated(t *testing.T) {
+func TestE2E_MultiInstance_ScopesAreIsolated(t *testing.T) {
 	t.Parallel()
 	eachSharedBackend(t, func(t *testing.T, b e2e.Backend) {
 		t.Helper()

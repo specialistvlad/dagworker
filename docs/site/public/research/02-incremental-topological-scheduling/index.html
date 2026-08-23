@@ -1,0 +1,1461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Incremental Topological Scheduling: Maintaining a Ready-Set Over a Dynamic DAG in Sublinear Time · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/research/02-incremental-topological-scheduling/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#incremental-topological-scheduling-maintaining-a-ready-set-over-a-dynamic-dag-in-sublinear-time">Incremental Topological Scheduling: Maintaining a Ready-Set Over a Dynamic DAG in Sublinear Time</a></li>
+<ul>
+<li><a href="#1-baseline-kahn-s-algorithm-and-the-in-degree-counter-trick">1. Baseline: Kahn's algorithm and the in-degree-counter trick</a></li>
+<ul>
+<li><a href="#1-1-static-kahn-1962">1.1 Static Kahn (1962)</a></li>
+<li><a href="#1-2-the-trick-never-rescan-only-decrement">1.2 The trick: never rescan, only decrement</a></li>
+<li><a href="#1-3-what-changes-when-the-dag-is-dynamic">1.3 What changes when the DAG is dynamic</a></li>
+<li><a href="#1-4-data-structures-for-the-baseline">1.4 Data structures for the baseline</a></li>
+</ul>
+<li><a href="#2-incremental-online-topological-order-maintenance">2. Incremental / online topological-order maintenance</a></li>
+<ul>
+<li><a href="#2-1-problem-statement">2.1 Problem statement</a></li>
+<li><a href="#2-2-alpern-hoover-rosen-sachs-zadeck-ahrsz-1990-the-ancestor">2.2 Alpern–Hoover–Rosen–Sachs–Zadeck (AHRSZ), 1990 — the ancestor</a></li>
+<li><a href="#2-3-marchetti-spaccamela-nanni-rohnert-mnr-1996-the-other-classical-baseline">2.3 Marchetti-Spaccamela–Nanni–Rohnert (MNR), 1996 — the other classical baseline</a></li>
+<li><a href="#2-4-pearce-and-kelly-wea-2004-jea-2007-the-one-to-actually-implement">2.4 Pearce and Kelly (WEA 2004 / JEA 2007) — the one to actually implement</a></li>
+<li><a href="#2-5-katriel-and-bodlaender-talg-2006-first-real-amortized-improvement-over-o-mn">2.5 Katriel and Bodlaender (TALG 2006) — first real amortized improvement over O(mn)</a></li>
+<li><a href="#2-6-ajwani-friedrich-and-meyer-average-case-analysis-and-a-worse-worst-case">2.6 Ajwani, Friedrich (and Meyer) — average-case analysis, and a worse worst case</a></li>
+<li><a href="#2-7-haeupler-kavitha-mathew-sen-and-tarjan-talg-2012-the-sparse-graph-state-of-the-art-for-a-while">2.7 Haeupler, Kavitha, Mathew, Sen, and Tarjan (TALG 2012) — the sparse-graph state of the art for a while</a></li>
+<li><a href="#2-8-bender-fineman-gilbert-soda-2009-and-bender-fineman-gilbert-tarjan-talg-2016-simpler-machinery-comparable-bounds">2.8 Bender, Fineman, Gilbert (SODA 2009) and Bender–Fineman–Gilbert–Tarjan (TALG 2016) — simpler machinery, comparable bounds</a></li>
+<li><a href="#2-9-comparative-table">2.9 Comparative table</a></li>
+</ul>
+<li><a href="#3-cycle-prevention-on-edge-insertion">3. Cycle prevention on edge insertion</a></li>
+<ul>
+<li><a href="#3-1-what-an-exact-check-costs">3.1 What an exact check costs</a></li>
+<li><a href="#3-2-the-maintained-order-fast-path-sub-o-1-ish-in-the-common-case">3.2 The maintained-order fast path — sub-O(1)-ish in the common case</a></li>
+<li><a href="#3-3-the-cheap-but-unsound-shortcut-and-why-it-needs-a-sound-fallback">3.3 The cheap-but-unsound shortcut, and why it needs a sound fallback</a></li>
+<li><a href="#3-4-recommendation">3.4 Recommendation</a></li>
+</ul>
+<li><a href="#4-reachability-queries-for-cancellation-and-failure-propagation">4. Reachability queries for cancellation and failure propagation</a></li>
+<ul>
+<li><a href="#4-1-transitive-closure-ruled-out-by-arithmetic-alone">4.1 Transitive closure — ruled out by arithmetic alone</a></li>
+<li><a href="#4-2-on-the-fly-bfs-dfs-the-default-and-it-is-not-actually-expensive-here">4.2 On-the-fly BFS/DFS — the default, and it is not actually expensive here</a></li>
+<li><a href="#4-3-2-hop-labeling-powerful-but-solving-a-different-problem">4.3 2-hop labeling — powerful, but solving a different problem</a></li>
+<li><a href="#4-4-interval-tree-cover-labeling-and-grail-dag-specific-and-their-real-limitation">4.4 Interval / tree-cover labeling and GRAIL — DAG-specific, and their real limitation</a></li>
+<li><a href="#4-5-recommendation">4.5 Recommendation</a></li>
+</ul>
+<li><a href="#5-counting-based-completion-detection">5. Counting-based completion detection</a></li>
+<ul>
+<li><a href="#5-1-per-node-readiness-this-is-just-1-s-pending-counter">5.1 Per-node readiness — this is just §1's pending[] counter</a></li>
+<li><a href="#5-2-whole-scope-completion-a-single-global-counter-not-a-graph-walk">5.2 Whole-scope completion — a single global counter, not a graph walk</a></li>
+<li><a href="#5-3-subgraph-did-this-branch-finish-completion">5.3 Subgraph / "did this branch finish" completion</a></li>
+</ul>
+<li><a href="#6-reference-counting-for-gc-of-finished-subgraphs">6. Reference counting for GC of finished subgraphs</a></li>
+<ul>
+<li><a href="#6-1-the-production-analogue-naiad-s-distributed-reference-counting">6.1 The production analogue: Naiad's distributed reference counting</a></li>
+<li><a href="#6-2-applying-the-pattern-to-dag-worker-go">6.2 Applying the pattern to dag-worker-go</a></li>
+<li><a href="#6-3-why-no-cycle-collector-is-needed-restated-precisely">6.3 Why no cycle collector is needed, restated precisely</a></li>
+</ul>
+<li><a href="#7-concrete-data-structures-and-their-kv-store-shape">7. Concrete data structures, and their KV-store shape</a></li>
+<ul>
+<li><a href="#7-1-in-degree-pending-dependency-counters">7.1 In-degree / pending-dependency counters</a></li>
+<li><a href="#7-2-adjacency-in-csr-form-and-why-dynamic-fights-it">7.2 Adjacency in CSR form, and why "dynamic" fights it</a></li>
+<li><a href="#7-3-the-ready-set-fifo-bitset-or-heap">7.3 The ready set: FIFO, bitset, or heap</a></li>
+</ul>
+<li><a href="#8-idempotent-in-degree-decrement-under-at-least-once-delivery">8. Idempotent in-degree decrement under at-least-once delivery</a></li>
+<ul>
+<li><a href="#8-1-why-a-raw-counter-is-not-idempotent">8.1 Why a raw counter is not idempotent</a></li>
+<li><a href="#8-2-strategy-a-raw-counter-idempotency-pushed-to-the-delivery-layer">8.2 Strategy A — raw counter, idempotency pushed to the delivery layer</a></li>
+<li><a href="#8-3-strategy-b-per-edge-satisfied-flag">8.3 Strategy B — per-edge "satisfied" flag</a></li>
+<li><a href="#8-4-strategy-c-per-node-set-of-satisfied-predecessor-ids">8.4 Strategy C — per-node set of satisfied predecessor IDs</a></li>
+<li><a href="#8-5-quantified-storage-comparison-1-000-000-nodes-at-out-degree-3">8.5 Quantified storage comparison, 1,000,000 nodes at out-degree 3</a></li>
+<li><a href="#8-6-recommendation">8.6 Recommendation</a></li>
+</ul>
+<li><a href="#recommendations-for-dag-worker-go">Recommendations for dag-worker-go</a></li>
+<li><a href="#open-questions">Open questions</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="incremental-topological-scheduling-maintaining-a-ready-set-over-a-dynamic-dag-in-sublinear-time">Incremental Topological Scheduling: Maintaining a Ready-Set Over a Dynamic DAG in Sublinear Time<a class="anchor" href="#incremental-topological-scheduling-maintaining-a-ready-set-over-a-dynamic-dag-in-sublinear-time" aria-label="Link to this section">#</a></h1>
+<p>Scope: this dossier covers the <em>algorithms and math</em> side of the ready-set problem for
+<code>dag-worker-go</code> — how to know, after any single mutation (a node completes, an edge is
+added, a node is cancelled), which nodes just became eligible for a worker to pick up,
+without ever re-scanning the whole graph. It deliberately stays below the distributed-systems
+layer (leases, partitioning, multi-instance coordination belong in a different research
+file) and instead answers: what is the cheapest correct data structure and update rule,
+what do the 40 years of incremental-topological-order literature actually buy you over
+naive Kahn, and how does all of it degrade gracefully onto a KV store that only offers
+<code>GET</code>/<code>SET</code>/<code>INCR</code>/atomic-scripts instead of pointers.</p>
+<hr>
+<h2 id="1-baseline-kahn-s-algorithm-and-the-in-degree-counter-trick">1. Baseline: Kahn's algorithm and the in-degree-counter trick<a class="anchor" href="#1-baseline-kahn-s-algorithm-and-the-in-degree-counter-trick" aria-label="Link to this section">#</a></h2>
+<h3 id="1-1-static-kahn-1962">1.1 Static Kahn (1962)<a class="anchor" href="#1-1-static-kahn-1962" aria-label="Link to this section">#</a></h3>
+<p>Kahn's algorithm is the origin of every "ready set" scheduler in this space. It topologically
+sorts a DAG by repeatedly stripping source vertices (in-degree 0) <a href="https://dl.acm.org/doi/10.1145/368996.369025" rel="noopener noreferrer">Kahn, A. B. (1962). "Topological sorting of large networks." <em>Communications of the ACM</em>, 5(11), 558–562</a>:</p>
+<pre><code>L ← empty list                       // the output order
+S ← { v ∈ V : indeg(v) = 0 }         // the ready set
+while S ≠ ∅:
+    remove a node n from S
+    append n to L
+    for each edge (n, m):
+        indeg(m) ← indeg(m) - 1
+        if indeg(m) = 0:
+            insert m into S
+if |L| &lt; |V|: report a cycle          // leftover in-degree &gt; 0 everywhere ⇒ cycle</code></pre>
+<p>Run once, from scratch, this is <code>O(V + E)</code> — every vertex is dequeued once, every edge is
+examined once for the decrement. That bound is optimal for <em>producing a full order once</em>.
+It is the wrong algorithm to re-run on every event in a live scheduler, and the wrong thing
+to imitate literally — the useful idea is not the full-graph scan, it is what happens
+<strong>inside</strong> the <code>for each edge (n, m)</code> loop.</p>
+<h3 id="1-2-the-trick-never-rescan-only-decrement">1.2 The trick: never rescan, only decrement<a class="anchor" href="#1-2-the-trick-never-rescan-only-decrement" aria-label="Link to this section">#</a></h3>
+<p>A scheduler doesn't need a global order at all — it needs the <em>ready set</em>, refreshed
+incrementally. Kahn's algorithm already computes that increment for free: the only work
+triggered by finishing node <code>n</code> is walking <code>n</code>'s <strong>out-edges</strong> and decrementing each
+successor's counter. Nothing else in the graph is touched. So instead of re-running Kahn
+from <code>L ← ∅</code> after every completion, you keep the <code>indeg[]</code> array (renamed <code>pending[]</code> once
+edges start being added dynamically — see §1.3) resident as long-lived state and treat each
+node completion as a single Kahn "pop":</p>
+<pre><code class="language-go"><span class="tok-com">// OnNodeSucceeded is called exactly once per node completion.</span>
+<span class="tok-com">// out(n) is n's adjacency list — see §7.2 for the CSR encoding.</span>
+<span class="tok-kw">func</span> (s *Scheduler) OnNodeSucceeded(n NodeID) []NodeID {
+    <span class="tok-kw">var</span> readyNow []NodeID
+    <span class="tok-kw">for</span> _, m := <span class="tok-kw">range</span> s.out(n) {
+        <span class="tok-kw">if</span> s.pending[m].Add(-<span class="tok-num">1</span>) == <span class="tok-num">0</span> {   <span class="tok-com">// atomic decrement, see §8</span>
+            readyNow = <span class="tok-kw">append</span>(readyNow, m)
+        }
+    }
+    <span class="tok-kw">return</span> readyNow
+}</code></pre>
+<p>The cost of this operation is <strong><code>O(outdeg(n))</code></strong>, not <code>O(V+E)</code>. That is the entire content
+of "the in-degree-counter trick": Kahn's algorithm is already an amortized-<code>O(1)</code>-per-edge
+streaming algorithm if you stop rebuilding it from scratch. Summed over the DAG's whole
+life, <code>Σ outdeg(n) = E</code>, so the <em>total</em> work done by ready-set maintenance across every
+completion that will ever happen is <code>O(E)</code> — each edge is charged exactly once, at the
+moment its tail finishes. This is a textbook amortized-analysis argument (aggregate
+method): no single completion is bounded better than <code>O(outdeg(n))</code> worst case (a fan-out
+hub node), but no adversary can make the <em>sum</em> worse than <code>O(E)</code>, because each edge can only
+ever be traversed once by this rule.</p>
+<h3 id="1-3-what-changes-when-the-dag-is-dynamic">1.3 What changes when the DAG is dynamic<a class="anchor" href="#1-3-what-changes-when-the-dag-is-dynamic" aria-label="Link to this section">#</a></h3>
+<p>Two things break the static picture, and both matter for <code>dag-worker-go</code>:</p>
+<ol>
+<li><strong>Edges/nodes arrive after some ancestors have already finished.</strong> A newly inserted node
+<code>v</code> must start with <code>pending[v] = indeg(v)</code> computed <em>at insertion time</em>, not at
+graph-birth time — trivial as long as node creation is the only writer of the initial
+counter (§8.5 revisits this once retries enter the picture).</li>
+<li><strong>A newly inserted edge <code>(u, v)</code> where <code>u</code> is already done.</strong> If you insert the edge and
+then blindly set <code>pending[v] += 1</code>, <code>v</code> will wait forever for a predecessor that already
+finished. The insertion path must therefore check <code>u</code>'s current status atomically as part
+of the same operation: if <code>u</code> is terminal-success, do <strong>not</strong> increment <code>pending[v]</code>
+(the edge is born already-satisfied); if <code>u</code> is pending, increment normally. This is a
+compare-and-decide, not a blind <code>INCR</code>, and it is the first of several places in this
+design where "just call INCR/DECR" is the wrong primitive — see §8.</li>
+</ol>
+<h3 id="1-4-data-structures-for-the-baseline">1.4 Data structures for the baseline<a class="anchor" href="#1-4-data-structures-for-the-baseline" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Structure</th><th>Purpose</th><th>Shape</th></tr></thead>
+<tbody>
+<tr><td><code>pending[v]</code></td><td>remaining unsatisfied predecessors</td><td>array/hash <code>NodeID → uint32</code>, one atomic counter per node</td></tr>
+<tr><td><code>out(v)</code></td><td>successors to notify on completion</td><td>CSR adjacency (§7.2) or per-node adjacency list</td></tr>
+<tr><td>ready set</td><td>nodes with <code>pending = 0</code> awaiting a worker</td><td>FIFO queue / bitset / heap (§7.3)</td></tr>
+<tr><td>status</td><td>new / in-progress / success / error</td><td>one byte per node, or folded into the same record as <code>pending</code></td></tr>
+</tbody></table></div>
+<p>Everything past this point in the dossier is about (a) what to do when edges can also be
+<strong>added</strong> after the graph is already running — which perturbs a maintained order, not just a
+counter — and (b) how to make the counter update in §1.2 survive at-least-once delivery,
+crashes, and concurrent writers across multiple <code>dag-worker-go</code> instances.</p>
+<hr>
+<h2 id="2-incremental-online-topological-order-maintenance">2. Incremental / online topological-order maintenance<a class="anchor" href="#2-incremental-online-topological-order-maintenance" aria-label="Link to this section">#</a></h2>
+<p>Kahn's counter trick is sufematically enough to answer "who is ready to run" — it needs no
+topological <em>order</em>, only in-degree. But <code>dag-worker-go</code> also needs to <strong>reject or detect
+cycles on edge insertion</strong> (§3) and, in some designs, to expose a consistent order for
+tie-breaking, priority, or debugging. That requires maintaining an actual topological
+ordering online, as an adversary inserts edges one at a time and the algorithm must either
+update the order or report that the new edge closes a cycle. This is a 35-year-old research
+line; the papers differ enormously in whether they are "read the abstract and implement it
+this afternoon" or "read the abstract and hire the authors."</p>
+<h3 id="2-1-problem-statement">2.1 Problem statement<a class="anchor" href="#2-1-problem-statement" aria-label="Link to this section">#</a></h3>
+<p>Maintain a strict total order <code>ord : V → {1..n}</code> consistent with all edges seen so far
+(<code>(u,v) ∈ E ⇒ ord(u) &lt; ord(v)</code>), online, as edges are inserted one at a time, minimizing the
+total work over a sequence of <code>m</code> insertions. Every algorithm below is judged on the same
+axis: total time for <code>m</code> insertions into an initially edgeless graph on <code>n</code> vertices, i.e. an
+<strong>amortized</strong> cost, because the worst single insertion in <em>every</em> known algorithm can be made
+<code>Θ(n)</code> by an adversary (an edge from the current last vertex to the current first vertex
+forces a full re-numbering) — the question is only how bad the <em>sum</em> over <code>m</code> insertions gets.</p>
+<h3 id="2-2-alpern-hoover-rosen-sachs-zadeck-ahrsz-1990-the-ancestor">2.2 Alpern–Hoover–Rosen–Sachs–Zadeck (AHRSZ), 1990 — the ancestor<a class="anchor" href="#2-2-alpern-hoover-rosen-sachs-zadeck-ahrsz-1990-the-ancestor" aria-label="Link to this section">#</a></h3>
+<p>Alpern, Hoover, Rosen, Sachs, and Zadeck (SODA 1990, "Incremental evaluation of computational
+circuits") is the earliest algorithm in this family and the one every later paper compares
+itself to (Pearce and Kelly's own comparison table explicitly ranks it as having "a strictly
+tighter bound on its runtime than PK" — i.e. AHRSZ theoretically dominates Pearce–Kelly, it
+just isn't what practitioners reach for) <a href="https://www.doc.ic.ac.uk/~phjk/Publications/DynamicTopoSortAlg-JEA-07.pdf" rel="noopener noreferrer">Pearce &amp; Kelly, <em>A Dynamic Topological Sort
+Algorithm for Directed Acyclic Graphs</em>, JEA 11 (2007)</a>.
+AHRSZ works by discovering the affected region with a bounded bidirectional search (forward
+from the edge's head, backward from its tail) and renumbering only that region — the same
+core idea every subsequent paper (PK, KB, HKMST, BFGT) reuses in some form. Treat it as the
+"first draft" of the technique below rather than something to implement directly; nobody in
+the applied literature ships raw AHRSZ, they ship Pearce–Kelly's simplification of it.</p>
+<h3 id="2-3-marchetti-spaccamela-nanni-rohnert-mnr-1996-the-other-classical-baseline">2.3 Marchetti-Spaccamela–Nanni–Rohnert (MNR), 1996 — the other classical baseline<a class="anchor" href="#2-3-marchetti-spaccamela-nanni-rohnert-mnr-1996-the-other-classical-baseline" aria-label="Link to this section">#</a></h3>
+<p>MNR is the second pre-2000 algorithm cited as a practical baseline in the Pearce–Kelly
+comparison; the JEA paper's own empirical section notes "comparing MNR and PK is more
+subtle, since neither achieves a strictly tighter bound than the other" — i.e. MNR and PK
+are incomparable in the worst case, each winning on different graph shapes, and both are
+DFS-based affected-region algorithms of essentially the same flavor as AHRSZ.</p>
+<h3 id="2-4-pearce-and-kelly-wea-2004-jea-2007-the-one-to-actually-implement">2.4 Pearce and Kelly (WEA 2004 / JEA 2007) — the one to actually implement<a class="anchor" href="#2-4-pearce-and-kelly-wea-2004-jea-2007-the-one-to-actually-implement" aria-label="Link to this section">#</a></h3>
+<p><strong>"A Dynamic Topological Sort Algorithm for Directed Acyclic Graphs"</strong>, D. J. Pearce and
+P. H. J. Kelly, <em>ACM Journal of Experimental Algorithmics</em> 11 (2007), article 1.7
+<a href="https://www.doc.ic.ac.uk/~phjk/Publications/DynamicTopoSortAlg-JEA-07.pdf" rel="noopener noreferrer">[PDF]</a>,
+conference precursor WEA 2004 <a href="https://www.doc.ic.ac.uk/~phjk/Publications/DynTopoSortWEA2004.pdf" rel="noopener noreferrer">[PDF]</a>.</p>
+<p><strong>Mechanism.</strong> Every vertex carries an integer <code>ord(v)</code> — its position in the maintained
+topological order, stored so the order can be read off directly with no extra pass. To
+insert edge <code>(x, y)</code>:</p>
+<ol>
+<li>If <code>ord(x) &lt; ord(y)</code> already, the invariant holds — accept the edge, <strong>no search at all</strong>.
+This is the fast path and, for a scheduler where edges are usually added in roughly
+causal order (a parent added before its child), it is the <em>overwhelmingly common</em> case.</li>
+<li>Otherwise (<code>ord(x) ≥ ord(y)</code>), the edge threatens the invariant. Run a forward DFS from
+<code>y</code> restricted to vertices with <code>ord &lt; ord(x)</code> (the set <code>Δᶠ</code>, vertices that might need to
+move after <code>x</code>) and a backward DFS from <code>x</code> restricted to vertices with <code>ord &gt; ord(y)</code>
+(the set <code>Δᵇ</code>). <strong>If the forward search reaches <code>x</code> itself, the graph has a cycle</strong> —
+reject the edge. Reachability discovery <em>is</em> cycle detection; there is no separate check.</li>
+<li>If no cycle is found, <code>Δᶠ ∪ Δᵇ</code> is exactly the set of vertices whose relative order must
+change. Extract their existing <code>ord</code> values, and re-assign them the same set of integer
+slots but in the new required sequence (<code>Δᵇ</code> vertices first, in their old relative order,
+then <code>Δᶠ</code> vertices, in their old relative order). Every vertex <em>outside</em> this affected
+region keeps its <code>ord</code> untouched.</li>
+</ol>
+<p><strong>Cost.</strong> Work per insertion is proportional to <code>|Δ| = |Δᶠ| + |Δᵇ|</code>, the <em>affected region</em> —
+not <code>n</code>, not <code>m</code>. Pearce and Kelly are explicit that they are not chasing the best worst-case
+bound: their own comparison shows AHRSZ is strictly better in the worst case, and MNR is
+incomparable. What makes PK the right default is that <code>|Δ|</code> tracks <em>locality of disruption</em>
+rather than graph size — an edge that only crosses a small neighborhood only perturbs that
+neighborhood, however large <code>n</code> is elsewhere in the DAG. The JEA paper's empirical section
+(random DAGs, thousands of vertices) found PK fastest on sparse digraphs and only a constant
+factor behind the best on dense ones.</p>
+<p><strong>Why this is the one to build.</strong> It is a few hundred lines: two bounded DFS traversals plus
+an array splice, no balanced trees, no potential-function bookkeeping, no randomization. It
+is also the one with a real adoption track record — implementations of Pearce–Kelly (or
+direct derivatives) ship inside Google's <strong>Abseil</strong> C++ library, <strong>TensorFlow</strong>, the
+<strong>JGraphT</strong> Java graph library, and the <strong>MonoSAT</strong> SAT solver, per the paper's own citing
+literature and the maintained reference implementations on GitHub
+(<a href="https://github.com/metapragma/pearce-kelly" rel="noopener noreferrer">metapragma/pearce-kelly</a>,
+<a href="https://github.com/noncrab/pearce-kelly" rel="noopener noreferrer">noncrab/pearce-kelly</a>). That is a strong practical
+signal: production systems facing exactly this problem (maintain a topo order, reject
+cycles, do it fast in the common case) converged on PK, not on the asymptotically superior
+algorithms below.</p>
+<h3 id="2-5-katriel-and-bodlaender-talg-2006-first-real-amortized-improvement-over-o-mn">2.5 Katriel and Bodlaender (TALG 2006) — first real amortized improvement over <code>O(mn)</code><a class="anchor" href="#2-5-katriel-and-bodlaender-talg-2006-first-real-amortized-improvement-over-o-mn" aria-label="Link to this section">#</a></h3>
+<p><strong>"Online topological ordering"</strong>, I. Katriel and H. L. Bodlaender, <em>ACM Transactions on
+Algorithms</em> 2(3), 2006, 364–379
+<a href="https://www.sciencedirect.com/science/article/pii/S0304397507006573" rel="noopener noreferrer">[TCS companion tight-analysis paper]</a>.
+Before this paper the standard bound for <code>m</code> online insertions was the trivial <code>O(mn)</code> (each
+insertion re-does an <code>O(n)</code>-ish local fix). Katriel–Bodlaender give
+<strong><code>O(min{m^{3/2} log n, m^{3/2} + n^2 log n})</code></strong> total time — a genuine asymptotic
+improvement, not just a constant-factor practical win. They also modified an earlier
+heap-based algorithm of Alpern et al. and analyzed the special case of bounded treewidth
+<code>k</code>, getting <code>O(mk log^2 n)</code>, which becomes <code>O(n log n)</code> (optimal) on trees. A later paper by
+Liu and Chao gives a <strong>tight</strong> analysis of the same algorithm: <code>Θ(m^{3/2} + m n^{1/2} log n)</code>
+— i.e. Katriel–Bodlaender's own stated bound was not tight, and the true behavior is slightly
+worse on the <code>n^{1/2} log n</code> term.</p>
+<p><strong>Implementability.</strong> This is a heap-based algorithm (a priority queue keyed on <code>ord</code> drives
+the affected-region search so the smallest-first exploration terminates as early as
+possible) with a nontrivial amortized argument behind the bound. It is meaningfully harder
+to get right than Pearce–Kelly — expect low hundreds to low thousands of lines depending on
+how much of a generic priority-queue/graph library you can lean on — and the payoff (a
+better worst-case <em>asymptotic</em> bound) only shows up on adversarially structured insertion
+sequences. For a workflow DAG where edges mostly arrive in causal, roughly-forward order,
+this is asymptotics you are unlikely to ever collect on.</p>
+<h3 id="2-6-ajwani-friedrich-and-meyer-average-case-analysis-and-a-worse-worst-case">2.6 Ajwani, Friedrich (and Meyer) — average-case analysis, and a worse worst case<a class="anchor" href="#2-6-ajwani-friedrich-and-meyer-average-case-analysis-and-a-worse-worst-case" aria-label="Link to this section">#</a></h3>
+<p>Ajwani and Friedrich's line of work (building on Ajwani–Friedrich–Meyer) contributes two
+distinct results, both useful for calibrating expectations rather than for direct
+implementation:</p>
+<ul>
+<li><strong>"An O(n^2.75) algorithm for online topological ordering"</strong> (Ajwani &amp; Friedrich,
+ESA 2007 / TALG follow-up) gives a <em>worse</em> worst-case bound than Katriel–Bodlaender for
+general graphs, trading it for simpler machinery — of the family in this section, it is
+the one with the least favorable worst case, which is why it isn't recommended over
+§2.5/§2.7/§2.8 for a from-scratch implementation.</li>
+<li><strong>"Average-Case Analysis of Online Topological Ordering"</strong> (Ajwani &amp; Friedrich, ISAAC
+<ol start="2007">
+<li>is the more load-bearing result for a systems designer: they prove that when edges</li>
+</ol>
+<p>of a complete DAG are inserted <strong>in random order</strong>, several of these algorithms (including
+variants of PK and KB) run in <strong>expected <code>O(n^2 polylog n)</code></strong> time total, dramatically
+better than their adversarial worst case. This matters directly for <code>dag-worker-go</code>: it is
+the closest thing in the literature to a formal argument that "worst case is a pathological
+adversary, typical DAG-construction order is fine," which is exactly the assumption the
+Pearce–Kelly recommendation in §2.4 leans on informally.</p>
+</li>
+</ul>
+<h3 id="2-7-haeupler-kavitha-mathew-sen-and-tarjan-talg-2012-the-sparse-graph-state-of-the-art-for-a-while">2.7 Haeupler, Kavitha, Mathew, Sen, and Tarjan (TALG 2012) — the sparse-graph state of the art for a while<a class="anchor" href="#2-7-haeupler-kavitha-mathew-sen-and-tarjan-talg-2012-the-sparse-graph-state-of-the-art-for-a-while" aria-label="Link to this section">#</a></h3>
+<p><strong>"Incremental cycle detection, topological ordering, and strong component maintenance"</strong>,
+B. Haeupler, T. Kavitha, R. Mathew, S. Sen, R. E. Tarjan, <em>ACM Transactions on Algorithms</em>
+8(1), article 3, 2012 <a href="https://arxiv.org/pdf/1105.2397" rel="noopener noreferrer">[arXiv:1105.2397]</a>.</p>
+<p>They give <strong>two</strong> algorithms:</p>
+<ol>
+<li>A <strong>two-way search</strong> algorithm handling <code>m</code> arc additions in <strong><code>O(m^{3/2})</code></strong> total —
+for sparse graphs (<code>m = O(n)</code>) this improves the prior best by a <code>log n</code> factor and, per
+the paper's own Theorem 3.5, the total number of arc traversals across the whole insertion
+sequence is bounded by <code>4·m^{3/2} + m + 1</code> — an unusually explicit constant for a paper in
+this area. The mechanism: to insert <code>(v, w)</code> with <code>v</code> currently ordered after <code>w</code>, run a
+forward search from <code>w</code> and a backward search from <code>v</code> simultaneously, but only along
+pairs of arcs that are "compatible" (a forward-traversed arc <code>(u,x)</code> and a
+backward-traversed arc <code>(y,z)</code> must keep <code>u &lt; z</code> in the <em>current</em> order) — if a forward
+arc lands in the backward-visited set (or vice versa), that closes a cycle; otherwise the
+two frontiers are spliced into the new local order exactly as in Pearce–Kelly. What makes
+the amortized bound work is a potential function over <strong>pairs of arcs that lie on a common
+path</strong> ("related" pairs): each search that does non-trivial work strictly increases the
+number of related pairs, and there are at most <code>m^2/2</code> such pairs total, which pays for
+<code>O(m^{3/2})</code> aggregate traversal work once the searches are bucketed into "small"
+(<code>≤ 2√m</code> steps) and "big" categories.</li>
+<li>A <strong>search-order</strong> algorithm for denser graphs handling an arbitrary insertion sequence in
+<strong><code>O(n^{5/2})</code></strong> total, improving the prior best (Katriel–Bodlaender's dense-graph
+variant) by a polynomial factor on sufficiently dense inputs — though the authors are
+candid that this bound "may be far from tight," showing only a much weaker
+<code>Ω(n^2 · 2^{√(2 lg n)})</code> lower bound for their own algorithm, tied to the unresolved
+"k-levels" problem in combinatorial geometry.</li>
+<li>A genuinely useful <strong>lower bound</strong>: any algorithm that only reorders vertices strictly
+"between" the endpoints of the affected edge in the current order (a natural formalization
+of what PK/AHRSZ/KB all do, called the <em>locality property</em>) must take <strong><code>Ω(m^{3/2})</code></strong>
+time in the worst case for sparse graphs — so the <code>O(m^{3/2})</code> bound above is not an
+accident of a clever algorithm, it is close to the best any "local" algorithm can do.
+Katriel additionally showed even local algorithms need <code>Ω(n^2)</code> when <code>m = Θ(n)</code> for a
+<em>different</em> cost measure (total vertices moved), underscoring that PK-family algorithms
+trade average-case locality for a provably worse adversarial case.</li>
+</ol>
+<p><strong>Implementability.</strong> This is a research artifact, not a weekend build. The two-way search
+does eliminate heap operations (no priority queue, "soft-threshold" search bounds instead),
+which the authors present as an implementation <em>simplification</em> relative to Katriel–
+Bodlaender — but correctly implementing the compatibility test between forward/backward arcs
+and getting the amortized bound to actually manifest requires careful bookkeeping absent
+from PK. Reserve this for a v2 if <code>dag-worker-go</code> ever needs to defend against adversarial
+insertion patterns at very large <code>m</code>; it is not where you start.</p>
+<h3 id="2-8-bender-fineman-gilbert-soda-2009-and-bender-fineman-gilbert-tarjan-talg-2016-simpler-machinery-comparable-bounds">2.8 Bender, Fineman, Gilbert (SODA 2009) and Bender–Fineman–Gilbert–Tarjan (TALG 2016) — simpler machinery, comparable bounds<a class="anchor" href="#2-8-bender-fineman-gilbert-soda-2009-and-bender-fineman-gilbert-tarjan-talg-2016-simpler-machinery-comparable-bounds" aria-label="Link to this section">#</a></h3>
+<p><strong>"A New Approach to Incremental Topological Ordering"</strong>, M. A. Bender, J. T. Fineman, S.
+Gilbert <a href="https://www.comp.nus.edu.sg/~gilbert/pubs/SODA09.pdf" rel="noopener noreferrer">[PDF]</a>, gives an
+<code>O(n^2 log n)</code> total-time algorithm for dense graphs using "completely different techniques"
+from AHRSZ/PK/KB — described elsewhere in the literature as avoiding the heavier
+data-structure machinery of Katriel–Bodlaender.</p>
+<p>The extended journal result, <strong>"A New Approach to Incremental Cycle Detection and Related
+Problems"</strong>, M. A. Bender, J. T. Fineman, S. Gilbert, R. E. Tarjan, <em>ACM TALG</em> 2016
+<a href="https://arxiv.org/pdf/1112.0784" rel="noopener noreferrer">[arXiv:1112.0784]</a>, sharpens this into two regimes:</p>
+<ul>
+<li><strong>Sparse:</strong> <code>O(min{√m, n^{2/3}} · m)</code> total time for <code>m</code> insertions.</li>
+<li><strong>Dense:</strong> <code>O(n^2 log n)</code> total time, improving on HKMST's <code>O(n^{5/2})</code> dense bound by a
+polynomial factor.</li>
+</ul>
+<p><strong>Mechanism.</strong> Like every algorithm in this family, insertion of <code>(v, w)</code> (with <code>v</code> currently
+ordered after <code>w</code>) triggers a bidirectional search — but BFGT's is deliberately <em>asymmetric</em>:
+each vertex carries a two-part label (a coarse <strong>level</strong> and a fine <strong>index within the
+level</strong>), and the <strong>backward</strong> search is the one that is explicitly bounded by
+<code>Δ = min{√m, n^{2/3}}</code> steps — "each backward search proceeds entirely within a level; if it
+takes too long, stop it and increase the level of a vertex" rather than letting an unbounded
+search run and paying for it with a global potential argument the way HKMST does. The
+authors state plainly that the result "is considerably simpler than [HKMST]'s <code>O(m^{3/2})</code>
+algorithm," explicitly because it needs <strong>no dynamic ordered-list data structure and no
+random sampling/selection</strong> — every structure involved is a plain array or counter. That is
+the single most actionable sentence in this whole literature for a Go implementer: BFGT is
+the theoretically-competitive algorithm that was <em>designed</em> to be simple to implement, at the
+cost of an asymmetric, slightly fiddlier two-part labeling scheme than PK's single integer
+<code>ord</code>.</p>
+<p><strong>Implementability.</strong> Meaningfully closer to buildable than HKMST — "simple data structures"
+is the authors' own framing — but the two-part level/index labeling and the level-promotion
+rule are still more moving parts than Pearce–Kelly's single splice, and there is (as of this
+research) no widely-used open-source reference implementation to crib from, unlike PK's
+Abseil/TensorFlow/JGraphT lineage. Treat it as the credible "if PK's practical
+<code>O(|Δ|)</code>-per-edge cost ever shows up in a profile as the bottleneck" upgrade path, not the
+starting point.</p>
+<h3 id="2-9-comparative-table">2.9 Comparative table<a class="anchor" href="#2-9-comparative-table" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Algorithm</th><th>Year</th><th>Total cost, <code>m</code> insertions</th><th>Technique</th><th>Implementable in a few hundred lines?</th></tr></thead>
+<tbody>
+<tr><td>Naive re-topo-sort</td><td>—</td><td><code>O(m·(V+E))</code></td><td>full Kahn/DFS per insertion</td><td>yes, but don't</td></tr>
+<tr><td>AHRSZ</td><td>1990</td><td>best worst case among the classics (unspecified closed form; strictly dominates PK)</td><td>bidirectional bounded search, renumber affected region</td><td>reference only — nobody ships it raw</td></tr>
+<tr><td>MNR</td><td>1996</td><td>incomparable to PK</td><td>bidirectional DFS, renumber</td><td>reference only</td></tr>
+<tr><td><strong>Pearce–Kelly</strong></td><td>2004/2007</td><td><code>O(|Δ|·f(|Δ|))</code>, <code>Δ</code> = affected region (data-dependent, not a fixed poly in <code>m,n</code>)</td><td>single-integer <code>ord</code>, fwd/bwd DFS, array splice</td><td><strong>yes — recommended default</strong></td></tr>
+<tr><td>Katriel–Bodlaender</td><td>2006</td><td><code>O(m^{3/2} + m n^{1/2} log n)</code> tight (Liu–Chao)</td><td>heap-driven affected-region search</td><td>moderate — heap + amortized bookkeeping</td></tr>
+<tr><td>Ajwani–Friedrich</td><td>2007</td><td><code>O(n^{2.75})</code> worst case; <code>O(n^2 polylog n)</code> expected on random insertion order</td><td>search-order variant</td><td>moderate, mainly useful for its average-case theorem</td></tr>
+<tr><td>Haeupler–Kavitha–Mathew–Sen–Tarjan</td><td>2012</td><td><code>O(m^{3/2})</code> sparse, <code>O(n^{5/2})</code> dense</td><td>two-way "compatible" search, potential function over related arc pairs</td><td><strong>research artifact</strong> — correct amortized accounting is the hard part</td></tr>
+<tr><td>Bender–Fineman–Gilbert(–Tarjan)</td><td>2009/2016</td><td><code>O(min{√m,n^{2/3}}·m)</code> sparse, <code>O(n^2 log n)</code> dense</td><td>asymmetric two-part level/index labels, bounded backward search per level</td><td>harder than PK, easier than HKMST — "simple data structures" by design</td></tr>
+</tbody></table></div>
+<p><strong>Verdict for <code>dag-worker-go</code>:</strong> ship Pearce–Kelly. It is the only algorithm in this table
+with (a) a bound that adapts to how locally-disruptive real insertions are rather than a
+fixed worst-case polynomial, (b) production adoption you can point to, and (c) an
+implementation surface — two bounded DFS walks and an array splice — that a few hundred
+lines of Go and a solid test suite can actually get right. Revisit BFGT only if profiling on
+adversarial or synthetic dense-insertion workloads shows PK's <code>|Δ|</code> blowing up in practice.</p>
+<hr>
+<h2 id="3-cycle-prevention-on-edge-insertion">3. Cycle prevention on edge insertion<a class="anchor" href="#3-cycle-prevention-on-edge-insertion" aria-label="Link to this section">#</a></h2>
+<p><code>dag-worker-go</code> must decide, at <code>AddEdge(u, v)</code> time, whether to accept the edge or reject it
+as cycle-forming — synchronously, because a host program adding a dependency needs to know
+immediately whether the graph it just asked for is legal.</p>
+<h3 id="3-1-what-an-exact-check-costs">3.1 What an exact check costs<a class="anchor" href="#3-1-what-an-exact-check-costs" aria-label="Link to this section">#</a></h3>
+<p>Rejecting cycle-forming edges exactly is equivalent to a reachability query: <code>(u, v)</code> is safe
+iff <code>v</code> cannot already reach <code>u</code> (equivalently, <code>u</code> cannot already reach <code>v</code> and <code>v</code> cannot
+reach <code>u</code> in the other direction depending on orientation convention — the operative test is
+"does the new edge's head already reach the new edge's tail"). Computed from scratch via
+BFS/DFS this is <code>O(V+E)</code> <strong>per insertion</strong>, which is exactly what a "keep re-running Kahn"
+design costs on the ready-set side too — unacceptable at the node counts this project
+targets. Two moves make it fast:</p>
+<h3 id="3-2-the-maintained-order-fast-path-sub-o-1-ish-in-the-common-case">3.2 The maintained-order fast path — sub-<code>O(1)</code>-ish in the common case<a class="anchor" href="#3-2-the-maintained-order-fast-path-sub-o-1-ish-in-the-common-case" aria-label="Link to this section">#</a></h3>
+<p>If you are already running Pearce–Kelly (§2.4) to maintain <code>ord()</code>, the cycle check is
+<strong>free</strong>, folded into the insertion procedure rather than bolted onto it:</p>
+<ul>
+<li><strong>Fast accept, <code>O(1)</code>:</strong> if <code>ord(u) &lt; ord(v)</code> already, the edge cannot create a cycle —
+accept immediately, no traversal at all. For a DAG built in roughly causal order (parents
+registered before children, which is the overwhelmingly common shape for a task-dependency
+graph) this is the path taken essentially every time.</li>
+<li><strong>Bounded search, cycle iff the searches meet:</strong> if <code>ord(u) ≥ ord(v)</code>, run the PK
+forward/backward DFS described in §2.4. The searches are bounded to the region between the
+two orders, and they encounter <code>u</code> (from the forward side, having started at <code>v</code>) <strong>iff</strong>
+a path <code>v ⇝ u</code> already exists, i.e. <strong>iff</strong> the new edge would close a cycle. There is no
+separate reachability subroutine — cycle detection is the failure mode of the same walk
+that computes the affected region for reordering. This is the same principle underlying
+every algorithm in §2: "reject edges that violate a maintained topological order" is not an
+alternative to incremental order maintenance, it <em>is</em> what incremental order maintenance
+computes as a side effect.</li>
+</ul>
+<h3 id="3-3-the-cheap-but-unsound-shortcut-and-why-it-needs-a-sound-fallback">3.3 The cheap-but-unsound shortcut, and why it needs a sound fallback<a class="anchor" href="#3-3-the-cheap-but-unsound-shortcut-and-why-it-needs-a-sound-fallback" aria-label="Link to this section">#</a></h3>
+<p>A tempting cost-cutting move is a <strong>bounded backward search</strong>: from <code>u</code>, walk backward
+(along reversed edges) for at most <code>B</code> steps looking for <code>v</code>; if found, reject; if the budget
+runs out first, <em>accept optimistically</em>. This is <code>O(B)</code> worst case regardless of graph size,
+which is attractive — but it is <strong>not sound</strong>: a cycle whose confirming path from <code>v</code> back to
+<code>u</code> is longer than <code>B</code> hops is silently accepted, corrupting the DAG invariant a scheduler
+depends on (a "ready" node could now be waiting, transitively, on itself, and Kahn's counter
+trick in §1 will simply never fire it — the graph deadlocks silently with no error surfaced).
+A bounded search is only safe to use as a <strong>pre-filter</strong>: run it first for the common case of
+a nearby cycle (cheap, catches most real programmer mistakes — accidental self-loops and
+short cycles are the overwhelming majority of "oops" cases in a hand-built task graph), and
+if it exhausts its budget without finding <code>v</code>, fall through to the exact, sound check in
+§3.2 rather than accepting. That composition is sound and fast on average; skipping the
+fallback is a correctness bug dressed up as an optimization.</p>
+<h3 id="3-4-recommendation">3.4 Recommendation<a class="anchor" href="#3-4-recommendation" aria-label="Link to this section">#</a></h3>
+<p>Maintain <code>ord()</code> via Pearce–Kelly as the primary mechanism (§2.4); this makes cycle rejection
+<code>O(1)</code> in the fast-accept case and <code>O(|Δ|)</code> in the reordering case, with no additional data
+structure or index required beyond what the ready-set already needs for tie-breaking. Do not
+build a separate reachability index (§4) purely to answer "would this edge cycle" — that
+question is already answered essentially for free by order maintenance, and a general
+reachability index (2-hop labels, interval labels) is the wrong tool for a question that only
+ever needs a <em>yes/no</em> against one specific pair at insertion time, not repeated queries
+against an evolving label set.</p>
+<hr>
+<h2 id="4-reachability-queries-for-cancellation-and-failure-propagation">4. Reachability queries for cancellation and failure propagation<a class="anchor" href="#4-reachability-queries-for-cancellation-and-failure-propagation" aria-label="Link to this section">#</a></h2>
+<p>A different query shape: "node <code>x</code> failed (or was cancelled) — which already-scheduled or
+future nodes are downstream of it and must also be cancelled/failed?" This is a
+<strong>descendant</strong> query (forward reachability from <code>x</code>), potentially fired far less often than
+edge insertions or completions, but potentially touching a large fraction of the graph when
+it does (a root-node failure can invalidate everything below it).</p>
+<h3 id="4-1-transitive-closure-ruled-out-by-arithmetic-alone">4.1 Transitive closure — ruled out by arithmetic alone<a class="anchor" href="#4-1-transitive-closure-ruled-out-by-arithmetic-alone" aria-label="Link to this section">#</a></h3>
+<p>Precomputing and storing the full reachability relation as an <code>n × n</code> bit matrix gives
+<code>O(1)</code> query time but <code>O(n^2)</code> bits of storage and <code>O(n·m)</code> (or <code>O(n^ω)</code>, <code>ω &lt; 2.3716</code>, via
+fast Boolean matrix multiplication) to build and to keep updated after every edge insertion.
+At <code>n = 10^6</code>, <code>n^2</code> bits is <code>10^{12}</code> bits ≈ <strong>125 GB</strong> — before even accounting for the cost
+of invalidating/recomputing rows every time an edge is added to a <em>dynamic</em> graph. This is
+disqualified by the problem's own scale requirement, not by any subtlety.</p>
+<h3 id="4-2-on-the-fly-bfs-dfs-the-default-and-it-is-not-actually-expensive-here">4.2 On-the-fly BFS/DFS — the default, and it is not actually expensive here<a class="anchor" href="#4-2-on-the-fly-bfs-dfs-the-default-and-it-is-not-actually-expensive-here" aria-label="Link to this section">#</a></h3>
+<p>Doing a plain BFS/DFS over <code>out()</code> edges starting at the cancelled node, with no
+precomputed index at all, costs <code>O(V_d + E_d)</code> where <code>V_d, E_d</code> are the size of <code>x</code>'s
+<strong>descendant subgraph</strong>, not the whole DAG. Crucially, this cost is not overhead layered on
+top of the cancellation work — it is <em>exactly</em> the set of nodes that must be visited anyway
+to mark them cancelled/failed and to fire status-transition events for each of them. There is
+no way to cancel <code>k</code> downstream nodes in less than <code>Ω(k)</code> work regardless of index, because
+each one needs an individual status write and an individual event emission. This makes
+on-the-fly traversal, using the same CSR/adjacency structure the ready-set already
+maintains (§7.2), the correct default: no separate index, no separate storage cost, and
+asymptotically optimal for the work the operation must do regardless.</p>
+<h3 id="4-3-2-hop-labeling-powerful-but-solving-a-different-problem">4.3 2-hop labeling — powerful, but solving a different problem<a class="anchor" href="#4-3-2-hop-labeling-powerful-but-solving-a-different-problem" aria-label="Link to this section">#</a></h3>
+<p><strong>"Reachability and distance queries via 2-hop labels"</strong>, E. Cohen, E. Halperin, H. Kaplan,
+U. Zwick, SODA 2002 / <em>SIAM J. Computing</em> 32 (2003), 1338–1355
+<a href="https://web.cs.ucla.edu/~ehalperin/cozygene/publications/papers/labels.pdf" rel="noopener noreferrer">[PDF]</a>. Each
+vertex <code>v</code> is assigned a label <code>L(v) = (L_in(v), L_out(v))</code> — sets of "hub" vertices such
+that <code>u</code> reaches <code>v</code> iff <code>L_out(u) ∩ L_in(v) ≠ ∅</code>. Query cost drops to a label-intersection
+(<code>O(|L_out(u)| + |L_in(v)|)</code>, or <code>O(1)</code>-ish with hashing) independent of graph size — but
+finding the <strong>minimum</strong> 2-hop cover is <strong>NP-hard</strong>, so practical systems use greedy
+approximations (typically an <code>O(log n)</code>-factor guarantee via a set-cover reduction), and
+label sizes can still be <code>O(√m)</code> per vertex in the worst case for general graphs before
+practical DAG-specific reductions bring it down. This is the right tool when you need <strong>many
+repeated reachability queries</strong> against a graph that changes rarely relative to how often it
+is queried — i.e. an analytics/audit workload, not a live scheduler whose graph is churning
+by construction. Building and maintaining a 2-hop cover incrementally as edges/nodes are
+added is itself an open, harder problem than the static case; it is not something to build
+for a first cut of <code>dag-worker-go</code>.</p>
+<h3 id="4-4-interval-tree-cover-labeling-and-grail-dag-specific-and-their-real-limitation">4.4 Interval / tree-cover labeling and GRAIL — DAG-specific, and their real limitation<a class="anchor" href="#4-4-interval-tree-cover-labeling-and-grail-dag-specific-and-their-real-limitation" aria-label="Link to this section">#</a></h3>
+<p>The classic tree-cover technique: pick a spanning tree of the DAG, do a postorder traversal,
+and assign each vertex <code>v</code> the interval <code>[min postorder-number of any descendant of v,
+postorder-number of v]</code>. Reachability along tree edges reduces to <strong>interval containment</strong>:
+<code>u</code> reaches <code>v</code> (via the tree) iff <code>v</code>'s interval ⊆ <code>u</code>'s interval — <code>O(n)</code> total space,
+<code>O(1)</code> query. The catch, confirmed across the indexing-technique literature, is exactly what
+you'd expect from covering a general DAG with one spanning tree: <strong>"labels cannot distinguish
+reachability on non-tree edges"</strong> — any path that leaves the chosen spanning tree even once
+is invisible to a single interval pair, producing false negatives that must be patched by
+additional labels (in the worst case, one extra label per non-tree edge, which for a DAG with
+significant edge density beyond its spanning-tree skeleton erodes the <code>O(n)</code> space guarantee
+back toward <code>O(m)</code> or worse) <a href="https://arxiv.org/pdf/2311.03542" rel="noopener noreferrer">Indexing Techniques for Graph Reachability Queries, <em>ACM
+Computing Surveys</em>, 2024–25 survey</a>.</p>
+<p><strong>GRAIL</strong> ("Graph Reachability Indexing via RAndomized Interval Labeling," Yıldırım, Chaoji,
+Zaki, <em>VLDB</em> 2010) generalizes this by keeping <code>d</code> <strong>independent random</strong> interval labels per
+vertex (from <code>d</code> random DFS/BFS traversal orders) instead of one canonical spanning tree.
+A "no" from <em>any</em> of the <code>d</code> intervals is a sound proof of non-reachability (fast rejection);
+graphs where GRAIL's design goal is met use this to prune the overwhelming majority of
+negative queries in <code>O(d)</code> time without ever touching the graph itself, falling back to an
+explicit traversal only for the (rare, with <code>d</code> in the single digits) surviving candidates.
+Space and construction time are both <strong>linear</strong> — <code>O(dn)</code> — which the paper's own framing
+emphasizes is <em>the</em> reason GRAIL, unlike more precise 2-hop-labeling schemes, scales to
+multi-million-vertex graphs at all: more sophisticated indexes win on small graphs but do not
+scale, and GRAIL is presented specifically as the one that does.</p>
+<p><strong>PathTree</strong> (Microsoft Research, <em>TODS</em>) is a related refinement that decomposes the DAG
+into a small number of vertex-disjoint paths (rather than one spanning tree) and assigns each
+vertex a vector of path-position labels — better precision than a single interval at the cost
+of a slightly heavier label per vertex; treat it as a point on the same
+precision/space/build-cost trade-off curve as GRAIL rather than a different paradigm.</p>
+<h3 id="4-5-recommendation">4.5 Recommendation<a class="anchor" href="#4-5-recommendation" aria-label="Link to this section">#</a></h3>
+<p>Do not build a reachability index for cancellation in <code>dag-worker-go</code> v1. §4.2's on-the-fly
+traversal is asymptotically tied to the unavoidable cost of the cancellation work itself, adds
+zero index-maintenance burden to every edge insertion (which a 2-hop or interval label would
+impose), and reuses the adjacency structure the scheduler needs regardless. Revisit GRAIL-style
+labeling only if a product requirement emerges for <strong>repeated, index-style</strong> reachability
+queries decoupled from actually touching the downstream nodes (e.g., "is X blocked on Y" UI
+queries fired far more often than cancellations happen) — at that point GRAIL is the
+right-shaped answer because it is the one member of this family explicitly designed to survive
+contact with a million-plus-vertex graph.</p>
+<hr>
+<h2 id="5-counting-based-completion-detection">5. Counting-based completion detection<a class="anchor" href="#5-counting-based-completion-detection" aria-label="Link to this section">#</a></h2>
+<p>Three distinct "is X done" questions show up in a DAG scheduler, and they want three
+different counters, not one:</p>
+<h3 id="5-1-per-node-readiness-this-is-just-1-s-pending-counter">5.1 Per-node readiness — this is just §1's <code>pending[]</code> counter<a class="anchor" href="#5-1-per-node-readiness-this-is-just-1-s-pending-counter" aria-label="Link to this section">#</a></h3>
+<p>Already covered: <code>pending[v]</code> starts at <code>indeg(v)</code>, decremented once per satisfied
+predecessor, <code>v</code> becomes ready at <code>pending[v] = 0</code>. <code>O(1)</code> amortized per edge over the DAG's
+life (§1.2).</p>
+<h3 id="5-2-whole-scope-completion-a-single-global-counter-not-a-graph-walk">5.2 Whole-scope completion — a single global counter, not a graph walk<a class="anchor" href="#5-2-whole-scope-completion-a-single-global-counter-not-a-graph-walk" aria-label="Link to this section">#</a></h3>
+<p>"Has every node in this scope reached a terminal state" should never be answered by walking
+the graph. Maintain one additional atomic counter per scope, <code>outstanding</code>, initialized to 0
+and <code>INCR</code>'d once per node creation, <code>DECR</code>'d exactly once per node's <em>first</em> transition into
+a terminal state (success, error, or timeout-error — see the state-machine research file for
+the exact vocabulary). The scope is complete the instant <code>outstanding</code> reaches 0. This is
+<code>O(1)</code> per transition and needs no reachability or traversal machinery at all — it is the
+classic <strong>counting semaphore</strong> pattern, and it composes trivially with the per-node counter
+in §5.1 (they are different counters serving different questions, updated at different
+events: <code>pending[v]</code> reacts to <em>predecessor</em> completions, <code>outstanding</code> reacts to <em>this
+scope's own</em> completions).</p>
+<h3 id="5-3-subgraph-did-this-branch-finish-completion">5.3 Subgraph / "did this branch finish" completion<a class="anchor" href="#5-3-subgraph-did-this-branch-finish-completion" aria-label="Link to this section">#</a></h3>
+<p>A finer-grained variant — "notify me when node <code>x</code> and everything transitively depending on
+<code>x</code> for its result has finished" — is a fan-in join, and it is answered the same way modern
+dataflow systems answer it: attach a local counter to the join point, seeded with the number
+of direct inputs it is waiting on (exactly <code>indeg</code> again), decremented by each input's
+completion. This is fractally the same primitive as §1 applied at whatever granularity the
+host program cares about — there is no need for a distinct algorithm, only for the scheduler
+to expose "give me a counter that fires when these <code>k</code> specific nodes are all terminal" as a
+composable primitive on top of the per-edge counters it already maintains.</p>
+<hr>
+<h2 id="6-reference-counting-for-gc-of-finished-subgraphs">6. Reference counting for GC of finished subgraphs<a class="anchor" href="#6-reference-counting-for-gc-of-finished-subgraphs" aria-label="Link to this section">#</a></h2>
+<p>Once a node is terminal and every downstream consumer has observed that fact (decremented
+its <code>pending[]</code> counter because of it), the completed node's own bookkeeping — its status
+record, and especially any result payload it handed to the library for delivery to
+successors — is garbage. A DAG has no cycles, so simple reference counting is not merely
+adequate here, it is <strong>complete</strong>: unlike general-purpose refcounting garbage collectors,
+which need a cycle collector because arbitrary object graphs can contain reference cycles
+[classic result, Weizenbaum 1963 and the whole subsequent GC literature], a DAG is acyclic by
+definition, so a plain refcount can never get stuck at a nonzero floor the way a cyclic
+garbage structure does. There is no analogue of "unreachable cycle" to worry about.</p>
+<h3 id="6-1-the-production-analogue-naiad-s-distributed-reference-counting">6.1 The production analogue: Naiad's distributed reference counting<a class="anchor" href="#6-1-the-production-analogue-naiad-s-distributed-reference-counting" aria-label="Link to this section">#</a></h3>
+<p>The clearest existing engineering precedent for "reference-count your way to knowing when a
+piece of dataflow state is safe to discard, across a distributed system, without a global
+stop-the-world scan" is Naiad's <strong>progress-tracking protocol</strong> ("Naiad: A Timely Dataflow
+System," Murray et al., SOSP 2013
+<a href="https://sigops.org/s/conferences/sosp/2013/papers/p439-murray.pdf" rel="noopener noreferrer">[PDF]</a>). Naiad's own
+description of the mechanism: <em>"Progress tracking in Naiad is essentially distributed
+reference counting"</em> — each worker maintains, per <strong>pointstamp</strong> (a location-in-the-dataflow
+× logical-timestamp pair, structurally analogous to "this node, at this point in the DAG's
+causal history"), an <strong>occurrence count</strong> of messages it believes are still live for that
+pointstamp. When a worker retires a message it does not decrement its own counter directly;
+it <strong>broadcasts</strong> a <code>-1</code> update for that pointstamp to every other worker, and all workers
+(including the retiring one) apply updates only from these broadcasts. A pointstamp — and
+everything gated behind it — is known to be permanently finished exactly when every worker's
+occurrence count for it has reached zero and stays there, at which point the frontier of "in
+play" timestamps advances and any state pinned to that pointstamp can be released.</p>
+<h3 id="6-2-applying-the-pattern-to-dag-worker-go">6.2 Applying the pattern to <code>dag-worker-go</code><a class="anchor" href="#6-2-applying-the-pattern-to-dag-worker-go" aria-label="Link to this section">#</a></h3>
+<p>Map this onto the scheduler directly: give each node's stored payload/result a <strong>consumer
+refcount</strong>, seeded at edge-insertion time with the number of <em>distinct successors registered
+against it so far</em> (which can itself grow, since the DAG is dynamic — an increment on every
+new outgoing edge added after the node already succeeded is the dynamic-DAG analogue of
+Naiad broadcasting updates rather than assuming a fixed count up front). Each successor's
+consumption of the payload (i.e., the moment its own <code>pending[]</code> decrement in §1.2 fires
+because of <em>this specific</em> predecessor) issues a <code>-1</code> against the refcount. The payload
+becomes eligible for GC/eviction from storage the instant the refcount reaches zero <strong>and</strong>
+no further out-edges can still be added from that node (which, if node mutation is closed
+once a node reaches a terminal state — a reasonable invariant to adopt — is simply "node is
+terminal and refcount is zero"). This is <code>O(1)</code> amortized per edge, exactly like §1.2's
+readiness decrement, and can piggyback on the <em>same</em> atomic decrement operation described in
+§8 rather than requiring a second round-trip to storage: one idempotent "predecessor <code>u</code>
+satisfied for successor <code>v</code>" event can simultaneously (a) decrement <code>v</code>'s <code>pending</code> counter
+and (b) decrement <code>u</code>'s consumer-refcount, inside the same atomic script.</p>
+<h3 id="6-3-why-no-cycle-collector-is-needed-restated-precisely">6.3 Why no cycle collector is needed, restated precisely<a class="anchor" href="#6-3-why-no-cycle-collector-is-needed-restated-precisely" aria-label="Link to this section">#</a></h3>
+<p>The only reason general refcounting GC needs a backup tracer is that a reference cycle keeps
+every member's count above zero forever even though the whole cycle is externally
+unreachable. <code>dag-worker-go</code>'s edges are, by the DAG invariant §2–§3 exist specifically to
+enforce, never part of a cycle — so a node's consumer-refcount reaching zero is both
+necessary <em>and sufficient</em> for "nothing will ever decrement it again," with no possibility of
+a live-locked residual cycle. This is one of the few places in the whole design where the
+acyclicity constraint pays for itself directly in implementation simplicity, not just in
+scheduling semantics.</p>
+<hr>
+<h2 id="7-concrete-data-structures-and-their-kv-store-shape">7. Concrete data structures, and their KV-store shape<a class="anchor" href="#7-concrete-data-structures-and-their-kv-store-shape" aria-label="Link to this section">#</a></h2>
+<h3 id="7-1-in-degree-pending-dependency-counters">7.1 In-degree / pending-dependency counters<a class="anchor" href="#7-1-in-degree-pending-dependency-counters" aria-label="Link to this section">#</a></h3>
+<p>Logically: <code>NodeID → uint32</code>. Physically, three reasonable encodings depending on backend:</p>
+<ul>
+<li><strong>In-memory (default backend):</strong> a plain <code>sync/atomic</code>-backed slice or <code>map[NodeID]*uint32</code>,
+<code>Add(-1)</code> is a single atomic instruction — genuinely <code>O(1)</code>, no contention beyond the
+cache-line bounce.</li>
+<li><strong>Redis:</strong> either one <code>INCR</code>-friendly string key per node (<code>node:{id}:pending</code>), or — far
+cheaper at scale — packed into a single <code>BITFIELD</code>-addressable string per scope, one
+fixed-width sub-integer field per node, mutated with <code>BITFIELD ... INCRBY</code>. The packed form
+trades per-key overhead (see §8.5's arithmetic) for a slightly less ergonomic API.</li>
+<li><strong>PostgreSQL:</strong> a plain <code>pending int4 not null</code> column on the <code>nodes</code> row — this counter is
+free, it rides along on a row you need to store anyway for status (§5).</li>
+</ul>
+<h3 id="7-2-adjacency-in-csr-form-and-why-dynamic-fights-it">7.2 Adjacency in CSR form, and why "dynamic" fights it<a class="anchor" href="#7-2-adjacency-in-csr-form-and-why-dynamic-fights-it" aria-label="Link to this section">#</a></h3>
+<p>Compressed Sparse Row is the right <em>steady-state</em> shape for <code>out()</code>: a <code>row_ptr[n+1]</code> array of
+offsets plus a flat <code>col_idx[m]</code> array of successor IDs, so node <code>v</code>'s successors are exactly
+<code>col_idx[row_ptr[v] : row_ptr[v+1]]</code> — <code>O(outdeg(v))</code> to enumerate, <code>O(1)</code> to locate the
+slice, and <code>O(m + n)</code> total space with none of the per-edge pointer/object overhead a
+linked adjacency list would carry
+<a href="https://en.wikipedia.org/wiki/Sparse_matrix#Compressed_sparse_row_(CSR,_CRS_or_Yale_format)" rel="noopener noreferrer">CSR format overview</a>.
+The problem: CSR is naturally an <strong>immutable, batch-built</strong> structure — appending one edge to
+row <code>v</code> in a naive CSR means shifting every row after <code>v</code> in <code>col_idx</code>, an <code>O(m)</code> disaster on
+a graph that is <em>by requirement</em> taking edge insertions continuously. Two standard fixes, in
+increasing order of engineering effort:</p>
+<ol>
+<li><strong>Per-row slack + amortized doubling.</strong> Over-allocate each row's slice with spare capacity
+(classic dynamic-array doubling: grow a row's backing capacity by <code>2×</code> when it fills,
+amortized <code>O(1)</code> per append — the same textbook argument that makes <code>append()</code> to a Go
+slice amortized <code>O(1)</code>). Rows still live in one flat backing array or arena; a row that
+outgrows its slack gets relocated to a fresh, larger slot (rare, and each relocation is
+charged to the <code>O(log outdeg(v))</code> doublings that row will ever undergo, not to every future
+insert).</li>
+<li><strong>Generational CSR.</strong> Build an immutable CSR snapshot in bulk at DAG-construction or at
+periodic compaction points; route edges added <em>after</em> a snapshot through a small
+overflow structure (a per-node dynamic slice, or a per-node Redis <code>SET</code>/list) that is
+consulted in addition to the CSR slice, and fold the overflow back into a fresh CSR
+snapshot on the next compaction. This is the right shape when most edges arrive in a
+predictable "build the graph" burst with a long tail of sparser dynamic additions — which
+matches the way most real task DAGs are actually constructed (a big upfront plan, plus
+occasional dynamic re-planning).</li>
+</ol>
+<p>On a KV store with no pointers at all, the CSR row concept degenerates to "the successor list
+for node <code>v</code> is whatever the store's native ordered/unordered collection type gives you" —
+a Redis <code>SET</code> (<code>SADD</code>/<code>SMEMBERS</code>, <code>O(1)</code> insert per member) or a Postgres <code>edges(from_id,
+to_id)</code> table with a btree index on <code>from_id</code> (<code>O(log m)</code> insert, <code>O(log m + outdeg(v))</code> scan)
+— trading CSR's cache-friendly contiguity for the store's native atomicity and durability
+guarantees. That trade is almost always worth it once the adjacency lives outside a single
+process's memory.</p>
+<h3 id="7-3-the-ready-set-fifo-bitset-or-heap">7.3 The ready set: FIFO, bitset, or heap<a class="anchor" href="#7-3-the-ready-set-fifo-bitset-or-heap" aria-label="Link to this section">#</a></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Representation</th><th>Push</th><th>Pop / pick</th><th>Membership test</th><th>When to use</th></tr></thead>
+<tbody>
+<tr><td>FIFO queue</td><td><code>O(1)</code></td><td><code>O(1)</code></td><td>not supported natively</td><td>plain work distribution, no priority — default for <code>dag-worker-go</code></td></tr>
+<tr><td>Bitset (one bit per node)</td><td><code>O(1)</code> set</td><td><code>O(n/w)</code> scan for next set bit (<code>w</code> = word width), or <code>O(1)</code> with an auxiliary free-list of set positions</td><td><code>O(1)</code></td><td>workers pull in bulk / batch scans; cheap existence checks for "is this node currently ready"</td></tr>
+<tr><td>Heap / priority queue</td><td><code>O(log n)</code></td><td><code>O(log n)</code></td><td>not supported natively</td><td>priority scheduling (deadline, weight, retry-backoff ordering) — an extension point, not needed for the minimal state machine</td></tr>
+</tbody></table></div>
+<p>For the KV mapping: a FIFO ready-queue is a Redis <code>LIST</code> (<code>RPUSH</code>/<code>LPOP</code>, both <code>O(1)</code>) or a
+Redis <code>STREAM</code> when you additionally want durable, replayable, consumer-group-based delivery
+to competing worker instances (the multi-instance distribution question is out of scope here
+— see the coordination research file — but the <em>data structure</em> choice is squarely in scope:
+a Stream gives you the FIFO semantics of a List plus at-least-once delivery bookkeeping for
+free, which is exactly the primitive §8 needs to reason about idempotent consumption). In
+PostgreSQL, the equivalent is a <code>status = 'ready'</code> partial index combined with
+<code>SELECT ... FOR UPDATE SKIP LOCKED</code> to hand out rows to competing workers without contention
+— logically a FIFO-ish set (no strict ordering guarantee unless you also <code>ORDER BY</code> a
+sequence column) with <code>O(log n)</code> insert/pop via the index rather than <code>O(1)</code>, which is the
+price of getting transactional guarantees "for free" from a relational engine instead of
+crafting them by hand as in §8.</p>
+<hr>
+<h2 id="8-idempotent-in-degree-decrement-under-at-least-once-delivery">8. Idempotent in-degree decrement under at-least-once delivery<a class="anchor" href="#8-idempotent-in-degree-decrement-under-at-least-once-delivery" aria-label="Link to this section">#</a></h2>
+<p>This is the crux of the practical section, and it is where "just use <code>INCR</code>/<code>DECR</code>" quietly
+breaks correctness. State the failure mode precisely first.</p>
+<h3 id="8-1-why-a-raw-counter-is-not-idempotent">8.1 Why a raw counter is not idempotent<a class="anchor" href="#8-1-why-a-raw-counter-is-not-idempotent" aria-label="Link to this section">#</a></h3>
+<p><code>pending[v].Add(-1)</code> is atomic — no two concurrent callers can race and lose an update — but
+atomicity is not the same property as idempotency. If the <em>same logical event</em> ("predecessor
+<code>u</code> has satisfied its edge into <code>v</code>") is delivered twice — because a worker's ack timed out
+and was retried, because a message queue guarantees only at-least-once delivery, because a
+crashed <code>dag-worker-go</code> instance replays its write-ahead log — a raw <code>DECR</code> applies the
+decrement <strong>twice</strong>, and <code>v</code> becomes ready one predecessor early (or, if <code>v</code> has exactly two
+remaining predecessors and one fires twice, <code>v</code> becomes ready while the <em>other</em>, real
+predecessor never finished at all). This is silent and non-local: the bug shows up as a node
+running before its true dependencies are satisfied, with no exception anywhere near the
+double-decrement itself. Any design that maps the in-degree trick from §1.2 directly onto
+<code>INCR</code>/<code>DECR</code> without an accompanying idempotency mechanism has this bug.</p>
+<h3 id="8-2-strategy-a-raw-counter-idempotency-pushed-to-the-delivery-layer">8.2 Strategy A — raw counter, idempotency pushed to the delivery layer<a class="anchor" href="#8-2-strategy-a-raw-counter-idempotency-pushed-to-the-delivery-layer" aria-label="Link to this section">#</a></h3>
+<p>Keep the single integer counter from §1 as-is, and make the <em>event source</em> responsible for
+exactly-once delivery of the decrement — e.g. a message queue with consumer-side
+deduplication by a stable <code>(edge, delivery-attempt-independent) ID</code>, or a Redis Stream
+consumer group with an explicit "processed IDs" acknowledgment log the consumer checks before
+applying each entry. <strong>Storage cost:</strong> effectively zero beyond the counter itself — the
+<code>pending</code> field is a column/value you need to store regardless for §1, so this strategy adds
+no per-edge state at all. <strong>The catch:</strong> correctness now depends entirely on a <em>different</em>
+subsystem's exactly-once guarantee, which either doesn't exist natively (Redis Streams and
+Postgres LISTEN/NOTIFY are at-least-once, not exactly-once, by design) or has to be built —
+at which point you have built strategy B or C anyway, just at the messaging layer instead of
+the counter layer, with none of the benefit of localizing the fix to the counter update
+itself.</p>
+<h3 id="8-3-strategy-b-per-edge-satisfied-flag">8.3 Strategy B — per-edge "satisfied" flag<a class="anchor" href="#8-3-strategy-b-per-edge-satisfied-flag" aria-label="Link to this section">#</a></h3>
+<p>Make the <em>edge itself</em> the idempotency key: pair the decrement with a check-and-set on a
+per-edge boolean, inside one atomic operation, so a replay finds the flag already set and
+no-ops before ever touching the counter.</p>
+<p><strong>Redis (Lua, atomic via <code>EVAL</code></strong> — Redis guarantees a script runs to completion with no
+other command interleaved, per the official scripting semantics
+[<a href="https://redis.io/docs/latest/commands/eval/" rel="noopener noreferrer">redis.io: EVAL</a>]):</p>
+<pre><code class="language-lua"><span class="tok-com">-- KEYS[1] = per-destination-node bitmap of satisfied predecessor slots</span>
+<span class="tok-com">-- KEYS[2] = pending-count key for the destination node</span>
+<span class="tok-com">-- KEYS[3] = ready-queue key (a Redis LIST or STREAM) to push to if this completes it</span>
+<span class="tok-com">-- ARGV[1] = this edge's pre-assigned bit offset within KEYS[1] (assigned at AddEdge time)</span>
+<span class="tok-com">-- ARGV[2] = the destination node id, to enqueue if it becomes ready</span>
+<span class="tok-kw">local</span> already = redis.call(<span class="tok-str">'GETBIT'</span>, KEYS[<span class="tok-num">1</span>], ARGV[<span class="tok-num">1</span>])
+<span class="tok-kw">if</span> already == <span class="tok-num">1</span> <span class="tok-kw">then</span>
+    <span class="tok-kw">return</span> -<span class="tok-num">1</span>                       <span class="tok-com">-- duplicate delivery: no-op, report as such</span>
+<span class="tok-kw">end</span>
+redis.call(<span class="tok-str">'SETBIT'</span>, KEYS[<span class="tok-num">1</span>], ARGV[<span class="tok-num">1</span>], <span class="tok-num">1</span>)
+<span class="tok-kw">local</span> remaining = redis.call(<span class="tok-str">'DECR'</span>, KEYS[<span class="tok-num">2</span>])
+<span class="tok-kw">if</span> remaining == <span class="tok-num">0</span> <span class="tok-kw">then</span>
+    redis.call(<span class="tok-str">'RPUSH'</span>, KEYS[<span class="tok-num">3</span>], ARGV[<span class="tok-num">2</span>])
+<span class="tok-kw">end</span>
+<span class="tok-kw">return</span> remaining</code></pre>
+<p><code>GETBIT</code>/<code>SETBIT</code>/<code>DECR</code> are each documented as <code>O(1)</code>
+[<a href="https://redis.io/docs/latest/commands/incr/" rel="noopener noreferrer">redis.io: INCR</a>] and the whole script executes
+as one atomic unit, so this is a single round trip with no lock, no CAS retry loop, and no
+window for a concurrent second delivery of the same edge to both pass the <code>already == 1</code>
+check.</p>
+<p><strong>PostgreSQL (single statement, transactionally atomic by default):</strong></p>
+<pre><code class="language-sql"><span class="tok-com">-- edges(from_id bigint, to_id bigint, satisfied boolean not null default false,</span>
+<span class="tok-com">--       primary key (from_id, to_id))</span>
+<span class="tok-com">-- nodes(id bigint primary key, pending int not null)</span>
+
+<span class="tok-kw">WITH</span> marked <span class="tok-kw">AS</span> (
+    <span class="tok-kw">UPDATE</span> edges
+       <span class="tok-kw">SET</span> satisfied = true
+     <span class="tok-kw">WHERE</span> from_id = $<span class="tok-num">1</span> <span class="tok-kw">AND</span> to_id = $<span class="tok-num">2</span> <span class="tok-kw">AND</span> satisfied = false
+    <span class="tok-kw">RETURNING</span> to_id
+)
+<span class="tok-kw">UPDATE</span> nodes
+   <span class="tok-kw">SET</span> pending = pending - <span class="tok-num">1</span>
+  <span class="tok-kw">FROM</span> marked
+ <span class="tok-kw">WHERE</span> nodes.id = marked.to_id
+<span class="tok-kw">RETURNING</span> nodes.pending;</code></pre>
+<p>If the edge was already <code>satisfied = true</code>, the CTE's <code>UPDATE ... WHERE satisfied = false</code>
+matches zero rows, <code>marked</code> is empty, the outer <code>UPDATE ... FROM marked</code> therefore also
+touches zero rows, and the statement is a correct, silent no-op on replay — idempotency
+falls out of the <code>WHERE satisfied = false</code> guard, not out of any application-level retry
+logic, using nothing more exotic than standard row locking semantics
+[<a href="https://www.postgresql.org/docs/current/explicit-locking.html" rel="noopener noreferrer">PostgreSQL: Explicit Locking</a>].</p>
+<p><strong>Memcached</strong> has no scripting and no multi-key transactions
+[<a href="https://raw.githubusercontent.com/memcached/memcached/master/doc/protocol.txt" rel="noopener noreferrer">memcached protocol spec</a>],
+but its <code>add</code> command — store only if the key does <strong>not</strong> already exist — is <em>itself</em> a
+perfect, native idempotency primitive for exactly this flag, with no CAS loop required:</p>
+<pre><code>add edge:{u}:{v}:satisfied 0 0 1
+1                                   # first delivery: STORED, proceed to decrement
+add edge:{u}:{v}:satisfied 0 0 1
+NOT_STORED                          # replay: key already exists, skip the decrement</code></pre>
+<p>only when the <code>add</code> reports success does the caller proceed to <code>decr node:{v}:pending 1</code>;
+because <code>decr</code> itself floors at zero rather than going negative, and because the <code>add</code> gate
+already prevents a second decrement from ever being issued for this edge, the pair is safe
+without Memcached-side atomicity across the two commands — the flag <code>add</code> is the sole
+correctness-bearing operation, and it is Memcached's one genuinely atomic idempotent
+primitive.</p>
+<h3 id="8-4-strategy-c-per-node-set-of-satisfied-predecessor-ids">8.4 Strategy C — per-node set of satisfied predecessor IDs<a class="anchor" href="#8-4-strategy-c-per-node-set-of-satisfied-predecessor-ids" aria-label="Link to this section">#</a></h3>
+<p>Instead of one flag per edge, keep, per destination node, the <strong>set</strong> of predecessor IDs that
+have already reported in; a node is ready when that set's cardinality equals its recorded
+in-degree.</p>
+<pre><code class="language-lua"><span class="tok-com">-- KEYS[1] = set of satisfied predecessor ids for this destination node</span>
+<span class="tok-com">-- KEYS[2] = ready-queue key</span>
+<span class="tok-com">-- ARGV[1] = predecessor node id reporting completion</span>
+<span class="tok-com">-- ARGV[2] = this node's total in-degree (recorded at node-creation time)</span>
+<span class="tok-com">-- ARGV[3] = this node's own id, to enqueue if now ready</span>
+<span class="tok-kw">local</span> added = redis.call(<span class="tok-str">'SADD'</span>, KEYS[<span class="tok-num">1</span>], ARGV[<span class="tok-num">1</span>])
+<span class="tok-kw">if</span> added == <span class="tok-num">0</span> <span class="tok-kw">then</span>
+    <span class="tok-kw">return</span> -<span class="tok-num">1</span>                       <span class="tok-com">-- duplicate: SADD is a no-op on an existing member</span>
+<span class="tok-kw">end</span>
+<span class="tok-kw">if</span> redis.call(<span class="tok-str">'SCARD'</span>, KEYS[<span class="tok-num">1</span>]) == tonumber(ARGV[<span class="tok-num">2</span>]) <span class="tok-kw">then</span>
+    redis.call(<span class="tok-str">'RPUSH'</span>, KEYS[<span class="tok-num">2</span>], ARGV[<span class="tok-num">3</span>])
+<span class="tok-kw">end</span>
+<span class="tok-kw">return</span> added</code></pre>
+<p>Idempotency here is a direct consequence of <code>SADD</code>'s own semantics (adding an existing member
+is defined to be a no-op, <code>O(1)</code> per element regardless
+[<a href="https://redis.io/docs/latest/commands/sadd/" rel="noopener noreferrer">redis.io: SADD</a>]) — no explicit "already
+satisfied" branch is even needed, which is a genuine ergonomic win over Strategy B. The
+trade-off is what it costs to store a <em>member ID</em> per edge instead of one <em>bit</em> per edge,
+quantified next.</p>
+<h3 id="8-5-quantified-storage-comparison-1-000-000-nodes-at-out-degree-3">8.5 Quantified storage comparison, 1,000,000 nodes at out-degree 3<a class="anchor" href="#8-5-quantified-storage-comparison-1-000-000-nodes-at-out-degree-3" aria-label="Link to this section">#</a></h3>
+<p>Out-degree 3 on 1M nodes ⇒ <strong><code>m = 3,000,000</code> edges</strong>. Figures below are engineering
+estimates from each store's documented data-layout behavior, not measurements — treat them
+as order-of-magnitude, and re-benchmark against your actual Redis/Postgres version before
+committing to one (flagged again in "Open questions").</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Strategy</th><th>What's stored</th><th>Redis (approx.)</th><th>PostgreSQL (approx.)</th></tr></thead>
+<tbody>
+<tr><td><strong>A. raw counter only</strong> (no idempotency built in)</td><td>1 integer per node</td><td>~4 MB packed via <code>BITFIELD</code> (20-bit fields × 1M), or ~50–100 MB if each node is its own key (per-key hashtable overhead dominates a 4-byte payload)</td><td><strong>~0 extra</strong> — <code>pending int4</code> rides on the <code>nodes</code> row you store anyway</td></tr>
+<tr><td><strong>B. per-edge satisfied bit</strong></td><td>1 bit per edge, addressed by a slot assigned at <code>AddEdge</code> time</td><td><strong>~366 KiB</strong> total as a packed bitmap (3,000,000 bits ÷ 8) — a single string per node or per scope, essentially free</td><td>one <code>edges</code> row per edge: <code>HeapTupleHeaderData</code> (23 B) + line pointer (4 B) + <code>from_id</code>+<code>to_id</code>+<code>satisfied</code> (17 B, padded to 24 B for 8-byte alignment) ≈ <strong>51 B/row</strong>, plus a btree PK entry (~24–32 B) ⇒ <strong>~75–85 B/edge</strong> → <strong>≈ 225–255 MB</strong> at 3M edges <a href="https://www.postgresql.org/docs/current/storage-page-layout.html" rel="noopener noreferrer">[storage-page-layout.html]</a></td></tr>
+<tr><td><strong>B. per-edge satisfied flag as its own Redis key</strong> (no packing)</td><td>1 key per edge</td><td>per-key hashtable overhead (commonly tens-to-~90 bytes even for a 1-byte value, version-dependent) × 3M ⇒ <strong>~170–270 MB</strong> — same order as Postgres, ~1000× worse than the packed bitmap</td><td>n/a</td></tr>
+<tr><td><strong>C. per-node set of satisfied predecessor IDs</strong></td><td>3,000,000 total set-member entries spread over up to 1,000,000 sets</td><td>integer-only sets ≤512 members use Redis's compact <code>intset</code> encoding (~8 B/member) ⇒ ~24 MB of member data + ~1M × key overhead (~56–90 B) ⇒ <strong>≈ 80–115 MB</strong>; sets that exceed the intset/listpack thresholds (default <code>set-max-intset-entries</code>/<code>set-max-listpack-entries</code>, i.e. hub nodes with unusually high in-degree) convert to hashtable encoding at ~64–80 B/member, inflating this estimate for skewed fan-in</td><td>a <code>satisfied_predecessors(to_id, from_id)</code> table has the same row shape as strategy B ⇒ <strong>~same ≈ 225–255 MB</strong>, with strictly worse ergonomics than B (no native atomic "add-if-absent that also reports success" without the same <code>WHERE ... = false</code> pattern)</td></tr>
+</tbody></table></div>
+<p><strong>Reading the table:</strong> the packed per-edge bitmap (B, Redis, packed) is the cheapest
+<em>idempotent</em> option by roughly three orders of magnitude over anything that spends a whole
+key or a whole row per edge — but it requires assigning each edge a <strong>dense, stable slot
+index at insertion time</strong> (store the slot on the edge record itself, or have the worker echo
+it back in its completion ack) rather than addressing bits by the predecessor's own ID;
+addressing by <code>hash(predecessor_id) mod width</code> instead is a false economy — a hash collision
+between two real, distinct predecessors silently merges their bits, and the node then waits
+forever on a predecessor that will never separately report in, because its slot was already
+marked satisfied by a different node. Strategy C is the right choice when you want the
+<em>satisfied-predecessor set itself</em> to be independently useful for observability ("which
+specific predecessors is this node still waiting on" is a <code>SDIFF</code> away) and can tolerate an
+~80–250× storage multiplier over the bitmap for that visibility. Strategy A is free but
+is not actually a complete answer to the question this section asks — it only becomes
+correct once paired with an idempotency mechanism that is, structurally, a restatement of B
+or C at the message-delivery layer instead of the counter layer.</p>
+<h3 id="8-6-recommendation">8.6 Recommendation<a class="anchor" href="#8-6-recommendation" aria-label="Link to this section">#</a></h3>
+<p>Default to <strong>Strategy B, packed bitmap</strong>, for the hot path (§1.2's decrement): assign each
+edge a per-destination-node slot index at <code>AddEdge</code> time (an <code>O(1)</code> allocation — just the
+node's current in-degree at the moment the edge is added), store the slot alongside the edge
+record so the worker's completion ack can carry it back, and gate every decrement behind the
+<code>GETBIT</code>/<code>SETBIT</code> check in §8.3's Lua script (or the equivalent <code>WHERE satisfied = false</code>
+guard in Postgres). Reserve Strategy C for cases where per-predecessor observability is a
+product requirement in its own right, not as the default idempotency mechanism — the
+storage multiplier is too large to pay for a property (individual predecessor visibility)
+most call sites don't need.</p>
+<hr>
+<h2 id="recommendations-for-dag-worker-go">Recommendations for dag-worker-go<a class="anchor" href="#recommendations-for-dag-worker-go" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>Ready-set maintenance is Kahn's in-degree trick, full stop</strong> — never re-scan the graph
+on a completion event; decrement <code>pending[]</code> for exactly the completed node's out-edges
+and enqueue any that hit zero. This alone is the entire "sublinear ready-set" requirement;
+everything else in this dossier is either making that decrement safe (§8) or handling the
+two operations Kahn's algorithm doesn't cover — dynamic edge insertion (§2–3) and
+cancellation (§4).</li>
+<li><strong>Implement Pearce–Kelly (§2.4), not a fancier incremental-order algorithm</strong>, for
+maintaining the order used in cycle rejection. It is the only algorithm in the literature
+surveyed here with real production adoption (Abseil, TensorFlow, JGraphT, MonoSAT), a
+cost that tracks how locally disruptive an insertion actually is rather than a fixed
+worst-case polynomial, and an implementation surface — one integer per node, two bounded
+DFS walks, one array splice — realistically achievable in a few hundred lines with strong
+test coverage. Budget the Bender–Fineman–Gilbert(–Tarjan) two-part labeling scheme (§2.8)
+as the upgrade path if profiling on real or adversarial workloads ever shows PK's affected
+region growing unacceptably large; do not start there.</li>
+<li><strong>Fold cycle rejection into the order-maintenance walk itself (§3.2)</strong> rather than running
+a separate reachability check — <code>ord(u) &lt; ord(v)</code> is a free <code>O(1)</code> accept for the common
+case, and the bounded DFS that handles the uncommon case <em>is</em> the cycle check. Never ship
+the bounded-backward-search shortcut (§3.3) without its sound fallback; it silently
+corrupts the DAG invariant otherwise, in a way that manifests as a deadlocked node with no
+error anywhere near the cause.</li>
+<li><strong>Do not build a reachability index (2-hop labels, interval labels, GRAIL) for
+cancellation.</strong> Plain on-the-fly BFS over the same adjacency structure the ready-set uses
+is asymptotically tied to the unavoidable per-node work cancellation must do anyway (§4.2),
+and every indexing scheme surveyed here (§4.3, §4.4) imposes a nontrivial <em>insertion-time</em>
+maintenance cost on a graph whose whole premise is dynamic edge insertion. Revisit only if
+a product requirement demands repeated reachability queries decoupled from actually
+cancelling nodes.</li>
+<li><strong>Give completion detection two counters, not one</strong>: <code>pending[v]</code> per node (§1, §5.1) and
+one global <code>outstanding</code> per scope (§5.2) for "is the whole scope done" — do not try to
+answer the scope-level question by walking or aggregating the per-node counters, it is a
+separate <code>O(1)</code>-per-transition counter with a different update trigger.</li>
+<li><strong>Make GC of finished node payloads a consumer-refcount, decremented in the same atomic
+operation as the ready-set decrement (§6.2)</strong> — one idempotent "edge satisfied" event
+should update both <code>pending[v]</code> and the predecessor's refcount in a single round trip.
+Because the graph is acyclic, this refcount needs no cycle collector (§6.3): reaching zero
+is both necessary and sufficient for safe eviction.</li>
+<li><strong>Never wire a raw <code>INCR</code>/<code>DECR</code> directly to an at-least-once delivery path.</strong> Default to
+the packed per-edge satisfied-bit strategy (§8.3, §8.6) as the idempotency mechanism for
+the hot-path decrement: assign a dense slot per edge at insertion time, gate every
+decrement behind a <code>GETBIT</code>/<code>SETBIT</code>-guarded script (Redis) or a <code>WHERE satisfied = false</code>
+guarded update (Postgres), or Memcached's native <code>add</code>-if-absent. This is ~3 orders of
+magnitude cheaper in storage than a per-edge key/row/set-member at the 1M-node,
+out-degree-3 scale this project targets (§8.5), and it is the only one of the three
+strategies surveyed that is idempotent <em>by construction</em> rather than by relying on a
+delivery layer's own exactly-once guarantee, which none of Redis Streams, Postgres
+LISTEN/NOTIFY, or Memcached natively provide.</li>
+<li><strong>Use CSR-with-slack (§7.2), not pointer-based adjacency lists, for the in-memory
+backend</strong>, and mirror the same "one contiguous successor collection per node" shape onto
+Redis <code>SET</code>s or a <code>(from_id, to_id)</code> Postgres table for the pluggable backends — this
+keeps <code>out(v)</code> enumeration at <code>O(outdeg(v))</code> on every backend, which is what makes §1.2's
+per-completion cost genuinely proportional to out-degree rather than to <code>n</code>.</li>
+</ol>
+<hr>
+<h2 id="open-questions">Open questions<a class="anchor" href="#open-questions" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>Exact worst-case constant for Pearce–Kelly's per-insertion cost.</strong> The JEA paper's own
+comparison states the bound only relative to AHRSZ/MNR ("AHRSZ strictly tighter," "MNR
+incomparable") rather than as a clean closed-form in <code>|Δ|</code>; before committing to PK as
+the <em>only</em> order-maintenance mechanism, reproduce the paper's own benchmark methodology
+against <code>dag-worker-go</code>'s actual edge-arrival distribution (mostly-causal vs. adversarial)
+to confirm <code>|Δ|</code> stays small in practice, rather than trusting the literature's random-DAG
+benchmarks to transfer.</li>
+<li><strong>Whether Bender–Fineman–Gilbert–Tarjan is worth building at all</strong>, given no existing
+open-source reference implementation was found during this research (contrast Pearce–
+Kelly's multiple GitHub implementations and production adopters) — a from-scratch BFGT
+implementation carries real correctness risk with no reference to differential-test
+against; decide this only after PK's affected-region size is actually measured as a
+problem, not preemptively.</li>
+<li><strong>The exact per-key/per-row overhead constants used in §8.5 are estimates from documented
+encoding behavior, not measurements</strong> — before finalizing the idempotency strategy,
+benchmark actual <code>MEMORY USAGE</code> (Redis) and <code>pg_column_size</code>/<code>pg_total_relation_size</code>
+(Postgres) figures against the specific versions this project pins, since Redis's
+listpack/intset conversion thresholds and per-key overhead have changed across major
+versions.</li>
+<li><strong>How slot assignment for the packed-bitmap strategy (§8.3/§8.6) survives node/edge
+*removal</strong>*, which the brief flags as a "possibly" requirement — freeing and reusing a bit
+slot safely (so a new edge doesn't inherit a stale "satisfied" bit from a deleted one)
+needs either slot versioning (a generation counter alongside the slot index) or a
+never-reuse policy that lets the bitmap grow monotonically; neither is worked out here and
+both interact with the GC/refcounting design in §6.</li>
+<li><strong>Multi-instance contention on the same per-node counter/bitmap</strong> (two <code>dag-worker-go</code>
+processes racing to be the one whose decrement flips <code>pending[v]</code> to zero and enqueues it)
+is deliberately out of scope for this dossier — the Lua/SQL snippets in §8 are atomic
+<em>per store</em>, but the broader question of how competing instances agree on who dequeues the
+resulting ready node belongs with the partitioning/lease-stealing research this file
+explicitly does not cover.</li>
+</ul>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/research/02-incremental-topological-scheduling.md" rel="noopener noreferrer">View source: docs/research/02-incremental-topological-scheduling.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>

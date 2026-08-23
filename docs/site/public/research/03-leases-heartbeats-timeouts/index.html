@@ -1,0 +1,1528 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Distributed Leasing, Visibility Timeouts, and Fencing · dagworker</title>
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://specialistvlad.github.io/dagworker/research/03-leases-heartbeats-timeouts/">
+<style>
+
+:root {
+  --bg: #ffffff;
+  --bg-raised: #f5f6f8;
+  --bg-sidebar: #fafafb;
+  --fg: #1b1e24;
+  --fg-muted: #5a6070;
+  --border: #e2e5ea;
+  --accent: #2954d6;
+  --accent-fg: #ffffff;
+  --link: #2954d6;
+  --code-bg: #f5f6f8;
+  --code-border: #e2e5ea;
+  --shadow: 0 4px 20px rgba(20, 22, 30, 0.08);
+
+  --tok-kw: #7a3e9d;
+  --tok-str: #1a7f4b;
+  --tok-com: #767c8c;
+  --tok-num: #b1580c;
+  --tok-var: #0a6e91;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161b;
+    --bg-raised: #1b1e25;
+    --bg-sidebar: #17191f;
+    --fg: #e7e9ee;
+    --fg-muted: #9aa1b0;
+    --border: #2b2f3a;
+    --accent: #7fa2ff;
+    --accent-fg: #0e1116;
+    --link: #7fa2ff;
+    --code-bg: #1b1e25;
+    --code-border: #2b2f3a;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+    --tok-kw: #c894e8;
+    --tok-str: #6fd196;
+    --tok-com: #8890a2;
+    --tok-num: #e3a45f;
+    --tok-var: #5fc4e8;
+
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161b;
+  --bg-raised: #1b1e25;
+  --bg-sidebar: #17191f;
+  --fg: #e7e9ee;
+  --fg-muted: #9aa1b0;
+  --border: #2b2f3a;
+  --accent: #7fa2ff;
+  --accent-fg: #0e1116;
+  --link: #7fa2ff;
+  --code-bg: #1b1e25;
+  --code-border: #2b2f3a;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+
+  --tok-kw: #c894e8;
+  --tok-str: #6fd196;
+  --tok-com: #8890a2;
+  --tok-num: #e3a45f;
+  --tok-var: #5fc4e8;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, pre, kbd, samp {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.875em;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Skip link + focus                                                      */
+/* ---------------------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  padding: 0.6rem 1rem;
+  border-radius: 0.375rem;
+  z-index: 100;
+  transition: top 0.15s ease;
+  text-decoration: none;
+  font-weight: 600;
+}
+.skip-link:focus { top: 1rem; }
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Header                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+}
+.header-spacer { flex: 1; }
+.brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--fg);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+}
+.brand:hover { color: var(--accent); }
+.header-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+}
+.header-link:hover { color: var(--fg); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--bg-raised); color: var(--fg); }
+
+.nav-toggle { display: none; }
+
+.icon-moon { display: none; }
+:root[data-theme="dark"] .icon-sun { display: none; }
+:root[data-theme="dark"] .icon-moon { display: inline-block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun { display: none; }
+  :root:not([data-theme="light"]) .icon-moon { display: inline-block; }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.layout {
+  max-width: 100rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 16rem minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.sidebar {
+  position: sticky;
+  top: 3.4rem;
+  align-self: start;
+  height: calc(100vh - 3.4rem);
+  overflow-y: auto;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 1.5rem 1rem 3rem;
+}
+.nav-group { margin-bottom: 1.5rem; }
+.nav-heading {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem 0.6rem;
+}
+.sidebar ul { list-style: none; margin: 0; padding: 0; }
+.sidebar li { margin: 0; }
+.sidebar a {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.375rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.sidebar a:hover { background: var(--bg-raised); color: var(--fg); }
+.sidebar a.active {
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nav-overlay { display: none; }
+
+.content {
+  padding: 2.5rem 2rem 6rem;
+  min-width: 0;
+}
+.content > * {
+  max-width: 70ch;
+}
+.content h1, .content h2, .content h3, .content h4 { max-width: none; }
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: 2rem 1.25rem 3rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+.site-footer a { color: var(--fg-muted); }
+.site-footer a:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------- */
+/* Typography                                                              */
+/* ---------------------------------------------------------------------- */
+
+.content h1 {
+  font-size: 2.25rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin: 0 0 1.25rem;
+}
+.content h2 {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin: 2.5rem 0 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+.content h1 + .toc + h2, .content h1 + h2 { border-top: none; padding-top: 0; }
+.content h3 { font-size: 1.2rem; margin: 1.75rem 0 0.75rem; }
+.content h4 { font-size: 1.02rem; margin: 1.5rem 0 0.6rem; }
+
+.anchor {
+  margin-left: 0.4em;
+  color: var(--fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  font-weight: 400;
+  font-size: 0.8em;
+}
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor, h4:hover .anchor,
+.anchor:focus { opacity: 1; }
+
+.content p { margin: 0 0 1.1rem; }
+.content a { color: var(--link); }
+.content strong { font-weight: 650; }
+
+.content ul, .content ol {
+  margin: 0 0 1.1rem;
+  padding-left: 1.4rem;
+}
+.content li { margin: 0.3rem 0; }
+.content li > ul, .content li > ol { margin: 0.3rem 0 0.3rem; }
+
+.content blockquote {
+  margin: 0 0 1.1rem;
+  padding: 0.2rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.content blockquote p:last-child { margin-bottom: 0.2rem; }
+
+.content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2.5rem 0;
+}
+
+.content code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.3rem;
+  padding: 0.1em 0.35em;
+}
+
+.content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.content pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  white-space: pre;
+}
+
+.tok-kw { color: var(--tok-kw); font-weight: 600; }
+.tok-str { color: var(--tok-str); }
+.tok-com { color: var(--tok-com); font-style: italic; }
+.tok-num { color: var(--tok-num); }
+.tok-var { color: var(--tok-var); }
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92rem;
+}
+.content th, .content td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.content thead th {
+  background: var(--bg-raised);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.content tbody tr:last-child td { border-bottom: none; }
+
+.toc {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.25rem;
+  margin: 0 0 1.75rem;
+  max-width: 100%;
+}
+.toc-heading {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted);
+}
+.toc ul { list-style: none; margin: 0; padding-left: 1rem; font-size: 0.9rem; }
+.toc > ul { padding-left: 0; }
+.toc li { margin: 0.2rem 0; }
+.toc a { color: var(--fg-muted); text-decoration: none; }
+.toc a:hover { color: var(--link); }
+
+.doc-index { padding-left: 1.4rem; }
+.doc-index li { margin: 0.45rem 0; }
+
+.source-link { margin-top: 2.5rem; font-size: 0.875rem; }
+.source-link a { color: var(--fg-muted); }
+
+/* ---------------------------------------------------------------------- */
+/* Responsive                                                              */
+/* ---------------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .nav-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    width: 17rem;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: var(--shadow);
+    padding-top: 4.5rem;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  body.nav-open .nav-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 14, 0.4);
+    z-index: 50;
+  }
+  body.nav-open { overflow: hidden; }
+  .content { padding: 2rem 1.25rem 4rem; }
+  .content h1 { font-size: 1.8rem; }
+}
+
+@media (max-width: 520px) {
+  .header-link { display: none; }
+}
+
+</style>
+<script>
+(function(){
+  try {
+    var t = localStorage.getItem('dw-theme');
+    if (t === 'light' || t === 'dark') {
+      document.documentElement.setAttribute('data-theme', t);
+    }
+  } catch (e) {}
+})();
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+<div class="header-inner">
+<button id="nav-toggle" class="icon-btn nav-toggle" aria-expanded="false" aria-controls="sidebar" aria-label="Toggle navigation"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+<a class="brand" href="/dagworker/">dagworker</a>
+<div class="header-spacer"></div>
+<a class="header-link" href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">GitHub</a>
+<button id="theme-toggle" class="icon-btn" aria-label="Toggle color theme"><svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg></button>
+</div>
+</header>
+<div class="layout">
+<div id="nav-overlay" class="nav-overlay"></div>
+<nav id="sidebar" class="sidebar" aria-label="Primary">
+<div class="nav-group">
+<p class="nav-heading">Start</p>
+<ul>
+<li><a href="/dagworker/">Home</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Guide</p>
+<ul>
+<li><a href="/dagworker/guide/quickstart/">Quickstart</a></li>
+<li><a href="/dagworker/guide/concepts/">Concepts</a></li>
+<li><a href="/dagworker/guide/trigger-rules/">Trigger rules &amp; branching</a></li>
+<li><a href="/dagworker/guide/dynamic-graphs/">Dynamic graphs</a></li>
+<li><a href="/dagworker/guide/workers/">Writing workers</a></li>
+<li><a href="/dagworker/guide/backends/">Choosing a backend</a></li>
+<li><a href="/dagworker/guide/operations/">Running in production</a></li>
+<li><a href="/dagworker/guide/performance/">Performance</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Reference</p>
+<ul>
+<li><a href="/dagworker/reference/contract/">Storage &amp; manager contract</a></li>
+<li><a href="/dagworker/reference/adapters/">Adapter contract</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Design record</p>
+<ul>
+<li><a href="/dagworker/adr/">Architecture Decisions</a></li>
+<li><a href="/dagworker/research/">Research Dossiers</a></li>
+</ul>
+</div>
+<div class="nav-group">
+<p class="nav-heading">Project</p>
+<ul>
+<li><a href="/dagworker/contributing/">Contributing</a></li>
+<li><a href="/dagworker/changelog/">Changelog</a></li>
+</ul>
+</div>
+</nav>
+<main id="main" class="content">
+<nav class="toc" aria-label="On this page">
+<p class="toc-heading">On this page</p>
+<ul>
+<li><a href="#distributed-leasing-visibility-timeouts-and-fencing">Distributed Leasing, Visibility Timeouts, and Fencing</a></li>
+<ul>
+<li><a href="#scope-and-why-this-is-the-correctness-critical-dossier">Scope and why this is the correctness-critical dossier</a></li>
+<li><a href="#1-the-two-failure-modes-that-define-the-problem">1. The two failure modes that define the problem</a></li>
+<li><a href="#2-survey-how-production-message-queue-systems-solve-it">2. Survey: how production message/queue systems solve it</a></li>
+<ul>
+<li><a href="#2-1-sqs-visibility-timeout">2.1 SQS visibility timeout</a></li>
+<li><a href="#2-2-google-cloud-pub-sub-ack-deadlines-and-lease-management">2.2 Google Cloud Pub/Sub ack deadlines and lease management</a></li>
+<li><a href="#2-3-kafka-consumer-groups-session-timeout-ms-max-poll-interval-ms-and-rebalance-storms">2.3 Kafka consumer groups: session.timeout.ms, max.poll.interval.ms, and rebalance storms</a></li>
+<li><a href="#2-4-redis-streams-consumer-groups-xreadgroup-xpending-xclaim-xautoclaim">2.4 Redis Streams consumer groups: XREADGROUP / XPENDING / XCLAIM / XAUTOCLAIM</a></li>
+<li><a href="#2-5-the-redis-reliable-queue-pattern-rpoplpush-lmove-a-zset-of-deadlines">2.5 The Redis "reliable queue" pattern: RPOPLPUSH/LMOVE + a ZSET of deadlines</a></li>
+</ul>
+<li><a href="#3-lease-and-lock-theory-the-papers-and-the-debate">3. Lease and lock theory: the papers and the debate</a></li>
+<ul>
+<li><a href="#3-1-gray-cheriton-leases-an-efficient-fault-tolerant-mechanism-for-distributed-file-cache">3.1 Gray &amp; Cheriton, "Leases: An Efficient Fault-Tolerant Mechanism for Distributed File Cache</a></li>
+<li><a href="#3-2-chubby-session-leases-and-the-sequencer-fencing-token-mechanism">3.2 Chubby: session leases and the sequencer (fencing token) mechanism</a></li>
+<li><a href="#3-3-zookeeper-session-semantics-and-zxid-based-fencing">3.3 ZooKeeper: session semantics and zxid-based fencing</a></li>
+<li><a href="#3-4-the-kleppmann-antirez-redlock-debate-what-it-actually-settles">3.4 The Kleppmann/antirez Redlock debate — what it actually settles</a></li>
+<li><a href="#3-5-spanner-truetime-and-why-timeouts-computed-from-wall-clock-reads-are-unsafe-in-general">3.5 Spanner, TrueTime, and why timeouts computed from wall-clock reads are unsafe in general</a></li>
+</ul>
+<li><a href="#4-clock-pathologies-what-actually-goes-wrong-in-production-concretely">4. Clock pathologies: what actually goes wrong in production, concretely</a></li>
+<li><a href="#5-design-for-dag-worker-go">5. Design for dag-worker-go</a></li>
+<ul>
+<li><a href="#5a-monotonic-vs-wall-clock-for-deadlines-whose-clock-rules-when-they-differ">5a. Monotonic vs. wall clock for deadlines; whose clock rules when they differ</a></li>
+<li><a href="#5b-rejecting-a-late-worker-ack-fencing-token-lease-epoch-compare-and-swap">5b. Rejecting a late worker ack: fencing token / lease epoch, compare-and-swap</a></li>
+<li><a href="#5c-heartbeat-vs-lease-extension-api-design">5c. Heartbeat vs. lease-extension API design</a></li>
+<li><a href="#5d-the-timeout-sweeper-in-o-log-n-and-avoiding-duplicate-sweeping-across-instances">5d. The timeout sweeper in O(log n), and avoiding duplicate sweeping across instances</a></li>
+<li><a href="#5e-at-least-once-vs-at-most-once-delivery-to-workers-and-why-exactly-once-is-a-lie">5e. At-least-once vs. at-most-once delivery to workers, and why exactly-once is a lie</a></li>
+<li><a href="#5f-clock-jumps-vm-migration-and-container-pauses-the-sigstop-freezer-problem">5f. Clock jumps, VM migration, and container pauses (the SIGSTOP/freezer problem)</a></li>
+</ul>
+<li><a href="#recommendations-for-dag-worker-go">Recommendations for dag-worker-go</a></li>
+<li><a href="#open-questions">Open questions</a></li>
+</ul>
+</ul>
+</nav>
+<h1 id="distributed-leasing-visibility-timeouts-and-fencing">Distributed Leasing, Visibility Timeouts, and Fencing<a class="anchor" href="#distributed-leasing-visibility-timeouts-and-fencing" aria-label="Link to this section">#</a></h1>
+<h2 id="scope-and-why-this-is-the-correctness-critical-dossier">Scope and why this is the correctness-critical dossier<a class="anchor" href="#scope-and-why-this-is-the-correctness-critical-dossier" aria-label="Link to this section">#</a></h2>
+<p>Every other design question in this project (storage backend, DAG representation, scope
+namespacing) is a performance or ergonomics question. This one is a <strong>safety</strong> question. The
+entire value proposition of dag-worker-go is: <em>"an external worker takes a node, and if it dies
+without answering, the library reliably notices and re-issues that node to someone else — without
+ever letting two workers believe they alone hold it, and without ever accepting a stale answer
+from a worker who has already been declared dead."</em> Every production system that hands work to a
+detached executor over a network has solved (or partially solved, or shipped broken) exactly this
+problem, and the solutions cluster around one mechanism — the <strong>lease</strong> — with the differences
+concentrated in three axes: whose clock adjudicates expiry, whether stale re-admission is possible
+(and if so, whether it is <em>cheap</em> — a race window — or <em>disastrous</em> — silent double execution and
+corrupted shared state), and how the timeout sweep is distributed across independent readers
+without becoming an O(n) or thundering-herd operation. This document surveys the production
+systems that made this call, the two academic papers that frame <em>why</em> the call has to be made the
+way it does, and the applied consequence for a library that must support four storage backends and
+multiple concurrent library instances simultaneously.</p>
+<hr>
+<h2 id="1-the-two-failure-modes-that-define-the-problem">1. The two failure modes that define the problem<a class="anchor" href="#1-the-two-failure-modes-that-define-the-problem" aria-label="Link to this section">#</a></h2>
+<p>A lease-based work-assignment system has exactly two ways to fail, and they are asymmetric in
+severity:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Failure</th><th>What happens</th><th>Severity</th></tr></thead>
+<tbody>
+<tr><td><strong>False expiry</strong> (lease reclaimed while the worker is still alive and working)</td><td>Two workers now believe they own the same node; if the storage write is not fenced, the slow worker's write can land <em>after</em> the new worker's write and silently corrupt state.</td><td>Correctness-critical — can violate the DAG's single-writer invariant.</td></tr>
+<tr><td><strong>Missed expiry</strong> (lease is not reclaimed even though the worker died)</td><td>The node sits stuck, the DAG stalls, downstream nodes never become ready.</td><td>Availability/liveness — annoying but self-evidently visible and safe to fix by widening the timeout.</td></tr>
+</tbody></table></div>
+<p>Every mechanism below is fundamentally a trade between these two. The unifying insight, argued
+independently by Google's Chubby team, Martin Kleppmann, and the visibility-timeout designers at
+AWS, is that <strong>you cannot make false expiry impossible with timeouts alone</strong> — clocks skew, GC
+pauses happen, hypervisors freeze VMs, <code>SIGSTOP</code>/cgroup-freezer suspends processes for arbitrary
+wall-clock time. The only way to make false expiry <em>safe rather than catastrophic</em> is to combine
+the lease with a <strong>fencing token</strong>: a monotonically increasing number that every write must present,
+so that even if two workers believe they hold the node, the storage layer itself rejects the
+loser's write. This is the load-bearing idea of the entire document, and it recurs in Chubby's
+sequencers, ZooKeeper's <code>zxid</code>, Kleppmann's critique of Redlock, and Spanner's TrueTime-driven
+commit-wait. Section 6 turns it into a concrete Go/Lua/SQL design.</p>
+<hr>
+<h2 id="2-survey-how-production-message-queue-systems-solve-it">2. Survey: how production message/queue systems solve it<a class="anchor" href="#2-survey-how-production-message-queue-systems-solve-it" aria-label="Link to this section">#</a></h2>
+<h3 id="2-1-sqs-visibility-timeout">2.1 SQS visibility timeout<a class="anchor" href="#2-1-sqs-visibility-timeout" aria-label="Link to this section">#</a></h3>
+<p>Amazon SQS is the closest existing system to what dag-worker-go's "hand a ready node to an
+external worker" primitive needs to be, and its semantics — including its rough edges — are worth
+copying deliberately, not accidentally.</p>
+<p><strong>Mechanics.</strong> When a consumer calls <code>ReceiveMessage</code>, the message is not deleted; it becomes
+invisible to other consumers for the queue's <strong>visibility timeout</strong>, default <strong>30 seconds</strong>, range
+<strong>0 seconds to 12 hours</strong> — the message returns to visibility for redelivery unless the consumer
+calls <code>DeleteMessage</code> (ack) before the timer elapses (<a href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html" rel="noopener noreferrer">AWS SQS visibility timeout
+docs</a>).
+A consumer that needs more time calls <code>ChangeMessageVisibility</code> to push the deadline out
+programmatically — this is the lease-extension / heartbeat primitive, and its semantics are
+subtle and worth internalizing before designing an equivalent API:</p>
+<ul>
+<li>The new timeout is computed <strong>from the moment the <code>ChangeMessageVisibility</code> call is received</strong>,
+not from the original receive time and not additively: "the 10 seconds begin to count from the
+time that you make the <code>ChangeMessageVisibility</code> call" — a call is an absolute reset of the
+deadline, not a delta (<a href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html" rel="noopener noreferrer">AWS SQS visibility timeout
+docs</a>).</li>
+<li><strong>The extension is not persisted as "the new default" for that message</strong> — if the message is
+redelivered later (e.g., after another failure), its visibility timeout reverts to the queue's
+original configured value, not to whatever a prior worker last set it to. This is a well-known
+gotcha: teams assume a heartbeat "sticks" and are surprised when a second delivery gets the
+short default timeout again.</li>
+<li>There is a <strong>hard ceiling of 12 hours from first receipt</strong>, and it is not extendable past that
+regardless of how many <code>ChangeMessageVisibility</code> calls are made — a design constraint explicitly
+meant to bound how long a message can be walled off from the rest of the system by one stuck
+worker.</li>
+<li>SQS is explicitly <strong>at-least-once</strong>: "because of the at-least-once delivery model, Amazon SQS
+doesn't guarantee that a message won't be delivered more than once within the visibility timeout
+period" — this is stated as a property of the system, not a bug, and the guide's remedy is
+application-level idempotency, not a stronger delivery guarantee
+(<a href="https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html" rel="noopener noreferrer">docs</a>).</li>
+<li>SQS caps <strong>in-flight messages</strong> at roughly 120,000 per standard queue; exceeding it returns
+<code>OverLimit</code> on short polling or silently withholds new messages on long polling. This is the
+practical reason SQS-style visibility timeout does not scale past a certain outstanding-lease
+count without partitioning — relevant directly to dag-worker-go's O(1)/O(log n) mandate at 1M
+nodes, where "in-flight" (in-progress) nodes could plausibly be a large fraction of the graph.</li>
+<li><strong>No fencing token exists in the SQS API at all.</strong> SQS purely offers a <code>ReceiptHandle</code>, an opaque
+string that identifies <em>this particular delivery</em> — <code>DeleteMessage</code>/<code>ChangeMessageVisibility</code>
+calls made with a stale receipt handle (past its visibility timeout) fail, but there is no
+mechanism to hand that receipt handle to a downstream storage system as a CAS token the way a
+fencing token in Chubby or ZooKeeper works. SQS punts fencing entirely to the application: if a
+worker's write to <em>your</em> database can race a second worker's write, SQS gives you zero help.</li>
+</ul>
+<p><strong>The lesson for dag-worker-go</strong>: reset-not-extend semantics for lease renewal is the right choice
+(simpler mental model, no "sticky new value" surprise), a hard maximum total lease-extension
+ceiling per node is worth having as a safety valve independent of the sweeper, and — critically —
+dag-worker-go must not repeat SQS's fencing gap, because unlike SQS (which is usually the last hop
+before a genuinely idempotent, dedup-capable consumer), dag-worker-go's storage <em>is</em> the
+authoritative state of the DAG; a stale write here is not "redundant," it's a correctness
+violation of the single-owner invariant.</p>
+<h3 id="2-2-google-cloud-pub-sub-ack-deadlines-and-lease-management">2.2 Google Cloud Pub/Sub ack deadlines and lease management<a class="anchor" href="#2-2-google-cloud-pub-sub-ack-deadlines-and-lease-management" aria-label="Link to this section">#</a></h3>
+<p>Pub/Sub's model is structurally identical to SQS's (deadline-based invisibility) but makes
+different defaults and offers a cleaner <em>client-library-managed</em> lease-extension abstraction that
+is a good API-shape reference.</p>
+<ul>
+<li>Default ack deadline is <strong>10 seconds</strong>; configurable up to <strong>600 seconds (10 minutes)</strong> per
+<code>modifyAckDeadline</code> call and at the subscription level
+(<a href="https://docs.cloud.google.com/pubsub/docs/lease-management" rel="noopener noreferrer">Pub/Sub lease management docs</a>;
+<a href="https://docs.cloud.google.com/pubsub/docs/reference/rest/v1/projects.subscriptions/modifyAckDeadline" rel="noopener noreferrer"><code>modifyAckDeadline</code> reference</a>).</li>
+<li>Like SQS's <code>ChangeMessageVisibility</code>, <code>ModifyAckDeadline</code> is <strong>absolute-from-call-time</strong>: "the
+new ack deadline will expire N seconds after the <code>ModifyAckDeadline</code> call was made" — same
+reset-not-additive semantics as SQS.</li>
+<li>The high-level client libraries implement <strong>automatic lease management</strong>: rather than the
+application hand-rolling a heartbeat loop, the library itself tracks outstanding (unacked)
+messages and periodically calls <code>ModifyAckDeadline</code> on the caller's behalf, up to a configurable
+<strong>maximum total extension period</strong> (default up to ~1 hour) and using the <strong>99th percentile of
+observed ack latency</strong> to size each individual extension
+(<a href="https://docs.cloud.google.com/pubsub/docs/lease-management" rel="noopener noreferrer">docs</a>). This is a meaningfully
+better design than "the application must remember to call extend": the library measures how long
+processing has historically taken and extends by an amount informed by that, rather than a fixed
+guess. This maps directly onto a "heartbeat" design in dag-worker-go's worker SDK: the client
+library, not hand-written host code, should own the heartbeat loop, sized from an
+application-tunable "expected processing time" percentile rather than a single knob.</li>
+<li>The most important caveat, stated flatly in Google's own docs: <strong>"acknowledgment deadlines are
+not guaranteed to be respected unless you enable exactly-once delivery"</strong> — i.e., in Pub/Sub's
+default (at-least-once) mode, a message can in rare cases be redelivered to a second subscriber
+<em>before</em> the ack deadline of the first subscriber has actually expired, because deadline
+enforcement itself is best-effort in the non-exactly-once path. This is a striking admission from
+a hyperscale vendor: <strong>even the deadline check itself is not linearizable unless you pay for the
+stronger mode.</strong> It is the strongest argument in this entire survey for building the fencing
+token into the storage layer rather than trusting "the deadline hasn't passed yet" as a safety
+property on its own.</li>
+</ul>
+<h3 id="2-3-kafka-consumer-groups-session-timeout-ms-max-poll-interval-ms-and-rebalance-storms">2.3 Kafka consumer groups: <code>session.timeout.ms</code>, <code>max.poll.interval.ms</code>, and rebalance storms<a class="anchor" href="#2-3-kafka-consumer-groups-session-timeout-ms-max-poll-interval-ms-and-rebalance-storms" aria-label="Link to this section">#</a></h3>
+<p>Kafka's consumer-group liveness model is a useful <em>cautionary</em> case study because it conflates two
+different kinds of liveness — "is the process's network heartbeat thread alive" and "is the
+process actually making progress consuming" — and getting that conflation wrong is exactly the
+class of bug this project must avoid in its own timeout design.</p>
+<ul>
+<li><strong><code>session.timeout.ms</code></strong> (default <strong>45 seconds</strong> on modern brokers) governs the <em>group
+coordinator's</em> liveness check: "the client sends periodic heartbeats to indicate its liveness to
+the broker. If no heartbeats are received by the broker before the expiration of this session
+timeout, then the broker will remove this client from the group and initiate a rebalance."</li>
+<li><strong><code>max.poll.interval.ms</code></strong> (default <strong>5 minutes</strong>) governs a <em>separate</em> liveness check on actual
+message-processing progress: "if the consumer does not call <code>poll()</code> within [this] interval... the
+client leaves the consumer group and a rebalance is triggered" — even if the heartbeat thread
+(which runs independently since client version 0.10.2) is still happily beating.</li>
+<li>The reason these are two separate knobs is historical and instructive: pre-0.10.2 clients had
+<strong>no dedicated heartbeat thread</strong> — heartbeats were piggybacked on <code>poll()</code> calls, so a slow
+message handler silently starved the heartbeat and triggered <code>session.timeout.ms</code>-based eviction
+even though the process was alive and (slowly) working. The fix was to split the two concerns:
+a background thread proves <em>the process is alive</em>; a separate, much longer timer proves <em>the
+process is still making progress through its work loop</em>
+(<a href="https://www.confluent.io/learn/kafka-rebalancing/" rel="noopener noreferrer">Confluent's Kafka rebalancing explainer</a>;
+<a href="https://kafka.apache.org/41/configuration/consumer-configs/" rel="noopener noreferrer">Kafka consumer configs</a>).</li>
+<li><strong>Rebalance storms</strong>: every time group membership changes (a consumer joins, leaves, or is
+evicted by either timeout), Kafka's default eager rebalance protocol <strong>revokes every partition
+from every consumer in the group and reassigns from scratch</strong> — "stop the world" — which under a
+flapping consumer (repeatedly hitting <code>session.timeout.ms</code> due to GC pauses, or repeatedly
+restarting) produces a storm of full-group rebalances, each one pausing consumption for the
+<em>entire</em> group while reassignment completes.</li>
+<li><strong>KIP-345 static membership</strong> is the fix Kafka shipped for exactly this: a consumer supplies a
+stable <code>group.instance.id</code>; on a short-lived restart or disconnect within <code>session.timeout.ms</code>,
+it <strong>rejoins with the same identity and gets the same partition assignment back without
+triggering a rebalance at all</strong> — "every consumer restart or temporary disconnect causes a full
+group rebalance... static membership solves this by avoiding these unnecessary rebalances"
+(<a href="https://cwiki.apache.org/confluence/display/KAFKA/KIP-345:+Introduce+static+membership+protocol+to+reduce+consumer+rebalances" rel="noopener noreferrer">KIP-345</a>).
+Static membership additionally <strong>fences duplicate identities</strong>: two processes joining with the
+same <code>group.instance.id</code> is treated as a conflict and one is rejected, rather than silently
+splitting the assignment.</li>
+</ul>
+<p><strong>Lessons for dag-worker-go:</strong> (1) "is the worker process alive" and "is this specific node's
+processing making progress" must be two different timers, exactly as Kafka eventually learned to
+split them — a per-node lease deadline is the analog of <code>max.poll.interval.ms</code>, and it should not
+be conflated with any process-wide worker liveness heartbeat if the library ever adds one; (2) the
+sweeper/rebalance action on timeout must be <strong>scoped to the one expired node</strong>, never "recompute
+assignment for everything" — the multi-instance work-distribution question in this project's brief
+must not accidentally reinvent Kafka's eager-rebalance stop-the-world behavior; (3) a stable
+worker/consumer identity that can reclaim its own in-flight leases after a brief reconnect (the
+static-membership idea) is a cheap, valuable feature to offer in the worker SDK.</p>
+<h3 id="2-4-redis-streams-consumer-groups-xreadgroup-xpending-xclaim-xautoclaim">2.4 Redis Streams consumer groups: <code>XREADGROUP</code> / <code>XPENDING</code> / <code>XCLAIM</code> / <code>XAUTOCLAIM</code><a class="anchor" href="#2-4-redis-streams-consumer-groups-xreadgroup-xpending-xclaim-xautoclaim" aria-label="Link to this section">#</a></h3>
+<p>Redis Streams is the closest off-the-shelf primitive to "hand a ready item to exactly one worker,
+track who has it, and let someone else reclaim it if they vanish," and its actual command
+semantics (read from the Redis docs directly, not summarized secondhand) are worth using as a
+template for dag-worker-go's Redis backend.</p>
+<ul>
+<li><code>XREADGROUP GROUP &lt;group&gt; &lt;consumer&gt; ... STREAMS &lt;key&gt; &gt;</code> delivers new entries to <code>&lt;consumer&gt;</code>
+and, as a side effect, creates an entry in the group's <strong>Pending Entries List (PEL)</strong> — this is
+the "the node is now leased to this worker" record. The PEL tracks, per pending message: the
+current owner consumer, the <strong>idle time</strong> in milliseconds since last delivery, and a <strong>delivery
+counter</strong>.</li>
+<li><strong><code>XPENDING</code></strong> is the read/inspect side. The summary form (<code>XPENDING key group</code>) returns count,
+min/max IDs, and per-consumer pending counts in O(1)-ish time; the extended form
+(<code>XPENDING key group [IDLE ms] start end count [consumer]</code>) returns, per message, <code>(id, consumer,
+idle_ms, delivery_count)</code> and — critically for a sweeper — supports an <code>IDLE min-idle-time</code>
+filter added in Redis 6.2, so a scan for "everything idle for longer than my timeout" is a native,
+server-side-filtered range query, not a client-side filter over every pending entry
+(<a href="https://redis.io/docs/latest/commands/xpending/" rel="noopener noreferrer">XPENDING docs</a>). The docs explicitly note
+that filtering by a specific consumer is <em>not</em> an O(n) scan of all consumers' entries — "we have a
+pending entries list data structure both globally, and for every consumer" — i.e., the PEL is
+itself indexed per-consumer as well as globally, which matters for a sweeper design that wants to
+avoid scanning irrelevant consumers.</li>
+<li><strong><code>XCLAIM key group consumer min-idle-time id [id ...]</code></strong> transfers ownership of specific pending
+message IDs to <code>consumer</code>, but <strong>only if their current idle time exceeds <code>min-idle-time</code></strong> — and,
+crucially, claiming an entry <strong>resets its idle time to zero</strong>, which is what makes two consumers
+racing to claim the same stale entry safe: "because as a side effect <code>XCLAIM</code> will also reset the
+idle time..., two consumers trying to claim a message at the same time will never both succeed:
+only one will successfully claim the message" (<a href="https://redis.io/docs/latest/commands/xclaim/" rel="noopener noreferrer">XCLAIM
+docs</a>). This is the reclaim-race-safety property
+dag-worker-go needs, and it comes from Redis's single-threaded command execution serializing the
+two <code>XCLAIM</code> calls — the second one reads the <em>already-reset</em> idle time and fails the
+<code>min-idle-time</code> check. <code>XCLAIM</code> also increments the delivery counter (unless <code>JUSTID</code> is passed),
+which the docs recommend using as a poison-pill detector: "messages that cannot be processed for
+some reason... will start to have a larger counter and can be detected." Complexity is documented
+as <strong>O(log N)</strong> in the size of the consumer's PEL.</li>
+<li><strong><code>XAUTOCLAIM key group consumer min-idle-time start [COUNT n]</code></strong> (Redis 6.2+) is the sweeper
+primitive proper: it is "equivalent to calling <code>XPENDING</code> and then <code>XCLAIM</code>, but provides a more
+straightforward way to deal with message delivery failures via <code>SCAN</code>-like semantics" — it scans
+the PEL starting from a cursor (<code>start</code>, use <code>0</code> initially), claims up to <code>COUNT</code> (default 100)
+entries whose idle time exceeds <code>min-idle-time</code>, and <strong>returns a cursor for the next call</strong>,
+exactly the <code>SCAN</code>-family pattern that makes it safe to run incrementally without holding a large
+result set or blocking. It also handles the "message was trimmed/deleted from the stream but is
+still in the PEL" case automatically, evicting orphaned PEL entries and reporting their IDs
+separately, and complexity is documented as "O(1) if COUNT is small" (<a href="https://redis.io/docs/latest/commands/xautoclaim/" rel="noopener noreferrer">XAUTOCLAIM
+docs</a>). Two independent sweeper instances
+calling <code>XAUTOCLAIM</code> concurrently on the same group are safe for the same reason <code>XCLAIM</code> is: the
+claim operation is a single atomic server-side operation.</li>
+<li><strong>What Streams does <em>not</em> give you</strong>: no fencing token. The PEL's delivery counter is a <em>hint</em>
+(useful for poison-pill detection) not a compare-and-swap token — nothing stops a worker holding
+a since-reclaimed entry from writing to an external system after its claim has moved on, unless
+the <em>application</em> threads a per-claim epoch through to that external write. Streams also has no
+built-in notion of "timeout policy per entry set at claim time" — <code>min-idle-time</code> is a parameter
+the <em>claimer</em> chooses at claim time, not a deadline the <em>original consumer</em> set when it took the
+message, which is a weaker model than this project's stated requirement ("timeout is settable per
+node at the moment the worker takes it"). A Streams-based Redis backend for dag-worker-go would
+therefore need to store the per-node deadline explicitly (e.g., in a companion hash or in the
+stream entry payload) and have the sweeper read <em>that</em> value rather than relying on Streams'
+generic idle-time concept, which measures time since last <em>delivery</em> attempt, not a
+library-chosen deadline.</li>
+</ul>
+<h3 id="2-5-the-redis-reliable-queue-pattern-rpoplpush-lmove-a-zset-of-deadlines">2.5 The Redis "reliable queue" pattern: <code>RPOPLPUSH</code>/<code>LMOVE</code> + a ZSET of deadlines<a class="anchor" href="#2-5-the-redis-reliable-queue-pattern-rpoplpush-lmove-a-zset-of-deadlines" aria-label="Link to this section">#</a></h3>
+<p>Before Streams existed, and still common in simpler codebases, is the classic <strong>reliable queue</strong>
+pattern built from plain lists: <code>BRPOPLPUSH source processing</code> (or its modern replacement,
+<code>BLMOVE source processing RIGHT LEFT</code>, since <code>RPOPLPUSH</code> is deprecated as of Redis 6.2.0 in favor
+of <code>LMOVE</code>/<code>BLMOVE</code>) atomically pops a ready item off <code>source</code> and pushes it onto a per-consumer (or
+shared) <code>processing</code> list in one server-side operation, so a crash between "pop" and "push" is
+impossible — there is no window where the item exists in neither list.</p>
+<p>The reliability gap this pattern must additionally close is: <em>if the worker then crashes while the
+item sits in <code>processing</code>, who notices?</em> The standard answer is exactly the ZSET-of-deadlines
+design named in this project's brief: a companion <code>ZADD processing:deadlines &lt;expiry_unix_ms&gt;
+&lt;item_id&gt;</code> alongside the <code>LMOVE</code>, and a periodic sweeper that does <code>ZRANGEBYSCORE
+processing:deadlines -inf &lt;now&gt; LIMIT 0 &lt;batch&gt;</code> to find expired claims in <code>O(log n + k)</code> (<code>k</code> =
+batch size) rather than scanning the processing list, then re-queues (<code>LMOVE processing source
+LEFT RIGHT</code> for the specific matched item, which requires locating it by value — in practice
+implementations instead store <code>item_id</code> as the list payload and re-<code>LPUSH</code> it directly onto
+<code>source</code>, using the ZSET purely as the O(log n) index and the list only as an audit trail) and
+<code>ZREM</code>s the deadline entry. This ZSET-as-secondary-index-by-deadline structure is precisely the
+shape section 6d generalizes into dag-worker-go's cross-backend sweeper design — it is the same
+idea Redis Streams' PEL implements internally (a per-group structure ordered for idle-time queries)
+but made explicit and directly controllable, including the crucial ability to <strong>set the deadline at
+claim time to a caller-chosen value</strong>, which native Streams idle-time does not offer.</p>
+<hr>
+<h2 id="3-lease-and-lock-theory-the-papers-and-the-debate">3. Lease and lock theory: the papers and the debate<a class="anchor" href="#3-lease-and-lock-theory-the-papers-and-the-debate" aria-label="Link to this section">#</a></h2>
+<h3 id="3-1-gray-cheriton-leases-an-efficient-fault-tolerant-mechanism-for-distributed-file-cache">3.1 Gray &amp; Cheriton, "Leases: An Efficient Fault-Tolerant Mechanism for Distributed File Cache<a class="anchor" href="#3-1-gray-cheriton-leases-an-efficient-fault-tolerant-mechanism-for-distributed-file-cache" aria-label="Link to this section">#</a></h3>
+<p>Consistency" (SOSP 1989)</p>
+<p>This is the paper that named and formalized the concept everything above is a special case of. Its
+setting is distributed file cache consistency (a server grants a client a time-bounded lease on a
+cached copy of data so the client can serve reads locally without a round trip, and the <em>lease
+term</em> — not an explicit invalidation round trip — is what makes the server willing to allow this),
+but the structural argument transfers directly to worker leasing
+(<a href="https://dl.acm.org/doi/10.1145/74851.74870" rel="noopener noreferrer">paper</a>; summarized in <a href="https://blog.acolyer.org/2014/10/31/leases-an-efficient-fault-tolerant-mechanism-for-distributed-file-cache-consistency/" rel="noopener noreferrer">the morning
+paper</a>,
+mirrored at <a href="http://i.stanford.edu/pub/cstr/reports/cs/tr/90/1298/CS-TR-90-1298.pdf" rel="noopener noreferrer">Stanford's technical report
+archive</a>, CS-TR-90-1298).
+The core argument, in the form relevant here:</p>
+<ol>
+<li><strong>A lease is a contract with an expiry, not a promise contingent on a liveness check.</strong> The
+granting party (here: the library's storage) does not need to <em>detect</em> that the holder (the
+worker) has failed in order to safely act as though it has — it only needs the lease term to
+elapse. This sidesteps the fundamentally hard and, per FLP-style impossibility results,
+<em>unsolvable-in-general</em> problem of perfect failure detection in an asynchronous network: you
+cannot reliably distinguish "the worker is dead" from "the worker (or the network to it) is just
+slow," but you <em>can</em> reliably say "the time I promised is up."</li>
+<li><strong>The term length is the whole design tension</strong>, stated explicitly by Gray &amp; Cheriton as a
+trade-off: a short lease bounds how long the server can be blocked by an unresponsive holder
+(fast reclaim after real failure) but increases the overhead of renewal traffic and increases
+the odds that ordinary slow-but-alive holders get fenced out; a long lease amortizes renewal
+overhead but leaves the server exposed to the holder's failure for longer, and to bogus reclaim
+pressure for shorter.</li>
+<li><strong>Clock synchronization between granter and holder is assumed to be bounded but imperfect</strong>, and
+the paper's protocol is explicitly designed to tolerate a bounded clock-drift error term between
+the two clocks rather than assuming they agree exactly — the granter's notion of "expired" and
+the holder's notion of "my lease is about to expire, I should renew" are allowed to disagree by
+up to that bound, and the protocol (renew comfortably before the deadline, not exactly at it) is
+built to absorb it rather than pretend it away. This is the direct ancestor of the "who's clock
+authoritative" question in section 6a: Gray &amp; Cheriton's answer, translated to today's
+vocabulary, is <em>the granter's clock is authoritative for expiry; the holder must renew with
+margin, not precision.</em></li>
+</ol>
+<h3 id="3-2-chubby-session-leases-and-the-sequencer-fencing-token-mechanism">3.2 Chubby: session leases and the sequencer (fencing token) mechanism<a class="anchor" href="#3-2-chubby-session-leases-and-the-sequencer-fencing-token-mechanism" aria-label="Link to this section">#</a></h3>
+<p>Google's Chubby lock service (<a href="https://static.googleusercontent.com/media/research.google.com/en//archive/chubby-osdi06.pdf" rel="noopener noreferrer">Burrows, OSDI 2006, "The Chubby lock service for loosely-coupled
+distributed systems"</a>)
+is the paper that turned "leases need a companion fencing mechanism" into a shipped, load-bearing
+production API, and it is the direct intellectual ancestor of the fencing-token design this
+project needs.</p>
+<p><strong>Session leases and <code>KeepAlive</code>.</strong> Every Chubby client holds a session with the master, kept
+alive by an outstanding <code>KeepAlive</code> RPC. The master deliberately <strong>delays its <code>KeepAlive</code> reply
+until the lease is nearly due to expire</strong>, then replies with an extension — the default lease
+length is <strong>12 seconds</strong>, adaptively lengthened under server load — and the client immediately
+issues the next <code>KeepAlive</code>, so there is always exactly one outstanding renewal request in flight.
+This "delay the reply, don't just accept a ping" design is notably different from a naive
+heartbeat: the <em>reply itself</em> is the extension grant, arriving right when the client needs to know
+the new deadline, rather than an independent unacknowledged ping (<a href="https://blog.hieunt.me/blog/chubby-lock-service-for-loosely-coupled-distributed-systems" rel="noopener noreferrer">summary with sourced quotes:
+Chubby lock service
+writeup</a>).</p>
+<p><strong>Jeopardy and grace period on master failover.</strong> If a client's local timer runs out on its
+current lease without a <code>KeepAlive</code> reply (e.g., because the master crashed and a new one is being
+elected), the client does not immediately treat its session as dead — it enters a state called
+<strong>jeopardy</strong>: local caches are disabled and the application is warned to quiesce, but the session
+is given a further <strong>grace period, default 45 seconds</strong>, to reconnect to a (possibly new) master
+and resume <code>KeepAlive</code>s. If a <code>KeepAlive</code> succeeds within the grace period, the session survives
+uninterrupted (a "safe" event); if the grace period elapses with no reply, the session is
+irrevocably expired. This two-stage design (lease timer, then a longer independent grace window
+specifically to absorb <em>master</em> failover, distinct from <em>client</em> failure) is a pattern worth
+lifting directly: it decouples "my lease with the specific storage node I was talking to expired"
+from "my session with the <em>service</em> as a whole is dead," which matters enormously for
+dag-worker-go once storage is a Postgres/Redis cluster with its own failover, not a single node.</p>
+<p><strong>Sequencers — the fencing token, by name, in 2006.</strong> This is the mechanism this whole document
+is building toward. When a Chubby client successfully acquires a lock, it can call
+<code>GetSequencer()</code> to obtain an opaque byte string — the <strong>sequencer</strong> — that encodes the lock's
+name, its mode (exclusive/shared), and a <strong>monotonically increasing lock generation number</strong>. The
+client attaches this sequencer to every request it subsequently sends to a <em>third-party</em> service
+that the lock is meant to protect (Chubby's own worked example is a GFS-style file server
+protected by a lock on "who is currently the primary"). That third-party service either calls back
+into Chubby's <code>CheckSequencer()</code> to validate the token against the current holder, or — more
+efficiently, and how it's actually used in practice — simply <strong>remembers the highest generation
+number it has seen for that lock and rejects any request bearing a lower one outright</strong>, with no
+round trip to Chubby needed on the hot path. This is precisely "compare-and-swap on a per-node
+lease epoch," described in a paper from 2006, applied to files instead of DAG nodes. The direct
+translation for dag-worker-go: every node acquisition bumps a per-node epoch; every worker
+acknowledgment must present the epoch it was handed at claim time; storage rejects any ack whose
+epoch does not match the node's <em>current</em> epoch, and rejection requires zero coordination with
+whatever reclaimed the node — the check is purely local to the storage row/key.</p>
+<h3 id="3-3-zookeeper-session-semantics-and-zxid-based-fencing">3.3 ZooKeeper: session semantics and <code>zxid</code>-based fencing<a class="anchor" href="#3-3-zookeeper-session-semantics-and-zxid-based-fencing" aria-label="Link to this section">#</a></h3>
+<p>ZooKeeper's session model is close kin to Chubby's (unsurprising — it was explicitly designed as
+an open alternative), with the same jeopardy-like asymmetry between client-perceived and
+server-perceived session state:</p>
+<ul>
+<li><strong>The server, not the client, owns expiry.</strong> "Session expiration is managed by the ZooKeeper
+cluster itself, not by the client... Expirations happen when the cluster does not hear from the
+client within the specified session timeout period" (<a href="https://zookeeper.apache.org/doc/r3.4.13/zookeeperProgrammers.html" rel="noopener noreferrer">ZooKeeper Programmer's
+Guide</a>). This is an explicit,
+deliberate design choice this project should copy: <strong>the authority that declares a lease dead
+must be the storage/service side</strong>, never the client, because a client that believes it is still
+within its lease has no way to know that its clock, GC pauses, or network partition have made
+that belief false.</li>
+<li><strong>Heartbeat cadence is a fraction of the timeout, with failover built in</strong>: "if the session
+timeout is time t, and if the client has not interacted with the server within 1/3t of time, it
+sends a heartbeat... [if that server appears dead] the client tries to find another server... at
+time 2/3t" — i.e., the client-side heartbeat schedule is itself staged to leave two full retry
+windows (at 1/3 and 2/3 of the deadline) before the deadline is reached, rather than a single
+heartbeat sent right before expiry with no slack for a retry on failure.</li>
+<li><strong>Ephemeral nodes tie liveness state directly to the session</strong>: "at session expiration the
+cluster will delete any/all ephemeral nodes owned by that session and immediately notify any/all
+connected clients of the change" — this is the mechanism ZooKeeper-based lock recipes use to make
+lock release automatic on failure, and it is architecturally the same idea as "when a node's
+lease expires, the sweeper transitions its status and fires an event," just implemented via
+watches instead of a polling sweeper.</li>
+<li><strong><code>zxid</code> as a free fencing token</strong>: every ZooKeeper write is assigned a globally, strictly
+increasing transaction ID (the <code>zxid</code>) by the leader as part of the atomic broadcast protocol
+that orders all mutations. Because the <code>Stat</code> structure returned when an ephemeral lock node is
+created carries the <code>zxid</code> of that creation as <code>czxid</code>, and <code>zxid</code>s are guaranteed monotonically
+increasing across the whole ensemble, a lock holder can hand out <code>czxid</code> as a fencing token
+exactly like a Chubby sequencer, with <em>no extra bookkeeping required</em> — the ordering primitive
+the consensus protocol already needs to maintain replicated state is reused, for free, as the
+fencing mechanism (documented in the <a href="https://zookeeper.apache.org/doc/r3.1.2/recipes.html" rel="noopener noreferrer">ZooKeeper recipes
+guide</a>; Apache Curator's <code>InterProcessMutex</code>
+is the standard client-side implementation). The generalizable lesson: <strong>if your storage backend
+already has a monotonic, per-write sequence number as part of its replication protocol
+(Postgres's <code>xid</code>/LSN, a Raft log index, a <code>zxid</code>), that sequence number is a free fencing token
+— don't invent a second counter when the storage engine is already handing you one.</strong></li>
+</ul>
+<h3 id="3-4-the-kleppmann-antirez-redlock-debate-what-it-actually-settles">3.4 The Kleppmann/antirez Redlock debate — what it actually settles<a class="anchor" href="#3-4-the-kleppmann-antirez-redlock-debate-what-it-actually-settles" aria-label="Link to this section">#</a></h3>
+<p>This exchange (Kleppmann's <a href="https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html" rel="noopener noreferrer">"How to do distributed
+locking"</a>, 2016, and
+antirez's rebuttal <a href="https://antirez.com/news/101" rel="noopener noreferrer">"Is Redlock safe?"</a>) is widely cited but
+frequently mischaracterized as "Redlock is broken, don't use Redis for locks." What it actually
+establishes is narrower and more useful:</p>
+<p><strong>Kleppmann's core claim is about fencing, not about Redis specifically.</strong> His central argument is
+that <em>any</em> lock service — including one that is otherwise perfectly correct — is unsafe <strong>if the
+protected resource does not itself enforce a fencing token</strong>: "you need to include a fencing token
+with every write request to the storage service... a number that increases every time a client
+acquires the lock." His worked failure scenario is a GC pause: client 1 acquires the lock (lease
+generation 33), then stalls in a long GC pause past the lease's expiry; client 2 acquires the lock
+in the meantime (generation 34) and writes; client 1 resumes, still believing it holds the lock,
+and writes too — and <em>without a fencing check at the storage layer</em>, client 1's stale write can
+land and corrupt state regardless of which lock algorithm granted the lease. His specific critique
+of Redlock is that Redlock <strong>has no facility for generating such a token at all</strong> — its lock value
+is a random string used only to prove <em>who requested the unlock</em>, not a monotonically increasing
+number the protected storage can use for CAS. His secondary, more debated critique is that Redlock
+(unlike, say, ZooKeeper/<code>zxid</code>-based locking or Chubby) additionally depends on <strong>synchronous-system
+timing assumptions</strong> — bounded clock drift across the independent Redis instances, bounded network
+delay relative to lock TTL — for its <em>mutual-exclusion</em> guarantee at all, not just for the
+fencing-adjacent guarantee. His recommendation: for anything where correctness genuinely depends on
+mutual exclusion, "use a proper consensus system such as ZooKeeper," which gives you <code>zxid</code> as a
+fencing token essentially for free.</p>
+<p><strong>Antirez's rebuttal does not deny the value of fencing tokens</strong> — he explicitly agrees a
+CAS-style token at the storage layer is good practice ("we set its state to <code>&lt;token&gt;</code>, then we
+operate the read-modify-write only if the token is still the same when we write") — his
+disagreement is narrower: (1) he argues many real uses of a distributed lock are "best-effort
+efficiency" cases (e.g., avoid redundant work) where losing exclusivity occasionally is a
+performance blemish, not a correctness bug, so demanding ZooKeeper-grade rigor for every lock use
+case is overkill; (2) on the timing-assumption critique specifically, he points out Redlock
+<strong>checks elapsed time both before and after acquiring the majority</strong> — "whatever delay happens in
+the network or in the processes involved, after acquiring the majority we check again that we are
+not out of time" — narrowing (but, notably, not eliminating, since the check-then-act window itself
+can still be preempted by a pause) the exposure window; (3) on clock jumps specifically, he
+concedes the point about needing monotonic time sources and argues it's an operational
+solvable-in-practice concern (disable NTP step-adjustment on lock-service hosts, use monotonic
+clocks), not a fundamental flaw in the algorithm's model.</p>
+<p><strong>What both sides actually agree on, and what to take from this debate for dag-worker-go:</strong></p>
+<ol>
+<li><strong>A lease alone — no matter how correctly the lease-granting protocol itself is implemented —
+does not make concurrent-write safety hold.</strong> The write-time check (the fencing token /
+generation compare) is the thing that actually provides safety; the lease/lock is only what
+determines <em>who is expected to be able to pass that check right now</em>.</li>
+<li><strong>The fencing check must live at the point of the actual mutation</strong> (dag-worker-go's storage
+layer, on the ack write), not merely at lock-acquisition time, and it must be a single atomic
+compare-and-swap the storage backend can execute unilaterally, without a round trip back to
+whatever granted the lease.</li>
+<li><strong>Process pauses (GC, <code>SIGSTOP</code>, VM freeze) are not edge cases to be argued away — they are the
+central failure mode fencing tokens exist to make safe</strong>, and no amount of "check the clock
+again right before writing" fully closes the window, because the pause can occur <em>between</em> that
+check and the write actually landing. This is why section 6b's design does the epoch check
+<strong>inside the same atomic operation as the mutation itself</strong> (a single Lua script, a single SQL
+<code>UPDATE ... WHERE epoch = $n</code>), never as a separate preceding step.</li>
+<li>dag-worker-go's use case is squarely on the "correctness matters" side of antirez's own
+distinction — a stale worker ack corrupting a node's status is exactly the kind of bug this
+library exists to prevent — so the project should adopt Kleppmann's stricter posture by default:
+fencing tokens are not optional hardening, they are the mechanism that makes the whole "node
+times out and is reassigned" feature safe to ship at all.</li>
+</ol>
+<h3 id="3-5-spanner-truetime-and-why-timeouts-computed-from-wall-clock-reads-are-unsafe-in-general">3.5 Spanner, TrueTime, and why timeouts computed from wall-clock reads are unsafe in general<a class="anchor" href="#3-5-spanner-truetime-and-why-timeouts-computed-from-wall-clock-reads-are-unsafe-in-general" aria-label="Link to this section">#</a></h3>
+<p>Google Spanner's TrueTime API (<a href="https://static.googleusercontent.com/media/research.google.com/en//archive/spanner-osdi2012.pdf" rel="noopener noreferrer">Corbett et al., OSDI 2012, "Spanner: Google's Globally-Distributed
+Database"</a>)
+is the canonical demonstration that <strong>"read the wall clock" is not actually a single well-defined
+operation</strong> in a distributed system — it is an operation with an <em>error bar</em>, and pretending the
+error bar is zero is exactly the class of bug this document is about.</p>
+<ul>
+<li><code>TT.now()</code> does not return a timestamp — it returns an <strong>interval <code>[earliest, latest]</code></strong>
+guaranteed to contain the true absolute time of the call, with the interval's half-width, ε,
+bounded and continuously tracked. In Google's reported deployment, ε forms a sawtooth <strong>between
+roughly 1ms and 7ms</strong> — about 6ms attributable to worst-case clock drift accumulating between
+synchronization polls, about 1ms attributable to communication delay to the time-master
+infrastructure — rather than a fixed constant, because it grows monotonically between
+synchronizations with the time masters and resets on each sync (<a href="https://sookocheff.com/post/time/truetime/" rel="noopener noreferrer">summarized with sourced
+figures</a>; consistent with independent secondary
+analysis at <a href="http://muratbuffalo.blogspot.com/2025/01/use-of-time-in-distributed-databases.html" rel="noopener noreferrer">muratbuffalo's distributed-databases
+series</a>).
+Time masters combine <strong>GPS receivers</strong> (fast, precise, but capable of correlated failure during
+antenna or receiver issues) with <strong>atomic clocks</strong> ("Armageddon masters," slower-drifting
+standalone backups precisely so that GPS and atomic-clock failures are uncorrelated) as two
+independently-failing time sources cross-checked against each other.</li>
+<li><strong>Commit-wait</strong>: to assign a transaction a timestamp that is safe to treat as its true
+linearization point relative to every other transaction in the system, Spanner does not just read
+<code>TT.now()</code> once — it <strong>waits out the uncertainty interval before allowing the transaction's
+effects to become externally visible</strong>, i.e., it deliberately spends real wall-clock time (up to
+2ε, commonly averaging under 10ms) converting <em>timestamp uncertainty</em> into <em>added latency</em>, which
+is the only way to make "transaction A's assigned timestamp is truly before transaction B's" a
+fact rather than a probabilistic guess.</li>
+<li><strong>The generalizable lesson for any lease/timeout system, independent of Spanner's transactional
+context</strong>: a clock reading is never a point value with zero error — it always carries an implicit
+uncertainty determined by how well-synchronized the reading clock is to whatever other clock it
+will be compared against. Google can afford to <em>measure</em> and <em>bound</em> that uncertainty to single
+digit milliseconds because it operates its own GPS/atomic-clock time-master fleet across its own
+datacenters. dag-worker-go, as a library embedded in arbitrary host processes running on
+arbitrary infrastructure (laptops, cheap cloud VMs, wildly different NTP hygiene across
+instances), has <strong>no such guarantee</strong> and must not assume it — which is precisely the argument for
+making the <em>storage backend's own clock</em> (Redis's <code>TIME</code>, Postgres's <code>clock_timestamp()</code>) the sole
+authority for lease deadlines, discussed concretely in section 6a, rather than trusting whatever
+each library instance's local wall clock says relative to some other instance's.</li>
+</ul>
+<hr>
+<h2 id="4-clock-pathologies-what-actually-goes-wrong-in-production-concretely">4. Clock pathologies: what actually goes wrong in production, concretely<a class="anchor" href="#4-clock-pathologies-what-actually-goes-wrong-in-production-concretely" aria-label="Link to this section">#</a></h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Pathology</th><th>Mechanism</th><th>Effect on a naive wall-clock lease</th><th>Mitigation</th></tr></thead>
+<tbody>
+<tr><td><strong>NTP step correction</strong></td><td>A drifted local clock is corrected by <em>stepping</em> (jumping) rather than <em>slewing</em> (gradually adjusting), typically after being lagged by more than the ~128ms threshold for continuous slewing or after a long outage; NTP conventionally steps rather than slews once drift exceeds roughly 900 seconds of continuous lag</td><td>A backward step can make an already-expired lease look valid again to whichever side just experienced the step; a forward step can make a fresh lease look expired instantly</td><td>Never derive a lease deadline from <code>time.Now()</code> arithmetic that could itself be stepped; prefer a monotonic clock source (Go's <code>time.Now()</code> <em>does</em> carry a monotonic reading alongside wall-clock when both are read from the same call and neither side has serialized/deserialized it — see 6a) for <em>duration</em> measurement, and treat the storage server's own clock as authoritative for absolute deadlines</td></tr>
+<tr><td><strong>VM live migration</strong></td><td>Migrating a running VM between hypervisor hosts pauses the guest's clock relative to real elapsed time; guest clock can measurably lag real time after resuming until corrected, and vendor documentation (VMware) explicitly warns "migrating virtual machine may cause guest operating system clock to fall behind real time"</td><td>A worker running inside a migrated VM can believe far less wall-clock time has passed than actually has, so it neither renews its lease on schedule nor perceives it as expired — meanwhile the storage side, unaffected by the migration, correctly expires the lease</td><td>Deadline enforcement must live entirely on the storage side (never trust a worker's self-reported "time remaining"); a fencing-token check on the write path makes this scenario safe regardless — the migrated worker's stale-but-earnest completion write is simply rejected</td></tr>
+<tr><td><strong>Container pause (<code>docker pause</code> / cgroup freezer)</strong></td><td>Uses the Linux <strong>freezer cgroup</strong>, which — unlike <code>SIGSTOP</code> — the frozen process <strong>cannot observe or intercept</strong>: "sequences of SIGSTOP and SIGCONT are not always sufficient for stopping and resuming tasks in userspace. Both of these signals are observable from within the tasks we wish to freeze" is exactly why the freezer cgroup exists as a <em>transparent</em>, non-catchable suspend (<a href="https://docs.kernel.org/admin-guide/cgroup-v1/freezer-subsystem.txt" rel="noopener noreferrer">Linux kernel freezer-subsystem docs</a>)</td><td>A worker frozen mid-processing resumes with no idea any time passed at all — it has no signal handler to run, no exception to catch, nothing; from its own perspective execution was contiguous</td><td>This is the purest form of "the client-side lease timer cannot be trusted, full stop" — there is categorically no way for application code running inside a frozen container to detect the freeze happened, so correctness cannot depend on the worker noticing anything; it must depend entirely on the storage-side deadline plus fencing</td></tr>
+<tr><td><strong>GC / scheduler pause</strong></td><td>Kleppmann's own worked example (§3.4): a stop-the-world GC pause, or simply being descheduled by a busy host for an extended period, stalls a process for longer than its lease term</td><td>Identical shape to the container-freeze case: the process resumes unaware time has passed and may complete work and write a "success" result using a now-stale lease</td><td>Same remedy: fencing token compare-and-swap on the write, never a client-side "is my lease still valid" self-check as the sole gate</td></tr>
+<tr><td><strong>Leap seconds</strong></td><td>POSIX time and most system clocks either repeat or smear a second around a leap-second insertion; Google's own public engineering practice is to <strong>smear</strong> leap seconds across a full day rather than stepping, specifically to avoid exactly this class of distributed-timing bug</td><td>A raw UTC-based deadline arithmetic scheme could in principle be affected by a repeated second; in practice, smeared implementations avoid discontinuities but non-smeared systems in the same fleet can disagree with smeared ones during the smear window</td><td>Reinforces the same conclusion: absolute wall-clock arithmetic performed independently by multiple parties is not safe to rely on for a hard boundary condition; let one clock (the storage server) be the sole decision-maker</td></tr>
+</tbody></table></div>
+<p>The unifying takeaway across every row of this table: <strong>there is no pause, skew, or clock event a
+worker can experience that a storage-side deadline check plus a fencing token cannot render safe,
+and there is no amount of client-side cleverness that can make a client's own clock trustworthy
+enough to be the sole safety mechanism.</strong> This is not a controversial claim in the literature
+surveyed above — Chubby, ZooKeeper, Kleppmann, and (with narrower scope) even antirez all converge
+on it.</p>
+<hr>
+<h2 id="5-design-for-dag-worker-go">5. Design for dag-worker-go<a class="anchor" href="#5-design-for-dag-worker-go" aria-label="Link to this section">#</a></h2>
+<p>This section answers, precisely and opinionated, the six questions posed in the brief.</p>
+<h3 id="5a-monotonic-vs-wall-clock-for-deadlines-whose-clock-rules-when-they-differ">5a. Monotonic vs. wall clock for deadlines; whose clock rules when they differ<a class="anchor" href="#5a-monotonic-vs-wall-clock-for-deadlines-whose-clock-rules-when-they-differ" aria-label="Link to this section">#</a></h3>
+<p><strong>Server-side (storage) time is authoritative for every deadline decision, full stop.</strong> No library
+instance's local clock, monotonic or wall, is ever consulted to decide whether a lease has expired.
+Concretely:</p>
+<ul>
+<li><strong>Redis backend</strong>: every operation that reads "now" for the purpose of comparing against a
+deadline is computed <em>inside</em> a Lua script via <code>redis.call('TIME')</code>, which "returns the current
+server time as a two-item list: a Unix timestamp and microseconds elapsed in the current second"
+(<a href="https://redis.io/docs/latest/commands/time/" rel="noopener noreferrer">Redis <code>TIME</code> docs</a>) — never passed in as an
+argument computed by the calling library instance's clock. This makes the deadline decision
+entirely a function of one clock (the Redis server's), eliminating cross-instance clock skew as a
+source of false-expiry/missed-expiry bugs by construction.</li>
+<li><strong>Postgres backend</strong>: every deadline write and comparison uses <strong><code>clock_timestamp()</code></strong>, never
+<code>now()</code>/<code>CURRENT_TIMESTAMP</code>/<code>transaction_timestamp()</code>. This is not a stylistic preference — <code>now()</code>
+is frozen at transaction start ("<code>now()</code> is a traditional PostgreSQL equivalent to
+<code>transaction_timestamp()</code>... returns the actual current time" is explicitly <em>not</em> what <code>now()</code>
+does; <code>clock_timestamp()</code> is the one that "returns the actual current time, and therefore its
+value changes even within a single SQL statement" — <a href="https://www.postgresql.org/docs/current/functions-datetime.html" rel="noopener noreferrer">Postgres docs, Date/Time Functions and
+Operators</a>). A long-running
+sweeper transaction that used <code>now()</code> to compute "current time" for an expiry comparison would
+compare against a timestamp that is stale by however long the transaction has been open — exactly
+the class of bug this section exists to prevent. <code>clock_timestamp()</code> is the Postgres equivalent of
+Redis's <code>TIME</code>: a genuine server-side read, immune to transaction duration.</li>
+<li><strong>In-memory backend</strong>: there is exactly one process's clock in scope (the shared in-memory store
+is, by this project's own design, shared <em>within</em> one process across all workers in that
+process), so the authoritative clock is simply that process's <code>time.Now()</code> — but even here, use
+Go's <strong>monotonic clock reading</strong> (present by default alongside the wall-clock reading whenever a
+<code>time.Time</code> is produced by <code>time.Now()</code> and not round-tripped through serialization, per the Go
+runtime's documented time-package design) for computing elapsed-time-since-claim and deadline
+comparisons, since the wall-clock component of that same <code>time.Time</code> remains exposed to NTP
+step-correction on that single host, while the monotonic component is defined never to jump
+backward or forward due to such corrections.</li>
+<li><strong>What a worker's local clock is used for</strong>: essentially nothing safety-relevant. A worker may use
+its own clock to decide <em>when to send its next heartbeat/extend call</em> (a scheduling decision,
+where being early or late by some margin is harmless), but never to decide <em>whether its lease is
+still valid</em> — that question is always answered by the storage backend's response to the next
+operation the worker attempts, via the fencing check in 5b.</li>
+<li><strong>Consequence for the public timeout API</strong>: a per-node timeout is specified by the host program as
+a <strong>duration</strong> (e.g., <code>30 * time.Second</code>), and the library converts it to an absolute deadline by
+adding it to a server-side "now" read at the moment of the claim — never by asking the calling
+process what time it thinks it is and shipping that absolute value to storage.</li>
+</ul>
+<h3 id="5b-rejecting-a-late-worker-ack-fencing-token-lease-epoch-compare-and-swap">5b. Rejecting a late worker ack: fencing token / lease epoch, compare-and-swap<a class="anchor" href="#5b-rejecting-a-late-worker-ack-fencing-token-lease-epoch-compare-and-swap" aria-label="Link to this section">#</a></h3>
+<p>Every node carries a <strong><code>lease_epoch</code></strong> — an unsigned integer, starting at 0, incremented exactly
+once every time the node transitions into "claimed by a worker" (whether that claim is a fresh pull
+from <code>ready</code>, or a sweeper-driven reclaim after a prior lease's timeout). The epoch is Chubby's
+sequencer generation number and ZooKeeper's <code>czxid</code>, specialized to a single integer field on a
+single node because dag-worker-go's storage backends are not themselves running a consensus
+protocol that hands out a global sequence number for free — the epoch must be maintained explicitly,
+per node, as ordinary application-level state.</p>
+<p><strong>The claim response to the worker includes the epoch it was handed.</strong> Every subsequent
+acknowledgment (success or error) the worker sends back must present that exact epoch. The storage
+backend's ack-processing operation is a single atomic read-modify-write:</p>
+<blockquote>
+<p><code>UPDATE ... SET status = &lt;new&gt;, ... WHERE node_id = &lt;id&gt; AND lease_epoch = &lt;the epoch presented&gt;
+AND status = 'in_progress'</code> — if this affects zero rows, the ack is stale (either the lease was
+already reclaimed by the sweeper and re-issued at a higher epoch, or a duplicate/racing ack from
+the same worker already landed) and is <strong>rejected outright</strong>, logged, and dropped. The worker is
+never told to retry such a rejection — retrying cannot help, since the epoch it is holding is
+permanently obsolete.</p>
+</blockquote>
+<p>Real Postgres implementation (schema sketch: <code>nodes(node_id text primary key, scope text, status
+text, lease_epoch bigint, lease_owner text, lease_deadline timestamptz, ...)</code>):</p>
+<pre><code class="language-sql"><span class="tok-com">-- Claim: pull one ready node in a given scope (see 5d for the batching/index shape).</span>
+<span class="tok-com">-- Executed inside a single statement so the epoch bump and the ownership/deadline</span>
+<span class="tok-com">-- write are atomic with respect to any concurrent claimer or sweeper.</span>
+<span class="tok-kw">WITH</span> candidate <span class="tok-kw">AS</span> (
+    <span class="tok-kw">SELECT</span> node_id
+    <span class="tok-kw">FROM</span> nodes
+    <span class="tok-kw">WHERE</span> scope = $<span class="tok-num">1</span>
+      <span class="tok-kw">AND</span> status = <span class="tok-str">'ready'</span>
+    <span class="tok-kw">ORDER</span> <span class="tok-kw">BY</span> node_id          <span class="tok-com">-- any stable order; see 5d for real ordering by priority/insertion</span>
+    <span class="tok-kw">LIMIT</span> <span class="tok-num">1</span>
+    <span class="tok-kw">FOR</span> <span class="tok-kw">UPDATE</span> <span class="tok-kw">SKIP</span> <span class="tok-kw">LOCKED</span>    <span class="tok-com">-- other concurrent claimers skip a row already being claimed</span>
+)
+<span class="tok-kw">UPDATE</span> nodes n
+<span class="tok-kw">SET</span> status         = <span class="tok-str">'in_progress'</span>,
+    lease_epoch     = n.lease_epoch + <span class="tok-num">1</span>,
+    lease_owner     = $<span class="tok-num">2</span>,                                  <span class="tok-com">-- worker/consumer identity</span>
+    lease_deadline  = <span class="tok-kw">clock_timestamp</span>() + make_interval(secs =&gt; $<span class="tok-num">3</span>)  <span class="tok-com">-- $3 = per-claim timeout override or library default</span>
+<span class="tok-kw">FROM</span> candidate c
+<span class="tok-kw">WHERE</span> n.node_id = c.node_id
+<span class="tok-kw">RETURNING</span> n.node_id, n.lease_epoch, n.lease_deadline;</code></pre>
+<pre><code class="language-sql"><span class="tok-com">-- Ack: worker reports success or error, presenting the epoch it was handed at claim time.</span>
+<span class="tok-kw">UPDATE</span> nodes
+<span class="tok-kw">SET</span> status     = $<span class="tok-num">3</span>,                 <span class="tok-com">-- 'success' or 'error'</span>
+    lease_owner = <span class="tok-kw">NULL</span>,
+    updated_at  = <span class="tok-kw">clock_timestamp</span>()
+<span class="tok-kw">WHERE</span> node_id    = $<span class="tok-num">1</span>
+  <span class="tok-kw">AND</span> lease_epoch = $<span class="tok-num">2</span>               <span class="tok-com">-- the fencing check: CAS on the epoch</span>
+  <span class="tok-kw">AND</span> status      = <span class="tok-str">'in_progress'</span>    <span class="tok-com">-- also rejects an ack after the sweeper already</span>
+                                      <span class="tok-com">-- transitioned this node to error-with-timeout</span>
+<span class="tok-kw">RETURNING</span> node_id;
+<span class="tok-com">-- Zero rows returned  ==&gt;  stale ack, reject. This is the entire safety mechanism:</span>
+<span class="tok-com">-- it requires no coordination with whatever reclaimed the node, only a local CAS.</span></code></pre>
+<p><code>FOR UPDATE SKIP LOCKED</code> is the standard, well-documented Postgres pattern (available since 9.5)
+for exactly this "many workers competing for rows from a queue-shaped table without blocking each
+other" access pattern — "SKIP LOCKED tells PostgreSQL to skip rows that are already locked by
+another transaction and move on to the next one," which is what lets concurrent claimers avoid
+contending on the same candidate row without an external mutex. It is explicitly <em>not</em> sufficient
+on its own for invariants stronger than "don't hand the same row to two claimers" (e.g., "never more
+than N in flight globally" needs a real counter or advisory lock), which does not apply to this
+specific claim query but is worth remembering for any future global-concurrency-limit feature.</p>
+<p>Real Redis implementation (Lua, single-key-per-node hash plus a per-scope ZSET of deadlines — see
+5d):</p>
+<pre><code class="language-lua"><span class="tok-com">-- claim.lua</span>
+<span class="tok-com">-- KEYS[1] = "node:{scope}:{id}"          (hash: status, lease_epoch, lease_owner, lease_deadline)</span>
+<span class="tok-com">-- KEYS[2] = "deadlines:{scope}"          (zset: score = lease_deadline ms, member = node id)</span>
+<span class="tok-com">-- ARGV[1] = lease_ms (per-claim override, or library default resolved by the caller)</span>
+<span class="tok-com">-- ARGV[2] = worker/consumer id</span>
+<span class="tok-kw">local</span> status = redis.call(<span class="tok-str">'HGET'</span>, KEYS[<span class="tok-num">1</span>], <span class="tok-str">'status'</span>)
+<span class="tok-kw">if</span> status ~= <span class="tok-str">'ready'</span> <span class="tok-kw">then</span>
+  <span class="tok-kw">return</span> redis.error_reply(<span class="tok-str">'not_ready'</span>)
+<span class="tok-kw">end</span>
+<span class="tok-kw">local</span> t = redis.call(<span class="tok-str">'TIME'</span>)                       <span class="tok-com">-- server-side clock, never client-supplied</span>
+<span class="tok-kw">local</span> now_ms = tonumber(t[<span class="tok-num">1</span>]) * <span class="tok-num">1000</span> + math.floor(tonumber(t[<span class="tok-num">2</span>]) / <span class="tok-num">1000</span>)
+<span class="tok-kw">local</span> epoch = tonumber(redis.call(<span class="tok-str">'HINCRBY'</span>, KEYS[<span class="tok-num">1</span>], <span class="tok-str">'lease_epoch'</span>, <span class="tok-num">1</span>))
+<span class="tok-kw">local</span> deadline = now_ms + tonumber(ARGV[<span class="tok-num">1</span>])
+redis.call(<span class="tok-str">'HSET'</span>, KEYS[<span class="tok-num">1</span>],
+  <span class="tok-str">'status'</span>, <span class="tok-str">'in_progress'</span>,
+  <span class="tok-str">'lease_owner'</span>, ARGV[<span class="tok-num">2</span>],
+  <span class="tok-str">'lease_deadline'</span>, deadline)
+redis.call(<span class="tok-str">'ZADD'</span>, KEYS[<span class="tok-num">2</span>], deadline, ARGV[<span class="tok-num">2</span>] .. <span class="tok-str">':'</span> .. KEYS[<span class="tok-num">1</span>])  <span class="tok-com">-- member encodes node key for the sweeper</span>
+<span class="tok-kw">return</span> {epoch, deadline}</code></pre>
+<pre><code class="language-lua"><span class="tok-com">-- ack.lua  (fencing CAS on the epoch — the safety-critical operation)</span>
+<span class="tok-com">-- KEYS[1] = "node:{scope}:{id}"</span>
+<span class="tok-com">-- KEYS[2] = "deadlines:{scope}"</span>
+<span class="tok-com">-- ARGV[1] = expected lease_epoch (presented by the worker, from its claim response)</span>
+<span class="tok-com">-- ARGV[2] = new status: "success" or "error"</span>
+<span class="tok-com">-- ARGV[3] = member string used in the deadlines ZSET for this claim (to remove it)</span>
+<span class="tok-kw">local</span> current_epoch = redis.call(<span class="tok-str">'HGET'</span>, KEYS[<span class="tok-num">1</span>], <span class="tok-str">'lease_epoch'</span>)
+<span class="tok-kw">local</span> current_status = redis.call(<span class="tok-str">'HGET'</span>, KEYS[<span class="tok-num">1</span>], <span class="tok-str">'status'</span>)
+<span class="tok-kw">if</span> (<span class="tok-kw">not</span> current_epoch) <span class="tok-kw">or</span> tonumber(current_epoch) ~= tonumber(ARGV[<span class="tok-num">1</span>])
+   <span class="tok-kw">or</span> current_status ~= <span class="tok-str">'in_progress'</span> <span class="tok-kw">then</span>
+  <span class="tok-kw">return</span> <span class="tok-num">0</span>   <span class="tok-com">-- stale ack: epoch mismatch, or already reclaimed/finalized by the sweeper</span>
+<span class="tok-kw">end</span>
+redis.call(<span class="tok-str">'HSET'</span>, KEYS[<span class="tok-num">1</span>], <span class="tok-str">'status'</span>, ARGV[<span class="tok-num">2</span>])
+redis.call(<span class="tok-str">'HDEL'</span>, KEYS[<span class="tok-num">1</span>], <span class="tok-str">'lease_owner'</span>)
+redis.call(<span class="tok-str">'ZREM'</span>, KEYS[<span class="tok-num">2</span>], ARGV[<span class="tok-num">3</span>])
+<span class="tok-kw">return</span> <span class="tok-num">1</span></code></pre>
+<p>Both scripts are single Redis commands from the client's point of view (<code>EVALSHA</code>), so both the
+claim and the ack are atomic with respect to every other claimer, acker, and sweeper touching the
+same node — there is no read-then-write race window in either direction, which is the Redis
+equivalent of Postgres's single-<code>UPDATE</code>-statement atomicity above.</p>
+<h3 id="5c-heartbeat-vs-lease-extension-api-design">5c. Heartbeat vs. lease-extension API design<a class="anchor" href="#5c-heartbeat-vs-lease-extension-api-design" aria-label="Link to this section">#</a></h3>
+<p>Two related but distinct capabilities, both needed, modeled directly on the best parts of Pub/Sub's
+and Chubby's designs surveyed above:</p>
+<ol>
+<li><strong><code>Extend(nodeID, epoch, newDuration) (newDeadline, error)</code></strong> — an explicit, worker-initiated
+call, gated by the same epoch fencing check as the ack path (a worker cannot extend a lease it no
+longer holds; the storage-side CAS is identical in shape to the ack CAS in 5b, just setting a new
+<code>lease_deadline</code> instead of a terminal status, and it must <strong>fail</strong> rather than silently succeed
+if the epoch has moved on, so a worker's extend call after the sweeper has already reclaimed the
+node gets an unambiguous "you no longer own this" error rather than a false sense of continued
+ownership). Deadline math follows SQS's and Pub/Sub's convention exactly: <strong>the new deadline is
+<code>server_now + newDuration</code>, an absolute reset, never additive to whatever deadline was previously
+set</strong> — this avoids SQS's own documented gotcha where stacking multiple <code>ChangeMessageVisibility</code>
+calls produces confusing cumulative semantics.</li>
+<li><strong>A managed heartbeat loop in the worker-facing SDK, modeled on Pub/Sub's automatic lease
+management, not left to hand-rolled host code.</strong> The host program should not be expected to
+remember to call <code>Extend</code> on a timer; the client library that wraps a claimed node hands the host
+a handle whose <code>Done(status)</code> method the host calls when actual work finishes, and <em>the library
+itself</em> runs a background goroutine that calls <code>Extend</code> at some safe fraction of the remaining
+lease (analogous to ZooKeeper's 1/3-then-2/3 staged retry schedule from §3.3, and to Pub/Sub's
+percentile-informed automatic extension from §2.2) until <code>Done</code> is called or the process is
+shutting down. This removes an entire class of "the host forgot to heartbeat and its own honest,
+still-working node got timed out from under it" bug reports before they can be filed.</li>
+<li><strong>A hard ceiling on total lease lifetime per node claim</strong>, independent of how many times <code>Extend</code>
+succeeds, mirroring SQS's 12-hour absolute cap — a configurable <code>MaxLeaseLifetime</code> after which
+even a healthy, faithfully-heartbeating worker is forcibly timed out and the node re-issued. This
+protects the DAG from a single pathologically long-running (or silently wedged-but-still-calling-
+Extend) worker holding a node forever, and gives operators a hard, auditable upper bound on "how
+long can this node possibly sit in-progress" independent of any single timeout value.</li>
+<li><strong>Heartbeat/extend is deliberately <em>not</em> the same signal as "the node's status changed."</strong> Per
+§2.3's Kafka lesson, conflating "the worker process is alive" with "this node's work is
+progressing" is exactly the bug that produced Kafka's original heartbeat-vs-<code>max.poll.interval</code>
+split. dag-worker-go has only one timer per node (there is no separate "process liveness" concept
+at all — the library never tracks worker processes as first-class entities, only node leases), so
+this particular conflation risk does not reappear in the same shape, but the API must still keep
+"extend my lease" (a scheduling/liveness signal) and "report status" (a terminal, one-time,
+fenced event) as two distinct call shapes rather than overloading one endpoint for both, precisely
+so that extend-call retries (safe to be idempotent-ish, at-least-once, low-stakes) are never
+confused with ack-call retries (must be exactly-once-effective via the epoch CAS, high-stakes).</li>
+</ol>
+<h3 id="5d-the-timeout-sweeper-in-o-log-n-and-avoiding-duplicate-sweeping-across-instances">5d. The timeout sweeper in O(log n), and avoiding duplicate sweeping across instances<a class="anchor" href="#5d-the-timeout-sweeper-in-o-log-n-and-avoiding-duplicate-sweeping-across-instances" aria-label="Link to this section">#</a></h3>
+<p><strong>Data shape</strong>: every backend maintains a secondary index ordered by <code>lease_deadline</code>, scoped per
+DAG scope (never global across all scopes in one process — see this project's scope-namespacing
+requirement), so that "find nodes whose lease has expired" is a <strong>range query bounded by the batch
+size requested, never a scan of all in-progress nodes</strong>:</p>
+<ul>
+<li><strong>Redis</strong>: the <code>deadlines:{scope}</code> ZSET from 5b's Lua scripts, scored by deadline in epoch-ms.
+<code>ZRANGEBYSCORE deadlines:{scope} -inf &lt;now_ms&gt; LIMIT 0 &lt;batch&gt;</code> is the query, and it is <code>O(log n +
+batch)</code> by construction of the sorted-set skip-list structure. (If the Redis backend instead
+layers on top of native Streams consumer groups per §2.4, the equivalent is <code>XAUTOCLAIM</code> against
+the group, with the caveat noted there that Streams' notion of idle-time must be replaced with an
+explicit per-entry deadline field checked by the sweeper's own logic, since Streams' claim-time
+<code>min-idle-time</code> parameter cannot express "this specific node's timeout, chosen when it was
+claimed.")</li>
+<li><strong>Postgres</strong>: a <strong>partial index</strong> on <code>lease_deadline</code> restricted to in-progress rows —
+<code>CREATE INDEX idx_nodes_lease_deadline ON nodes (scope, lease_deadline) WHERE status =
+'in_progress';</code> — keeps the index small (proportional to the in-flight count, not the total node
+count) and keeps the sweep query an index range scan:</li>
+</ul>
+<pre><code class="language-sql"><span class="tok-com">-- Sweeper batch reclaim. SKIP LOCKED means concurrent sweeper instances (see below)</span>
+<span class="tok-com">-- partition the expired set between themselves for free, with zero coordination,</span>
+<span class="tok-com">-- rather than blocking on each other's row locks or double-processing the same rows.</span>
+<span class="tok-kw">WITH</span> expired <span class="tok-kw">AS</span> (
+    <span class="tok-kw">SELECT</span> node_id, lease_epoch
+    <span class="tok-kw">FROM</span> nodes
+    <span class="tok-kw">WHERE</span> scope = $<span class="tok-num">1</span>
+      <span class="tok-kw">AND</span> status = <span class="tok-str">'in_progress'</span>
+      <span class="tok-kw">AND</span> lease_deadline &lt; <span class="tok-kw">clock_timestamp</span>()
+    <span class="tok-kw">ORDER</span> <span class="tok-kw">BY</span> lease_deadline
+    <span class="tok-kw">LIMIT</span> $<span class="tok-num">2</span>                          <span class="tok-com">-- batch size, e.g. 500</span>
+    <span class="tok-kw">FOR</span> <span class="tok-kw">UPDATE</span> <span class="tok-kw">SKIP</span> <span class="tok-kw">LOCKED</span>
+)
+<span class="tok-kw">UPDATE</span> nodes n
+<span class="tok-kw">SET</span> status      = <span class="tok-str">'error'</span>,
+    error_kind  = <span class="tok-str">'timeout'</span>,
+    lease_epoch = n.lease_epoch + <span class="tok-num">1</span>,   <span class="tok-com">-- fence out the now-abandoned worker's late ack</span>
+    lease_owner = <span class="tok-kw">NULL</span>
+<span class="tok-kw">FROM</span> expired e
+<span class="tok-kw">WHERE</span> n.node_id = e.node_id
+  <span class="tok-kw">AND</span> n.lease_epoch = e.lease_epoch   <span class="tok-com">-- belt-and-suspenders: re-check epoch hasn't</span>
+                                       <span class="tok-com">-- moved between the CTE read and this write</span>
+<span class="tok-kw">RETURNING</span> n.node_id;</code></pre>
+<ul>
+<li><strong>Memcached</strong> (no native sorted structure): the deadline index has to be maintained as an
+application-level structure, since Memcached exposes only a flat key-value space with per-key
+TTLs and no range queries. The pragmatic design is to <strong>not</strong> try to build an O(log n) index
+inside Memcached at all — instead, use Memcached purely for the hot key-value node records (fast
+reads of current status/epoch) and require a Memcached-backed deployment to <em>also</em> run the
+deadline index in whatever the library's default lightweight structure is (an in-process or
+Redis-backed ZSET-equivalent used only for the sweep index), or accept that the Memcached backend
+sweeps via periodic enumeration with a bound on in-flight count as its scaling limit. This is
+worth flagging plainly rather than papering over: <strong>Memcached is structurally the wrong tool for
+an ordered-by-deadline index</strong>, and the honest options are (a) document this as a known limitation
+of the Memcached backend, sized for smaller in-flight counts, or (b) require Memcached deployments
+to pair with a small amount of Redis/Postgres purely for the deadline index while node payloads
+stay in Memcached. Recommendation: <strong>(a)</strong> — keep the Memcached backend honest about its ceiling
+rather than silently hybridizing backends, and document the practical in-flight-count limit it
+was benchmarked against.</li>
+</ul>
+<p><strong>Avoiding duplicate sweeping across multiple library instances.</strong> Two independent, complementary
+mechanisms, matching the "does correctness need this, or just efficiency" split that recurred
+throughout §3:</p>
+<ol>
+<li><strong>Correctness does not require mutual exclusion between sweepers at all</strong>, by construction: the
+sweep-and-reclaim operation is itself epoch-fenced (the Postgres query's <code>WHERE n.lease_epoch =
+e.lease_epoch</code> re-check; the Redis reclaim Lua script's re-check of current status/deadline before
+acting, mirroring the ack script in 5b). If two sweeper instances race to reclaim the same expired
+node, the loser's write simply affects zero rows (Postgres) or no-ops after observing the epoch
+already moved (Redis) — this is the exact same idempotent-CAS property that makes <code>XCLAIM</code> safe
+under concurrent claimers in §2.4, generalized to the sweep path. <strong>Duplicate sweeping is wasted
+work, never a correctness bug.</strong></li>
+<li><strong>Efficiency (avoiding wasted duplicate work at scale) is handled by lightweight, best-effort
+partitioning, not a distributed lock.</strong> Each library instance derives a consistent-hash-based
+shard assignment over <code>(scope, deadline-bucket)</code> or simply over <code>scope</code> when the number of
+instances is smaller than the number of active scopes, and each instance's sweeper primarily
+polls only its assigned shards; on failure of a peer instance (detected via a simple heartbeat
+key each instance refreshes, e.g. a short-TTL Redis key or a Postgres row with its own
+<code>clock_timestamp()</code>-based staleness check — deliberately the <em>same</em> lease-with-server-side-clock
+pattern as the node leases themselves, applied one level up to sweeper ownership), the shard is
+picked up by a survivor. This is explicitly <strong>not</strong> required for correctness (point 1 already
+guarantees safety even with zero coordination) — it exists purely to avoid every instance
+redundantly scanning every scope's deadline index every sweep interval as instance count grows,
+which would turn the sweep cost from "proportional to expired-node count" back toward
+"proportional to instance count times expired-node count." A simple, good-enough starting point:
+hash <code>scope</code> mod <code>known_instance_count</code> (instance count itself tracked via the same short-TTL
+heartbeat keys), re-sharding only on membership change, accepting brief double-coverage during
+rebalance windows as harmless per point 1 — explicitly avoiding Kafka's stop-the-world eager
+rebalance mistake from §2.3 by making the "assignment" here advisory and race-tolerant rather than
+a hard partition workers must agree on before proceeding.</li>
+</ol>
+<h3 id="5e-at-least-once-vs-at-most-once-delivery-to-workers-and-why-exactly-once-is-a-lie">5e. At-least-once vs. at-most-once delivery to workers, and why exactly-once is a lie<a class="anchor" href="#5e-at-least-once-vs-at-most-once-delivery-to-workers-and-why-exactly-once-is-a-lie" aria-label="Link to this section">#</a></h3>
+<p><strong>dag-worker-go delivers at-least-once, by design, matching every system surveyed in §2</strong> (SQS,
+Pub/Sub, Kafka, Redis Streams all make the identical choice, and none of them offer a true
+exactly-once <em>delivery</em> guarantee to the consumer — Pub/Sub's "exactly-once delivery" feature, per
+its own documentation, only strengthens ack-deadline <em>enforcement</em>, and even Kafka's
+"exactly-once semantics" is scoped to producer-side idempotence and transactional stream processing
+<em>within Kafka</em>, not to guaranteeing an external side effect triggered by a consumer happens exactly
+once). The reasons this is the only honest choice, not a compromise:</p>
+<ol>
+<li><strong>The fundamental problem is the Two Generals Problem</strong>, restated for this context: for a worker
+to be delivered a node <em>exactly</em> once, the library would need certainty that the worker received
+and is about to act on the claim message, but that certainty itself would require an
+acknowledgment from the worker, which itself could be lost, requiring a further acknowledgment of
+the acknowledgment, ad infinitum — there is no message count that closes the loop with certainty
+over an unreliable channel. This is a proven impossibility result for message delivery over a
+channel that can drop or delay messages, not an engineering gap that better tooling could close.</li>
+<li><strong>Concretely in dag-worker-go's design</strong>: a claim can be handed to a worker, and the response
+carrying that claim can be lost on the way back to the worker (network partition, worker restart
+between receiving and processing) — the library cannot distinguish "the worker never received the
+claim" from "the worker received it and is now working." If it times out and re-issues the node
+to a second worker (favoring liveness), and the first worker was in fact alive and does eventually
+finish and try to ack, that ack must be <strong>safely rejected</strong> by the fencing check in 5b — this is
+at-least-once delivery of the <em>node</em>, with the epoch fence converting the resulting "delivered
+twice" outcome into "processed at most once with observable effect," which the literature calls
+<strong>effectively-once</strong>: at-least-once delivery combined with an idempotency/fencing mechanism at the
+point of effect, which is achievable, versus true exactly-once <em>delivery</em>, which provably is not.</li>
+<li><strong>At-most-once is available as an opt-in, lossy alternative, not the default</strong>: a host program
+that would rather risk a node silently never being retried than risk any double-delivery race
+window can configure zero retries after a claim is issued (treat any timeout as terminal failure,
+no re-issue) — but this must be an explicit choice the host makes per-scope or per-node-type,
+never the library's default behavior, because silently dropping DAG nodes on ambiguous failures
+is a far worse default for a workflow engine than occasionally handing the same node to two
+workers and relying on the fencing token to keep that safe.</li>
+<li><strong>What the library must guarantee, stated precisely, is</strong>: at-least-once <em>delivery</em> of the "take
+this node" event to <em>some</em> worker eventually (modulo the host's own retry/backoff policy), and
+<strong>at-most-once <em>acceptance</em> of a terminal status transition</strong> per node per epoch — i.e., exactly
+one of the (possibly multiple) workers who were ever handed a given claim epoch can successfully
+record success or error for it, enforced by the CAS in 5b. This precise, narrower guarantee
+("effectively-once effect, at-least-once attempt") is what the library should document and
+promise, rather than the unqualified and untrue "exactly-once" phrase.</li>
+</ol>
+<h3 id="5f-clock-jumps-vm-migration-and-container-pauses-the-sigstop-freezer-problem">5f. Clock jumps, VM migration, and container pauses (the <code>SIGSTOP</code>/freezer problem)<a class="anchor" href="#5f-clock-jumps-vm-migration-and-container-pauses-the-sigstop-freezer-problem" aria-label="Link to this section">#</a></h3>
+<p>Directly applying §4's survey to the mechanisms designed in 5a–5d:</p>
+<ul>
+<li><strong>Because deadline authority lives entirely in the storage backend's own clock (5a) and because
+the write-time fencing check (5b) — not a client-side "am I still within my lease" self-belief —
+is what gates every state transition, none of the pathologies in §4's table require special-case
+handling in the protocol.</strong> A worker that resumes from a container freeze, a GC pause, or a VM
+migration with no idea time has passed will simply have its late ack rejected by the epoch CAS if
+the lease already expired and was reclaimed — the exact same code path as any other stale ack,
+with no separate "detect a clock anomaly" logic needed anywhere. This is the payoff of taking
+Kleppmann's and Chubby's fencing-token lesson seriously rather than trying to detect or compensate
+for pauses directly (which, per the freezer-cgroup docs cited in §4, is provably impossible for the
+frozen process itself to do).</li>
+<li><strong>What the library should still do, as defense in depth and better observability, not as the
+primary safety mechanism</strong>: surface the rejected-stale-ack event distinctly in the status/event
+stream (a <code>LateAckRejected</code> event, separate from ordinary <code>Error</code>/<code>Timeout</code> events) so host
+operators can distinguish "a worker's task genuinely errored" from "a worker's environment was
+paused/migrated long enough to blow past its lease," which is valuable operational signal (e.g.,
+to tune lease durations upward for workloads running on infrastructure known to migrate VMs
+frequently) even though it changes no correctness behavior.</li>
+<li><strong>Do not build clock-skew compensation into the protocol</strong> (e.g., accepting an ack "close to" the
+deadline with some fudge factor) — per §3.5's Spanner lesson, any such fudge factor is itself just
+an unmeasured, undocumented epsilon, and the entire point of routing all deadline logic through
+the storage backend's own clock is to avoid needing to reason about cross-clock epsilon at all in
+the common case. The one place a deliberate, documented margin <em>is</em> appropriate is the
+heartbeat/extend scheduling in 5c (extend well before the deadline, not at it) — a scheduling
+margin chosen for robustness, not a correctness-load-bearing tolerance window.</li>
+<li><strong>Recommended default lease/timeout floor</strong>: given container-freeze and VM-migration pauses are
+commonly observed in the seconds-to-tens-of-seconds range in cloud environments, and per-node
+default timeouts in this kind of system typically need to be workload-appropriate rather than
+protocol-mandated, the library should ship a conservative <strong>default of low tens of seconds</strong> (in
+the same neighborhood as SQS's 30-second and ZooKeeper's typical tens-of-seconds session timeout
+defaults, both surveyed above) with the explicit, prominent, per-node override this project's
+brief already requires — a single global default is not a safety mechanism, it is an ergonomic
+starting point, and the fencing token is what actually makes any chosen value safe to get "wrong."</li>
+</ul>
+<hr>
+<h2 id="recommendations-for-dag-worker-go">Recommendations for dag-worker-go<a class="anchor" href="#recommendations-for-dag-worker-go" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>Ship the fencing token (<code>lease_epoch</code>) as a non-optional, foundational field on every node from
+day one</strong>, not as a v2 hardening pass — per §3.4, a lease without a storage-side fencing CAS is
+not a weaker version of a safe design, it is a different, unsafe design, and retrofitting it later
+means every existing ack-handling code path in every backend must be revisited.</li>
+<li><strong>Make every deadline comparison a server-side clock read</strong> (<code>redis.call('TIME')</code> inside Lua;
+<code>clock_timestamp()</code> inside Postgres SQL, never <code>now()</code>), and treat the in-memory backend's
+monotonic clock reading the same way — codify this as a lint-checkable rule (e.g., grep-ban
+<code>now()</code> in <code>.sql</code> files under the Postgres backend package, and CI-fail on it) given how easy it
+is for a future contributor to reach for the wrong Postgres time function.</li>
+<li><strong>Model the worker-facing API on Pub/Sub's automatic lease management (§2.2) and ZooKeeper's
+staged renewal schedule (§3.3), not on "the host must remember to call extend."</strong> The SDK owns the
+heartbeat loop; the host only reports terminal completion.</li>
+<li><strong>Design the ack and extend endpoints as two distinct RPC shapes from the start</strong>, per §2.3's
+Kafka lesson about conflating liveness signals with progress signals — even though this library
+has only one timer per node today, keeping the call shapes separate avoids foreclosing a future
+"worker-process-level liveness" feature from accidentally reusing (and thereby weakening) the
+node-ack fencing path.</li>
+<li><strong>Treat the sweeper's cross-instance coordination as a pure efficiency optimization, never a
+correctness dependency</strong> — build and ship the epoch-fenced, coordination-free sweep first (safe
+with zero instances aware of each other), and add the consistent-hash/shard-heartbeat
+optimization from §5d as a follow-up once benchmarking at 1M nodes across multiple instances shows
+redundant-sweep overhead actually matters; do not build the coordination layer before establishing
+it is needed, since an incorrect coordination layer is strictly worse than a slightly wasteful
+correct one (this generalizes the Redlock debate's real lesson from §3.4: don't reach for a
+heavier consensus mechanism than the correctness requirement actually demands, but never let
+"efficiency layer" quietly become "the thing correctness now silently depends on").</li>
+<li><strong>Document the delivery guarantee precisely as "at-least-once delivery, at-most-once accepted
+effect per lease epoch" and never claim exactly-once</strong>, per §5e — get ahead of the inevitable
+GitHub issue asking "why did my worker get the same node twice" with documentation that explains
+the fencing token is the actual safety mechanism, delivery duplication is expected and safe.</li>
+<li><strong>Flag the Memcached backend's lack of an ordered-by-deadline structure as a documented scaling
+limit, not a hidden gap</strong> — decide explicitly (recommend: yes) to bound and publish the maximum
+practical in-flight-node count for the Memcached backend based on 1M-node benchmark results,
+rather than silently degrading to O(n) enumeration under load.</li>
+<li><strong>Borrow Kafka's static-membership idea (§2.3, KIP-345) for the worker SDK</strong>: give workers a
+stable, host-supplied identity so a worker that restarts within its own outstanding leases' remaining
+time can reattach to (or at least be clearly attributed in events for) leases it previously held,
+rather than every reconnect being indistinguishable from a brand-new anonymous worker — useful
+operationally even though it changes no correctness guarantee.</li>
+<li><strong>Set the library-default per-node timeout in the low tens of seconds</strong> (§5f) and make the
+per-claim override loud and obvious in the API (a required-looking parameter, not a buried option),
+since the brief's own requirement that timeout be "settable per node at the moment the worker
+takes it" signals the project owner already expects defaults to be routinely overridden per
+workload.</li>
+</ol>
+<h2 id="open-questions">Open questions<a class="anchor" href="#open-questions" aria-label="Link to this section">#</a></h2>
+<ol>
+<li><strong>Exactly how should the epoch be exposed to the worker, and how tamper-resistant does it need to
+be?</strong> A plain integer returned alongside the claim is simplest, but if untrusted or
+third-party-hosted workers are ever a target deployment shape, an opaque signed/HMAC'd token
+(bundling node ID + epoch + scope) may be warranted so a worker cannot simply guess or forge a
+higher epoch — this trades simplicity for a security property the current brief does not clearly
+require; needs a decision on the library's trust model for workers.</li>
+<li><strong>What is the actual measured overhead of <code>FOR UPDATE SKIP LOCKED</code> plus a partial index at 1M
+in-flight rows under high claim/ack churn on Postgres</strong>, versus the Redis Lua-script approach —
+this document asserts both are O(log n)-shaped by construction, but the <em>constant factor</em> at the
+million-node benchmark target this project has committed to is an empirical question the
+benchmark suite (not this research pass) must answer, and it may argue for different default
+batch sizes per backend.</li>
+<li><strong>Should the cross-instance sweeper-shard-heartbeat mechanism (§5d point 2) itself be built on the
+in-memory backend's own primitives when all instances share one process</strong> (the "shared in-memory
+store" case this project's brief calls out specially), or does the single-process case simply skip
+sharding entirely since there is only ever one sweeper loop to schedule regardless of worker
+count — likely the latter, but worth confirming it doesn't quietly reintroduce a redundant-sweep
+cost inside a single process across many goroutines.</li>
+<li><strong>How should <code>MaxLeaseLifetime</code> (the hard per-node ceiling from §5c point 3) interact with a node
+whose <em>host-configured</em> per-claim timeout is deliberately very long</strong> (e.g., a node representing an
+hours-long external batch job) — is the ceiling a multiple of the requested timeout, a fixed
+library-wide constant, or configurable per scope? SQS's fixed 12-hour absolute cap is a clean
+precedent but may be wrong for this project's stated goal of supporting arbitrarily-defined,
+host-controlled node semantics.</li>
+<li><strong>Does the Redis backend commit to Streams-native consumer groups (§2.4) or to the
+hand-rolled hash-plus-ZSET design used in this document's Lua examples (§2.5/§5b–d)?</strong> Streams
+gets PEL bookkeeping, <code>XAUTOCLAIM</code>'s cursor-based batching, and delivery-count poison-pill
+detection for free, but its idle-time model doesn't natively express a caller-chosen deadline set
+at claim time (§2.4's stated gap) — a hybrid (Streams for the event/notification fan-out this
+project's brief separately requires, hash+ZSET for the authoritative lease state) is plausible but
+adds real complexity; this needs a dedicated design pass, likely in the storage-backend-specific
+research document rather than this one.</li>
+<li><strong>What is the right behavior when the <em>sweeper itself</em> cannot reach storage</strong> (network partition
+between a library instance and, say, its Postgres primary) — does that instance simply stop
+sweeping (safe, since other instances or the eventual primary's own recovery will reclaim once
+reachable) or does it need its own alerting path distinct from ordinary node-timeout events, given
+a fully partitioned sweeper is functionally equivalent to "no sweeper is running" for however long
+the partition lasts?</li>
+</ol>
+
+<p class="source-link"><a href="https://github.com/specialistvlad/dagworker/blob/main/docs/research/03-leases-heartbeats-timeouts.md" rel="noopener noreferrer">View source: docs/research/03-leases-heartbeats-timeouts.md</a></p>
+</main>
+</div>
+<footer class="site-footer">
+<p>MIT Licensed · <a href="https://github.com/specialistvlad/dagworker" rel="noopener noreferrer">github.com/specialistvlad/dagworker</a> · built by a stdlib-only static site generator</p>
+</footer>
+<script>
+(function(){
+  function setTheme(t){
+    try { localStorage.setItem('dw-theme', t); } catch (e) {}
+    if (t) { document.documentElement.setAttribute('data-theme', t); }
+    else { document.documentElement.removeAttribute('data-theme'); }
+  }
+  var toggle = document.getElementById('theme-toggle');
+  if (toggle) {
+    toggle.addEventListener('click', function(){
+      var current = document.documentElement.getAttribute('data-theme');
+      if (!current) {
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        current = prefersDark ? 'dark' : 'light';
+      }
+      setTheme(current === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  var navToggle = document.getElementById('nav-toggle');
+  var sidebar = document.getElementById('sidebar');
+  var overlay = document.getElementById('nav-overlay');
+  function closeNav(){
+    document.body.classList.remove('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
+  }
+  function openNav(){
+    document.body.classList.add('nav-open');
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'true');
+  }
+  if (navToggle && sidebar) {
+    navToggle.addEventListener('click', function(){
+      if (document.body.classList.contains('nav-open')) closeNav(); else openNav();
+    });
+  }
+  if (overlay) overlay.addEventListener('click', closeNav);
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') closeNav();
+  });
+})();
+</script>
+</body>
+</html>
