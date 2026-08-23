@@ -2,7 +2,6 @@ package grpcadapter
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	"google.golang.org/grpc"
@@ -56,6 +55,6 @@ func translateOutgoing(err error) error {
 func recoverToError(logger *slog.Logger, method string, err *error) {
 	if r := recover(); r != nil {
 		logger.Error("dagworker/grpc: recovered panic in handler", "method", method, "panic", r)
-		*err = status.Error(codes.Internal, fmt.Sprintf("internal error handling %s", method))
+		*err = status.Error(codes.Internal, "internal error handling "+method)
 	}
 }

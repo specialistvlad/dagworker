@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,12 +84,12 @@ func assertFlat(t *testing.T, op string, ms []measurement, bound float64) {
 	}
 	ratio := float64(last.perOp) / float64(first.perOp)
 
-	var report string
+	var report strings.Builder
 	for _, m := range ms {
-		report += fmt.Sprintf("\n    n=%-9d %v", m.size, m.perOp)
+		fmt.Fprintf(&report, "\n    n=%-9d %v", m.size, m.perOp)
 	}
 	t.Logf("%s cost curve:%s\n    ratio(n=%d / n=%d) = %.2fx (bound %.0fx)",
-		op, report, last.size, first.size, ratio, bound)
+		op, report.String(), last.size, first.size, ratio, bound)
 
 	if ratio > bound {
 		t.Errorf("%s: per-operation cost grew %.2fx from n=%d to n=%d, above the %.0fx bound.\n"+
@@ -107,6 +108,7 @@ func consumingIters(n int) int {
 }
 
 func sizes(t *testing.T) []int {
+	t.Helper()
 	if testing.Short() {
 		return perf.SmallSizes
 	}
@@ -129,8 +131,9 @@ func TestComplexity_Claim(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			var curve []measurement
-			for _, n := range sizes(t) {
+			sweep := sizes(t)
+			curve := make([]measurement, 0, len(sweep))
+			for _, n := range sweep {
 				st := backend.New(t)
 				scope := dw.Scope(fmt.Sprintf("claim-%d", n))
 				perf.SeedWide(t, st, scope, n)
@@ -160,8 +163,9 @@ func TestComplexity_GetNode(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			var curve []measurement
-			for _, n := range sizes(t) {
+			sweep := sizes(t)
+			curve := make([]measurement, 0, len(sweep))
+			for _, n := range sweep {
 				st := backend.New(t)
 				scope := dw.Scope(fmt.Sprintf("get-%d", n))
 				perf.SeedWide(t, st, scope, n)
@@ -190,8 +194,9 @@ func TestComplexity_AddNodeCausal(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			var curve []measurement
-			for _, n := range sizes(t) {
+			sweep := sizes(t)
+			curve := make([]measurement, 0, len(sweep))
+			for _, n := range sweep {
 				st := backend.New(t)
 				scope := dw.Scope(fmt.Sprintf("add-%d", n))
 				perf.SeedWide(t, st, scope, n)
@@ -222,8 +227,9 @@ func TestComplexity_CompleteFanOut(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			var curve []measurement
-			for _, n := range sizes(t) {
+			sweep := sizes(t)
+			curve := make([]measurement, 0, len(sweep))
+			for _, n := range sweep {
 				st := backend.New(t)
 				scope := dw.Scope(fmt.Sprintf("complete-%d", n))
 				perf.SeedWide(t, st, scope, n)
@@ -258,8 +264,9 @@ func TestComplexity_ScopeStats(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			var curve []measurement
-			for _, n := range sizes(t) {
+			sweep := sizes(t)
+			curve := make([]measurement, 0, len(sweep))
+			for _, n := range sweep {
 				st := backend.New(t)
 				scope := dw.Scope(fmt.Sprintf("stats-%d", n))
 				perf.SeedWide(t, st, scope, n)

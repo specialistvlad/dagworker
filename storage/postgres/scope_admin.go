@@ -24,10 +24,10 @@ INSERT INTO dagw.scopes (
 ON CONFLICT (scope) DO NOTHING`,
 		scope,
 		int64(defaults.DefaultLeaseTimeout), int64(defaults.MinLeaseTimeout), int64(defaults.MaxLeaseTimeout),
-		int32(defaults.MaxAttempts), int64(defaults.RetryBaseDelay), int64(defaults.RetryMaxDelay),
-		int64(defaults.TerminalRetention), int64(defaults.MaxSubscriberLag), int32(defaults.MaxInFlight),
-		int32(defaults.PayloadCap), int32(defaults.MaxBatchSize), int32(defaults.SweepBatchSize),
-		int64(defaults.SweepInterval), int32(defaults.PartitionCount),
+		narrowI32(defaults.MaxAttempts), int64(defaults.RetryBaseDelay), int64(defaults.RetryMaxDelay),
+		int64(defaults.TerminalRetention), int64(defaults.MaxSubscriberLag), narrowI32(defaults.MaxInFlight),
+		narrowI32(defaults.PayloadCap), narrowI32(defaults.MaxBatchSize), narrowI32(defaults.SweepBatchSize),
+		int64(defaults.SweepInterval), narrowI32(defaults.PartitionCount),
 	)
 	if err != nil {
 		return fmt.Errorf("postgres: ensure scope %q: %w", scope, err)
@@ -83,10 +83,10 @@ UPDATE dagw.scopes SET
 WHERE scope = $1`,
 		string(scope),
 		int64(cfg.DefaultLeaseTimeout), int64(cfg.MinLeaseTimeout), int64(cfg.MaxLeaseTimeout),
-		int32(cfg.MaxAttempts), int64(cfg.RetryBaseDelay), int64(cfg.RetryMaxDelay),
-		int64(cfg.TerminalRetention), int64(cfg.MaxSubscriberLag), int32(cfg.MaxInFlight),
-		int32(cfg.PayloadCap), int32(cfg.MaxBatchSize), int32(cfg.SweepBatchSize),
-		int64(cfg.SweepInterval), int32(cfg.PartitionCount),
+		narrowI32(cfg.MaxAttempts), int64(cfg.RetryBaseDelay), int64(cfg.RetryMaxDelay),
+		int64(cfg.TerminalRetention), int64(cfg.MaxSubscriberLag), narrowI32(cfg.MaxInFlight),
+		narrowI32(cfg.PayloadCap), narrowI32(cfg.MaxBatchSize), narrowI32(cfg.SweepBatchSize),
+		int64(cfg.SweepInterval), narrowI32(cfg.PartitionCount),
 	)
 	if err != nil {
 		return fmt.Errorf("postgres: SetScopeConfig: %w", err)

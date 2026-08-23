@@ -12,14 +12,14 @@ import (
 // docs/research/13-grpc-worker-protocol.md §8 for the keepalive analysis and
 // §15 for MaxConnectionAge as forced client rebalancing.
 const (
-	defaultKeepaliveTime           = 2 * time.Minute
-	defaultKeepaliveTimeout        = 20 * time.Second
-	defaultKeepaliveMinTime        = 1 * time.Minute
-	defaultMaxConnectionAge        = 30 * time.Minute
-	defaultMaxConnectionAgeGrace   = 5 * time.Minute
-	defaultMaxConcurrentStreams    = 4096
-	defaultMaxPollTimeout          = 600 * time.Second // Nomad's blocking-query ceiling
-	defaultDefaultPollTimeout      = 30 * time.Second  // used when a request's poll_timeout is unset
+	defaultKeepaliveTime         = 2 * time.Minute
+	defaultKeepaliveTimeout      = 20 * time.Second
+	defaultKeepaliveMinTime      = 1 * time.Minute
+	defaultMaxConnectionAge      = 30 * time.Minute
+	defaultMaxConnectionAgeGrace = 5 * time.Minute
+	defaultMaxConcurrentStreams  = 4096
+	defaultMaxPollTimeout        = 600 * time.Second // Nomad's blocking-query ceiling
+	defaultDefaultPollTimeout    = 30 * time.Second  // used when a request's poll_timeout is unset
 )
 
 // serverConfig collects what every [Option] mutates. It is unexported: a

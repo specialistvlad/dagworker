@@ -85,6 +85,9 @@ linters:
         - "dagworker\\.(Option|NodeOption|ClaimOption)$"
         - "memory\\.Option$"
         - "postgres\\.Option$"
+        # pgx hands out its transaction as an interface; a helper that opens
+        # one has nothing else it could return.
+        - "github.com/jackc/pgx/v5.Tx"
         - "redis\\.Option$"
       # dagstore.Store, dagworker.Clock etc. remain interfaces at the package boundary (accepted
       # as parameters) but constructors return the concrete *Manager, *RedisStore, etc. — ireturn

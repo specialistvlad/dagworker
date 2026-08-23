@@ -39,7 +39,7 @@ func (s *Store) Watch(ctx context.Context, req dw.WatchRequest) (<-chan dw.Event
 	var next int64
 	switch {
 	case req.From > 0:
-		next = int64(req.From) + 1
+		next = widenI64(req.From) + 1
 	case req.Replay:
 		next = 0
 	default:
@@ -78,7 +78,7 @@ func (s *Store) pump(ctx context.Context, scope string, next int64, out chan<- d
 		for _, ev := range batch {
 			select {
 			case out <- ev:
-				next = int64(ev.Cursor) + 1
+				next = widenI64(ev.Cursor) + 1
 			case <-ctx.Done():
 				return
 			case <-s.closed:
@@ -126,13 +126,13 @@ LIMIT $3`, scope, from, limit)
 			return nil, fmt.Errorf("postgres: readEvents: scan: %w", err)
 		}
 		ev.Scope = dw.Scope(scope)
-		ev.Cursor = dw.Cursor(cursor)
-		ev.Seq = dw.Seq(seq)
-		ev.Kind = dw.EventKind(kind)
-		ev.From = dw.Status(from16)
-		ev.To = dw.Status(to16)
-		ev.Reason = dw.Reason(reason)
-		ev.Attempt = uint32(attempt)
+		ev.Cursor = dw.Cursor(narrowU64(cursor))
+		ev.Seq = dw.Seq(narrowU64(seq))
+		ev.Kind = dw.EventKind(narrowU8(kind))
+		ev.From = dw.Status(narrowU8(from16))
+		ev.To = dw.Status(narrowU8(to16))
+		ev.Reason = dw.Reason(narrowU8(reason))
+		ev.Attempt = narrowU32(attempt)
 		out = append(out, ev)
 	}
 	return out, rows.Err()

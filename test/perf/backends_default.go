@@ -2,5 +2,6 @@
 
 package perf
 
-// networkedBackends is empty without the integration build tag.
-func networkedBackends() []Backend { return nil }
+// integrationBackends is empty without the integration build tag, so the
+// default build of this module does not need the backend modules to compile.
+func integrationBackends() []Backend { return nil }

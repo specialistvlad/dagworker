@@ -65,6 +65,50 @@ func (s *Store) ListNodes(ctx context.Context, scope dw.Scope, opts dw.ListOptio
 	return out, nil
 }
 
+// terminalCandidateWhere is shared between the candidate SELECT and the
+// "does another page exist" EXISTS check below, so the two can never drift
+// into disagreeing about what counts as collectible.
+const terminalCandidateWhere = `
+	n.scope = $1 AND n.phase = $2 AND n.updated_at <= $3
+	AND NOT EXISTS (SELECT 1 FROM dagw.edges e WHERE e.scope = n.scope AND e.from_id = n.id)`
+
+// terminalCandidate is one row CollectTerminal is about to delete.
+type terminalCandidate struct {
+	id     int64
+	phase  dw.Phase
+	status dw.Status
+}
+
+// findTerminalCandidates locks up to limit collectible rows, in ascending id
+// order, skipping any a concurrent collector already holds — duplicate
+// collection is wasted work, never wrong, since each candidate is deleted
+// under its own lock.
+func findTerminalCandidates(ctx context.Context, tx querier, scope string, cutoff time.Time, limit int) ([]terminalCandidate, error) {
+	rows, err := tx.Query(ctx, `
+SELECT n.id, n.phase, n.status
+FROM dagw.nodes n
+WHERE `+terminalCandidateWhere+`
+ORDER BY n.id
+FOR UPDATE OF n SKIP LOCKED
+LIMIT $4`, scope, int16(dw.PhaseDone), cutoff, limit)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: CollectTerminal: select: %w", err)
+	}
+	defer rows.Close()
+
+	var cands []terminalCandidate
+	for rows.Next() {
+		var c terminalCandidate
+		var ph, st int16
+		if err := rows.Scan(&c.id, &ph, &st); err != nil {
+			return nil, fmt.Errorf("postgres: CollectTerminal: scan: %w", err)
+		}
+		c.phase, c.status = dw.Phase(narrowU8(ph)), dw.Status(narrowU8(st))
+		cands = append(cands, c)
+	}
+	return cands, rows.Err()
+}
+
 // CollectTerminal implements [dagworker.Collector]. A candidate must be
 // terminal, past the cutoff, and have no successors — deleting a node that
 // something still depends on would corrupt that dependent's tally, exactly
@@ -90,63 +134,25 @@ func (s *Store) CollectTerminal(ctx context.Context, scope dw.Scope, cutoff time
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	const candidateWhere = `
-	n.scope = $1 AND n.phase = $2 AND n.updated_at <= $3
-	AND NOT EXISTS (SELECT 1 FROM dagw.edges e WHERE e.scope = n.scope AND e.from_id = n.id)`
-
-	rows, err := tx.Query(ctx, `
-SELECT n.id, n.phase, n.status
-FROM dagw.nodes n
-WHERE `+candidateWhere+`
-ORDER BY n.id
-FOR UPDATE OF n SKIP LOCKED
-LIMIT $4`, scopeName, int16(dw.PhaseDone), cutoff, limit)
+	cands, err := findTerminalCandidates(ctx, tx, scopeName, cutoff, limit)
 	if err != nil {
-		return 0, false, fmt.Errorf("postgres: CollectTerminal: select: %w", err)
-	}
-	type candidate struct {
-		id     int64
-		phase  dw.Phase
-		status dw.Status
-	}
-	var cands []candidate
-	for rows.Next() {
-		var c candidate
-		var ph, st int16
-		if err := rows.Scan(&c.id, &ph, &st); err != nil {
-			rows.Close()
-			return 0, false, fmt.Errorf("postgres: CollectTerminal: scan: %w", err)
-		}
-		c.phase, c.status = dw.Phase(ph), dw.Status(st)
-		cands = append(cands, c)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return 0, false, fmt.Errorf("postgres: CollectTerminal: select: %w", err)
+		return 0, false, err
 	}
 
 	eng := newEngine(tx, scopeName, dw.ScopeConfig{}, s.jitter)
 	for _, c := range cands {
+		n := nodeRow{ID: c.id, Phase: c.phase, Status: c.status}
 		if _, err := tx.Exec(ctx, `DELETE FROM dagw.edges WHERE scope = $1 AND to_id = $2`, scopeName, c.id); err != nil {
 			return 0, false, fmt.Errorf("postgres: CollectTerminal: detach: %w", err)
 		}
-		if err := eng.leaveBucket(ctx, c.phase, c.status); err != nil {
+		if err := deleteNodeRow(ctx, tx, eng, scope, n); err != nil {
 			return 0, false, err
-		}
-		if _, err := tx.Exec(ctx, `DELETE FROM dagw.nodes WHERE id = $1`, c.id); err != nil {
-			return 0, false, fmt.Errorf("postgres: CollectTerminal: delete: %w", err)
-		}
-	}
-	if len(cands) > 0 {
-		if _, err := tx.Exec(ctx, `UPDATE dagw.scopes SET stat_total = stat_total - $2 WHERE scope = $1`,
-			scopeName, len(cands)); err != nil {
-			return 0, false, fmt.Errorf("postgres: CollectTerminal: stat_total: %w", err)
 		}
 	}
 
 	var more bool
 	if len(cands) == limit {
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM dagw.nodes n WHERE `+candidateWhere+`)`,
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM dagw.nodes n WHERE `+terminalCandidateWhere+`)`,
 			scopeName, int16(dw.PhaseDone), cutoff).Scan(&more); err != nil {
 			return 0, false, fmt.Errorf("postgres: CollectTerminal: more check: %w", err)
 		}

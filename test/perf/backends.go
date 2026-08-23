@@ -36,7 +36,8 @@ type Backend struct {
 // when DAGWORKER_INTEGRATION is set, so that a plain "go test ./..." on a
 // laptop measures what it can reach instead of failing on what it cannot.
 func Backends() []Backend {
-	out := []Backend{{
+	out := make([]Backend, 0, 3)
+	out = append(out, Backend{
 		Name: "memory",
 		New: func(tb testing.TB) dw.Store {
 			tb.Helper()
@@ -44,11 +45,11 @@ func Backends() []Backend {
 			tb.Cleanup(func() { _ = st.Close(context.Background()) })
 			return st
 		},
-	}}
+	})
 	if os.Getenv("DAGWORKER_INTEGRATION") == "" {
 		return out
 	}
-	return append(out, networkedBackends()...)
+	return append(out, integrationBackends()...)
 }
 
 // Sizes are the graph sizes every complexity guard sweeps. The span from a
@@ -69,11 +70,10 @@ func Env(key, fallback string) string {
 	return fallback
 }
 
-// nodeID builds a fixed-width identifier so that identifier length -- and
-// therefore hashing and comparison cost -- does not itself vary with the graph
-// size being measured.
-// NodeID is exported so the guards can address a specific node without
-// duplicating the format and accidentally measuring a different key length.
+// NodeID builds a fixed-width identifier. The width is fixed so that key
+// length -- and therefore hashing and comparison cost -- does not itself vary
+// with the graph size being measured, which would quietly contaminate the very
+// ratio the guards exist to check.
 func NodeID(i int) dw.NodeID { return dw.NodeID(fmt.Sprintf("n%09d", i)) }
 
 // SeedChain fills a scope with n nodes in one long dependency chain. This is

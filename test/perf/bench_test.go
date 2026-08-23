@@ -22,6 +22,7 @@ func eachBackend(b *testing.B, fn func(b *testing.B, backend perf.Backend, n int
 	for _, backend := range perf.Backends() {
 		for _, n := range benchSizes {
 			b.Run(fmt.Sprintf("%s/n=%d", backend.Name, n), func(b *testing.B) {
+				b.Helper()
 				fn(b, backend, n)
 			})
 		}
@@ -30,6 +31,7 @@ func eachBackend(b *testing.B, fn func(b *testing.B, backend perf.Backend, n int
 
 func BenchmarkClaim(b *testing.B) {
 	eachBackend(b, func(b *testing.B, backend perf.Backend, n int) {
+		b.Helper()
 		ctx := b.Context()
 		st := backend.New(b)
 		perf.SeedWide(b, st, "bench", n)
@@ -60,6 +62,7 @@ func BenchmarkClaim(b *testing.B) {
 func BenchmarkClaimBatch(b *testing.B) {
 	const batch = 100
 	eachBackend(b, func(b *testing.B, backend perf.Backend, n int) {
+		b.Helper()
 		ctx := b.Context()
 		st := backend.New(b)
 		perf.SeedWide(b, st, "bench", n)
@@ -82,6 +85,7 @@ func BenchmarkClaimBatch(b *testing.B) {
 
 func BenchmarkGetNode(b *testing.B) {
 	eachBackend(b, func(b *testing.B, backend perf.Backend, n int) {
+		b.Helper()
 		ctx := b.Context()
 		st := backend.New(b)
 		perf.SeedWide(b, st, "bench", n)
@@ -102,6 +106,7 @@ func BenchmarkGetNode(b *testing.B) {
 
 func BenchmarkClaimComplete(b *testing.B) {
 	eachBackend(b, func(b *testing.B, backend perf.Backend, n int) {
+		b.Helper()
 		ctx := b.Context()
 		st := backend.New(b)
 		perf.SeedFanIn(b, st, "bench", n)
@@ -129,6 +134,7 @@ func BenchmarkAddNodesBatch(b *testing.B) {
 	const batch = 100
 	for _, backend := range perf.Backends() {
 		b.Run(backend.Name, func(b *testing.B) {
+			b.Helper()
 			ctx := b.Context()
 			st := backend.New(b)
 			if err := st.SetScopeConfig(ctx, "bench", dw.ScopeConfig{MaxBatchSize: batch}); err != nil {
@@ -157,6 +163,8 @@ func BenchmarkAddNodesBatch(b *testing.B) {
 // much memory a million-node graph actually costs, measured rather than
 // estimated. It runs only for in-process backends, where the question means
 // anything.
+//
+//nolint:paralleltest // measures process-wide heap; a concurrent test would poison the reading
 func TestMemoryFootprint(t *testing.T) {
 	if testing.Short() {
 		t.Skip("allocates a million nodes")

@@ -1,0 +1,563 @@
+openapi: 3.1.0
+info:
+  title: dagworker HTTP/JSON worker protocol
+  version: "1.0.0"
+  description: >
+    Hand-written contract (docs/research/14-http-json-worker-protocol.md;
+    ADR-0037) for workers that participate in a dagworker DAG over plain
+    HTTP/JSON instead of embedding the Go library or a gRPC stub. Resources
+    (scopes, nodes, edges) follow standard CRUD verbs. The two operations
+    where the server, not the client, decides the outcome — claim and every
+    lease acknowledgement — are AIP-136 colon-suffixed custom methods.
+externalDocs:
+  description: Normative adapter contract
+  url: https://github.com/specialistvlad/dagworker/blob/main/docs/spec/02-adapter-contract.md
+
+servers:
+  - url: /v1
+
+paths:
+  /scopes:
+    get:
+      summary: List scopes the backend knows about
+      operationId: listScopes
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scopes:
+                    type: array
+                    items: { type: string }
+
+  /scopes/{scope}:
+    parameters:
+      - $ref: "#/components/parameters/scope"
+    put:
+      summary: Set a scope's policy (pre-provisioning sugar; scopes are created implicitly on first write)
+      operationId: putScope
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ScopeConfig" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Scope" }
+        default: { $ref: "#/components/responses/Problem" }
+    get:
+      summary: Read a scope's policy and live counters
+      operationId: getScope
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Scope" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /scopes/{scope}:seal:
+    parameters:
+      - $ref: "#/components/parameters/scope"
+    post:
+      summary: Seal the scope — no further nodes will be accepted. Irreversible.
+      operationId: sealScope
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Scope" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /scopes/{scope}:cancel:
+    parameters:
+      - $ref: "#/components/parameters/scope"
+    post:
+      summary: Cancel every non-terminal node in the scope
+      operationId: cancelScope
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Scope" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /scopes/{scope}/nodes:
+    parameters:
+      - $ref: "#/components/parameters/scope"
+    get:
+      summary: List nodes, keyset-paginated
+      operationId: listNodes
+      parameters:
+        - name: status
+          in: query
+          schema: { type: array, items: { $ref: "#/components/schemas/Status" } }
+          style: form
+          explode: false
+        - name: kind
+          in: query
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: false
+        - name: cursor
+          in: query
+          description: Opaque continuation token from a previous page's next_page_token. There is no offset parameter — keyset pagination only.
+          schema: { type: string }
+        - name: page_size
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nodes:
+                    type: array
+                    items: { $ref: "#/components/schemas/Node" }
+                  next_page_token: { type: string }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /scopes/{scope}/nodes/{node}:
+    parameters:
+      - $ref: "#/components/parameters/scope"
+      - $ref: "#/components/parameters/node"
+    put:
+      summary: Create a node (client-chosen ID). Idempotent — a byte-identical re-PUT is a no-op.
+      operationId: putNode
+      parameters:
+        - name: If-Match
+          in: header
+          description: Optional. "*" or a prior ETag; rejects the write with 412 if the node's current representation does not match.
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateNodeRequest" }
+      responses:
+        "200": { description: "Updated (identical spec re-PUT)", content: { application/json: { schema: { $ref: "#/components/schemas/Node" } } } }
+        "201": { description: "Created", content: { application/json: { schema: { $ref: "#/components/schemas/Node" } } } }
+        "412": { $ref: "#/components/responses/PreconditionFailed" }
+        default: { $ref: "#/components/responses/Problem" }
+    get:
+      summary: Fetch one node
+      operationId: getNode
+      parameters:
+        - name: If-None-Match
+          in: header
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Node" }
+        "304": { description: "Not Modified" }
+        default: { $ref: "#/components/responses/Problem" }
+    delete:
+      summary: Remove a node (only if not claimed; see ?cascade for successors)
+      operationId: deleteNode
+      parameters:
+        - name: cascade
+          in: query
+          schema: { type: string, enum: [reject, detach, fail], default: reject }
+        - name: If-Match
+          in: header
+          schema: { type: string }
+      responses:
+        "204": { description: "No Content" }
+        "412": { $ref: "#/components/responses/PreconditionFailed" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /scopes/{scope}/nodes/{node}:cancel:
+    parameters:
+      - $ref: "#/components/parameters/scope"
+      - $ref: "#/components/parameters/node"
+    post:
+      summary: Cancel this node and propagate to descendants that can no longer run
+      operationId: cancelNode
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Node" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /scopes/{scope}/nodes:claim:
+    parameters:
+      - $ref: "#/components/parameters/scope"
+    post:
+      summary: >
+        Claim up to max_nodes ready nodes. A Consul-style blocking query:
+        wait is clamped server-side to 60s and jittered. Returns 200 with at
+        least one lease, or 204 with no body if wait elapsed with nothing
+        ready — never 200 with an empty array.
+      operationId: claim
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ClaimRequest" }
+      responses:
+        "200":
+          description: "At least one lease granted"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClaimResponse" }
+        "204": { description: "Nothing ready before wait elapsed" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /scopes/{scope}/edges/{fromTo}:
+    parameters:
+      - $ref: "#/components/parameters/scope"
+      - name: fromTo
+        in: path
+        required: true
+        description: 'Compound "{from}..{to}" segment, e.g. "render-041..render-042". Not nested under either endpoint: an edge is a many-to-many join, owned by neither side.'
+        schema: { type: string }
+    put:
+      summary: Create a dependency edge (to depends on from)
+      operationId: putEdge
+      responses:
+        "201": { description: "Created" }
+        default: { $ref: "#/components/responses/Problem" }
+    delete:
+      summary: Remove a dependency edge
+      operationId: deleteEdge
+      responses:
+        "204": { description: "No Content" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /scopes/{scope}/leases/{lease}:
+    parameters:
+      - $ref: "#/components/parameters/scope"
+      - $ref: "#/components/parameters/lease"
+    get:
+      summary: Inspect a held lease
+      operationId: getLease
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LeaseInspection" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /scopes/{scope}/leases/{lease}:complete:
+    parameters:
+      - $ref: "#/components/parameters/scope"
+      - $ref: "#/components/parameters/lease"
+    post:
+      summary: Acknowledge success. Fenced on the lease's epoch — a stale lease is 409 lease-superseded.
+      operationId: completeLease
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompleteRequest" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CompletionResult" } } } }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /scopes/{scope}/leases/{lease}:fail:
+    parameters:
+      - $ref: "#/components/parameters/scope"
+      - $ref: "#/components/parameters/lease"
+    post:
+      summary: Report that the attempt failed. Whether this ends the node or schedules a retry is the scope's retry policy.
+      operationId: failLease
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FailRequest" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CompletionResult" } } } }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /scopes/{scope}/leases/{lease}:skip:
+    parameters:
+      - $ref: "#/components/parameters/scope"
+      - $ref: "#/components/parameters/lease"
+    post:
+      summary: Report there was nothing to do. Terminal on the first report; a retry would reach the same conclusion.
+      operationId: skipLease
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SkipRequest" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CompletionResult" } } } }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /scopes/{scope}/leases/{lease}:renew:
+    parameters:
+      - $ref: "#/components/parameters/scope"
+      - $ref: "#/components/parameters/lease"
+    post:
+      summary: Extend the lease deadline before it expires. Does not change node status, attempt, or sequence.
+      operationId: renewLease
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RenewRequest" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RenewResult" } } } }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /scopes/{scope}/events:
+    parameters:
+      - $ref: "#/components/parameters/scope"
+    get:
+      summary: >
+        Subscribe to node transitions and work-available signals. Server-Sent
+        Events by default (Accept: text/event-stream); NDJSON long-poll when
+        ?mode=poll is given, for intermediaries that fully buffer SSE. The
+        SSE "id:" field is the library's own event-log cursor, so a
+        reconnecting EventSource's automatic Last-Event-ID header is the
+        resume protocol with no extra client code.
+      operationId: events
+      parameters:
+        - name: mode
+          in: query
+          schema: { type: string, enum: [sse, poll], default: sse }
+        - name: Last-Event-ID
+          in: header
+          description: SSE resume cursor, sent automatically by EventSource on reconnect.
+          schema: { type: string }
+        - name: cursor
+          in: query
+          description: Poll-mode resume cursor (same value space as Last-Event-ID).
+          schema: { type: string }
+        - name: wait
+          in: query
+          description: Poll-mode only. Clamped server-side to 60s.
+          schema: { type: string, example: "25s" }
+        - name: event_kinds
+          in: query
+          schema: { type: array, items: { type: string, enum: [created, transition, ready] } }
+          style: form
+          explode: false
+        - name: node_kinds
+          in: query
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: false
+        - name: replay
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: "SSE stream (text/event-stream) or an NDJSON batch (application/x-ndjson) depending on mode"
+        "204": { description: "Poll mode only: nothing new before wait elapsed" }
+        default: { $ref: "#/components/responses/Problem" }
+
+components:
+  parameters:
+    scope:
+      name: scope
+      in: path
+      required: true
+      schema: { type: string, maxLength: 255 }
+    node:
+      name: node
+      in: path
+      required: true
+      schema: { type: string, maxLength: 255 }
+    lease:
+      name: lease
+      in: path
+      required: true
+      description: Opaque lease token returned by :claim. Not human-constructible.
+      schema: { type: string }
+
+  responses:
+    Problem:
+      description: An error, as an RFC 9457 Problem Details object.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    PreconditionFailed:
+      description: If-Match did not match the resource's current ETag.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Status:
+      type: string
+      enum: [new, in_progress, success, error]
+    Reason:
+      type: string
+      enum: [none, worker_error, timeout, upstream_failed, skipped, cancelled, removed]
+    Trigger:
+      type: string
+      enum: [all_success, all_done, none_failed, none_failed_min_one_success, always]
+
+    Node:
+      type: object
+      properties:
+        name: { type: string, description: 'AIP-122 resource name, "scopes/{scope}/nodes/{id}"' }
+        scope: { type: string }
+        id: { type: string }
+        kind: { type: string }
+        status: { $ref: "#/components/schemas/Status" }
+        reason: { $ref: "#/components/schemas/Reason" }
+        message: { type: string }
+        attempt: { type: integer }
+        priority: { type: integer }
+        trigger: { $ref: "#/components/schemas/Trigger" }
+        retry_max_attempts: { type: integer }
+        retry_base_delay: { type: string, description: "Go duration string, e.g. \"1s\"" }
+        retry_max_delay: { type: string }
+        payload_encoding: { type: string, enum: [base64] }
+        payload: { type: string, contentEncoding: base64 }
+        labels: { type: object, additionalProperties: { type: string } }
+        seq: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreateNodeRequest:
+      type: object
+      properties:
+        kind: { type: string }
+        payload_encoding: { type: string, enum: [base64] }
+        payload: { type: string, contentEncoding: base64 }
+        priority: { type: integer }
+        trigger: { $ref: "#/components/schemas/Trigger" }
+        max_attempts: { type: integer }
+        retry_base_delay: { type: string }
+        retry_max_delay: { type: string }
+        labels: { type: object, additionalProperties: { type: string } }
+        dependencies: { type: array, items: { type: string } }
+
+    ScopeConfig:
+      type: object
+      description: All fields optional; zero/absent means "use the conservative fallback" (docs/spec/01-contract.md §11).
+      properties:
+        default_lease_timeout: { type: string }
+        min_lease_timeout: { type: string }
+        max_lease_timeout: { type: string }
+        max_attempts: { type: integer }
+        retry_base_delay: { type: string }
+        retry_max_delay: { type: string }
+        terminal_retention: { type: string, description: "0 (absent) means never collect" }
+        max_subscriber_lag: { type: string, description: "0 (absent) means unbounded" }
+        max_in_flight: { type: integer }
+        payload_cap: { type: integer }
+        max_batch_size: { type: integer }
+        sweep_batch_size: { type: integer }
+        sweep_interval: { type: string }
+        partition_count: { type: integer }
+
+    ScopeStats:
+      type: object
+      properties:
+        total: { type: integer }
+        blocked: { type: integer }
+        scheduled: { type: integer }
+        ready: { type: integer }
+        in_progress: { type: integer }
+        succeeded: { type: integer }
+        failed: { type: integer }
+        sealed: { type: boolean }
+        complete: { type: boolean }
+        cursor: { type: integer }
+
+    Scope:
+      type: object
+      properties:
+        name: { type: string }
+        config: { $ref: "#/components/schemas/ScopeConfig" }
+        stats: { $ref: "#/components/schemas/ScopeStats" }
+
+    ClaimRequest:
+      type: object
+      properties:
+        worker_id: { type: string }
+        max_nodes: { type: integer, default: 1 }
+        lease_seconds: { type: integer, description: "Zero uses the scope's default lease timeout." }
+        wait: { type: string, example: "30s", description: "Clamped server-side to 60s." }
+        kinds: { type: array, items: { type: string } }
+
+    Lease:
+      type: object
+      properties:
+        lease_id: { type: string, description: "Opaque token; pass verbatim to :complete/:fail/:skip/:renew." }
+        fencing_epoch: { type: integer }
+        node: { $ref: "#/components/schemas/Node" }
+        lease_deadline: { type: string, format: date-time }
+
+    ClaimResponse:
+      type: object
+      properties:
+        leases:
+          type: array
+          items: { $ref: "#/components/schemas/Lease" }
+
+    LeaseInspection:
+      type: object
+      properties:
+        lease_id: { type: string }
+        node: { type: string }
+        fencing_epoch: { type: integer }
+        active: { type: boolean }
+        lease_deadline: { type: string, format: date-time }
+
+    CompleteRequest:
+      type: object
+      properties:
+        result_encoding: { type: string, enum: [base64] }
+        result: { type: string, contentEncoding: base64 }
+
+    FailRequest:
+      type: object
+      properties:
+        message: { type: string }
+
+    SkipRequest:
+      type: object
+      properties:
+        reason: { type: string }
+
+    RenewRequest:
+      type: object
+      properties:
+        lease_seconds: { type: integer }
+
+    CompletionResult:
+      type: object
+      properties:
+        node: { type: string }
+        status: { $ref: "#/components/schemas/Status" }
+        reason: { $ref: "#/components/schemas/Reason" }
+        completed_at: { type: string, format: date-time }
+        retrying: { type: boolean }
+        next_attempt_at: { type: string, format: date-time }
+
+    RenewResult:
+      type: object
+      properties:
+        lease_id: { type: string }
+        fencing_epoch: { type: integer }
+        lease_deadline: { type: string, format: date-time }
+
+    Problem:
+      type: object
+      description: RFC 9457 application/problem+json. Extension members (e.g. current_etag, field, size/cap) vary by "type".
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+      required: [type, title, status]

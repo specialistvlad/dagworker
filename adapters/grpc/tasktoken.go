@@ -15,9 +15,9 @@ import (
 // the instant they were copied into a token a worker might hold for minutes.
 func encodeTaskToken(l dw.Lease) ([]byte, error) {
 	return proto.Marshal(&pb.TaskToken{
-		Scope:   string(l.Scope),
-		NodeId:  string(l.NodeID),
-		Epoch:   l.Epoch,
+		Scope:  string(l.Scope),
+		NodeId: string(l.NodeID),
+		Epoch:  l.Epoch,
 	})
 }
 

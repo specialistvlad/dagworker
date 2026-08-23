@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
+	"net/http" //nolint:depguard // this file IS the HTTP adapter; core-no-network in .golangci.yml targets the core module (ADR-0037), not adapters/*
 	"sync"
 
 	dagworker "github.com/specialistvlad/dagworker"
@@ -98,7 +98,15 @@ func (s *Server) Serve(ctx context.Context, lis net.Listener) error {
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = s.Shutdown(context.Background())
+			// Canceling ctx is documented as equivalent to an already-expired
+			// shutdown grace period (Serve's doc comment): derived from ctx via
+			// WithoutCancel so it still carries whatever values/trace info ctx
+			// held, but with an explicit zero timeout rather than ctx's own
+			// (already-fired) Done channel, so this reads as "shut down now"
+			// rather than as reusing a context that is already dead.
+			shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 0)
+			_ = s.Shutdown(shutdownCtx)
+			cancel()
 		case <-s.done:
 		case <-stop:
 		}

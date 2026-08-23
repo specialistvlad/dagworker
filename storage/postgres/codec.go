@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"strings"
 	"time"
 
@@ -125,20 +126,20 @@ func scanNode(row scanRow) (nodeRow, error) {
 	if err != nil {
 		return nodeRow{}, err
 	}
-	n.Status = dw.Status(status)
-	n.Reason = dw.Reason(reason)
-	n.Phase = dw.Phase(phase)
-	n.Trigger = dw.TriggerRule(trig)
-	n.Attempt = uint32(attempt)
-	n.Epoch = uint64(epoch)
-	n.RetryMaxAttempts = uint32(retryMaxAttempts)
+	n.Status = dw.Status(narrowU8(status))
+	n.Reason = dw.Reason(narrowU8(reason))
+	n.Phase = dw.Phase(narrowU8(phase))
+	n.Trigger = dw.TriggerRule(narrowU8(trig))
+	n.Attempt = narrowU32(attempt)
+	n.Epoch = narrowU64(epoch)
+	n.RetryMaxAttempts = narrowU32(retryMaxAttempts)
 	n.RetryBaseDelay = time.Duration(retryBaseNS)
 	n.RetryMaxDelay = time.Duration(retryMaxNS)
 	n.Deps = dw.DepCounts{
-		Unsatisfied: uint32(depsUnsat),
-		Succeeded:   uint32(depsSucc),
-		Skipped:     uint32(depsSkip),
-		Failed:      uint32(depsFail),
+		Unsatisfied: narrowU32(depsUnsat),
+		Succeeded:   narrowU32(depsSucc),
+		Skipped:     narrowU32(depsSkip),
+		Failed:      narrowU32(depsFail),
 	}
 	if len(labelsRaw) > 0 {
 		if err := json.Unmarshal(labelsRaw, &n.Labels); err != nil {
@@ -248,18 +249,75 @@ func scanScope(row scanRow) (scopeRow, error) {
 		DefaultLeaseTimeout: time.Duration(defLeaseNS),
 		MinLeaseTimeout:     time.Duration(minLeaseNS),
 		MaxLeaseTimeout:     time.Duration(maxLeaseNS),
-		MaxAttempts:         uint32(maxAttempts),
+		MaxAttempts:         narrowU32(maxAttempts),
 		RetryBaseDelay:      time.Duration(retryBaseNS),
 		RetryMaxDelay:       time.Duration(retryMaxNS),
 		TerminalRetention:   time.Duration(retentionNS),
 		MaxSubscriberLag:    time.Duration(subLagNS),
-		MaxInFlight:         uint32(maxInFlight),
+		MaxInFlight:         narrowU32(maxInFlight),
 		PayloadCap:          int(payloadCap),
 		MaxBatchSize:        int(maxBatch),
 		SweepBatchSize:      int(sweepBatch),
 		SweepInterval:       time.Duration(sweepIntervalNS),
-		PartitionCount:      uint32(partCnt),
+		PartitionCount:      narrowU32(partCnt),
 	}
 	s.Stats.Sealed = s.Sealed
 	return s, nil
+}
+
+// PostgreSQL's integer types are wider than the domain types they carry, so
+// every read narrows. These narrow safely.
+//
+// The store wrote all of these itself and the schema constrains them, so in
+// practice they are in range. Saturating rather than wrapping still matters: a
+// wrapped value is a small plausible number that quietly does the wrong thing,
+// while a saturated one is visibly wrong. A MaxAttempts that wraps to 2
+// disables retries and looks deliberate.
+func narrowU8[T ~int16 | ~int32 | ~int64](v T) uint8 {
+	switch {
+	case v < 0:
+		return 0
+	case int64(v) > math.MaxUint8:
+		return math.MaxUint8
+	default:
+		return uint8(v) //nolint:gosec // bounded by the cases above
+	}
+}
+
+func narrowU32[T ~int32 | ~int64 | ~int](v T) uint32 {
+	switch {
+	case v < 0:
+		return 0
+	case int64(v) > math.MaxUint32:
+		return math.MaxUint32
+	default:
+		return uint32(v) //nolint:gosec // bounded by the cases above
+	}
+}
+
+func narrowU64[T ~int32 | ~int64 | ~int | ~uint32](v T) uint64 {
+	if int64(v) < 0 {
+		return 0
+	}
+	return uint64(v) //nolint:gosec // bounded by the check above
+}
+
+// widenI64 goes the other way, for a value on its way into a bigint column.
+func widenI64[T ~uint64 | ~uint32](v T) int64 {
+	if uint64(v) > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(v) //nolint:gosec // bounded by the check above
+}
+
+// narrowI32 fits a value into an integer column.
+func narrowI32[T ~uint32 | ~uint64 | ~int | ~int64 | ~int32](v T) int32 {
+	switch {
+	case int64(v) < math.MinInt32:
+		return math.MinInt32
+	case int64(v) > math.MaxInt32:
+		return math.MaxInt32
+	default:
+		return int32(v) //nolint:gosec // bounded by the cases above
+	}
 }

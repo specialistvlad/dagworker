@@ -2,7 +2,7 @@ package httpadapter
 
 import (
 	"log/slog"
-	"net/http"
+	"net/http" //nolint:depguard // this file IS the HTTP adapter; core-no-network in .golangci.yml targets the core module (ADR-0037), not adapters/*
 	"time"
 )
 
@@ -83,6 +83,9 @@ func loggingMiddleware(logger *slog.Logger) middleware {
 func recoveryMiddleware(logger *slog.Logger) middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			//nolint:contextcheck // r.Context() is captured from the enclosing handler, not a
+			// fresh/background context; defer-wrapped closures are a documented false-positive
+			// shape for this linter (kkHAIKE/contextcheck#25-style: it cannot see the capture).
 			defer func() {
 				if rec := recover(); rec != nil {
 					logger.ErrorContext(r.Context(), "dagworker/http: panic in handler",

@@ -109,7 +109,7 @@ func (f optionFunc) apply(o *options) { f(o) }
 // The default discards everything: a library that writes to its host's
 // stderr uninvited is a defect, not a feature — the same stance core takes
 // (config.go).
-func WithLogger(l *slog.Logger) Option {
+func WithLogger(l *slog.Logger) Option { //nolint:ireturn // ADR-0027 functional-option pattern (see .golangci.yml's own dagworker.Option/memory.Option allowance); this Option is the identical opaque-interface shape for this module
 	return optionFunc(func(o *options) {
 		if l != nil {
 			o.logger = l
@@ -119,7 +119,7 @@ func WithLogger(l *slog.Logger) Option {
 
 // WithMaxWait sets the server-side ceiling a client's requested claim "wait"
 // is clamped to. Zero or negative is ignored; the default is 60s.
-func WithMaxWait(d time.Duration) Option {
+func WithMaxWait(d time.Duration) Option { //nolint:ireturn // ADR-0027 functional-option pattern (see .golangci.yml's own dagworker.Option/memory.Option allowance); this Option is the identical opaque-interface shape for this module
 	return optionFunc(func(o *options) {
 		if d > 0 {
 			o.maxWait = d
@@ -130,7 +130,7 @@ func WithMaxWait(d time.Duration) Option {
 // WithHeartbeatInterval sets how often the SSE handler writes a comment line
 // to keep idle intermediaries from timing out the connection. Zero or
 // negative is ignored.
-func WithHeartbeatInterval(d time.Duration) Option {
+func WithHeartbeatInterval(d time.Duration) Option { //nolint:ireturn // ADR-0027 functional-option pattern (see .golangci.yml's own dagworker.Option/memory.Option allowance); this Option is the identical opaque-interface shape for this module
 	return optionFunc(func(o *options) {
 		if d > 0 {
 			o.heartbeat = d
@@ -142,7 +142,7 @@ func WithHeartbeatInterval(d time.Duration) Option {
 // IdleTimeout. WriteTimeout never applies to the events endpoint, which
 // clears its own write deadline (doc.go). Zero or negative leaves the
 // corresponding default in place.
-func WithTimeouts(readHeader, write, idle time.Duration) Option {
+func WithTimeouts(readHeader, write, idle time.Duration) Option { //nolint:ireturn // ADR-0027 functional-option pattern (see .golangci.yml's own dagworker.Option/memory.Option allowance); this Option is the identical opaque-interface shape for this module
 	return optionFunc(func(o *options) {
 		if readHeader > 0 {
 			o.readHeaderTimeout = readHeader
@@ -159,7 +159,7 @@ func WithTimeouts(readHeader, write, idle time.Duration) Option {
 // WithMaxBodyBytes caps request body size. Requests over the limit fail with
 // [ErrInvalidArgument]'s HTTP mapping before the handler ever sees the body.
 // Zero or negative is ignored.
-func WithMaxBodyBytes(n int64) Option {
+func WithMaxBodyBytes(n int64) Option { //nolint:ireturn // ADR-0027 functional-option pattern (see .golangci.yml's own dagworker.Option/memory.Option allowance); this Option is the identical opaque-interface shape for this module
 	return optionFunc(func(o *options) {
 		if n > 0 {
 			o.maxBodyBytes = n
@@ -169,7 +169,7 @@ func WithMaxBodyBytes(n int64) Option {
 
 // WithProblemBaseURI overrides the namespace RFC 9457 problem "type" URIs are
 // minted under. Empty is ignored.
-func WithProblemBaseURI(uri string) Option {
+func WithProblemBaseURI(uri string) Option { //nolint:ireturn // ADR-0027 functional-option pattern (see .golangci.yml's own dagworker.Option/memory.Option allowance); this Option is the identical opaque-interface shape for this module
 	return optionFunc(func(o *options) {
 		if uri != "" {
 			o.problemBaseURI = uri

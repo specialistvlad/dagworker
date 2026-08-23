@@ -141,7 +141,7 @@ func (e *engine) insertEvent(ctx context.Context, nodeID, nodeKind string, kind 
 INSERT INTO dagw.events (scope, node_id, kind, seq, from_status, to_status, reason, message, attempt, node_kind, at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, clock_timestamp())
 RETURNING cursor, at`,
-		e.scope, nodeID, int16(kind), int64(seq), int16(from), int16(to), int16(reason), message, int32(attempt), nodeKind,
+		e.scope, nodeID, int16(kind), widenI64(seq), int16(from), int16(to), int16(reason), message, narrowI32(attempt), nodeKind,
 	).Scan(&cursor, &at)
 	if err != nil {
 		return dw.Effect{}, fmt.Errorf("postgres: insert event: %w", err)
@@ -157,7 +157,7 @@ RETURNING cursor, at`,
 		Attempt:  attempt,
 		NodeKind: nodeKind,
 		Seq:      seq,
-		Cursor:   dw.Cursor(cursor),
+		Cursor:   dw.Cursor(narrowU64(cursor)),
 		At:       at,
 	}, nil
 }
@@ -224,7 +224,7 @@ RETURNING deps_unsatisfied, deps_succeeded, deps_skipped, deps_failed`, col, col
 	if err := e.tx.QueryRow(ctx, sql, succID).Scan(&u, &s, &sk, &f); err != nil {
 		return dw.DepCounts{}, fmt.Errorf("postgres: apply dep delta: %w", err)
 	}
-	return dw.DepCounts{Unsatisfied: uint32(u), Succeeded: uint32(s), Skipped: uint32(sk), Failed: uint32(f)}, nil
+	return dw.DepCounts{Unsatisfied: narrowU32(u), Succeeded: narrowU32(s), Skipped: narrowU32(sk), Failed: narrowU32(f)}, nil
 }
 
 // makeReady moves a node into the ready set: the only path by which a node
@@ -241,7 +241,7 @@ RETURNING seq, fifo`, n.ID, int16(dw.PhaseReady), int16(dw.StatusNew)).Scan(&seq
 	if err != nil {
 		return dw.Effect{}, fmt.Errorf("postgres: makeReady: %w", err)
 	}
-	n.Phase, n.Status, n.ReadyAt, n.Fifo, n.Seq = dw.PhaseReady, dw.StatusNew, nil, fifo, dw.Seq(seq)
+	n.Phase, n.Status, n.ReadyAt, n.Fifo, n.Seq = dw.PhaseReady, dw.StatusNew, nil, fifo, dw.Seq(narrowU64(seq))
 	if err := e.moveBucket(ctx, oldPhase, oldStatus, n.Phase, n.Status); err != nil {
 		return dw.Effect{}, err
 	}
@@ -347,7 +347,7 @@ RETURNING seq`, n.ID, int16(dw.PhaseDone), int16(it.status), int16(it.reason), i
 		if err != nil {
 			return nil, fmt.Errorf("postgres: terminate: update: %w", err)
 		}
-		n.Phase, n.Status, n.Reason, n.Message, n.Seq = dw.PhaseDone, it.status, it.reason, it.message, dw.Seq(seq)
+		n.Phase, n.Status, n.Reason, n.Message, n.Seq = dw.PhaseDone, it.status, it.reason, it.message, dw.Seq(narrowU64(seq))
 
 		if err := e.moveBucket(ctx, oldPhase, oldStatus, n.Phase, n.Status); err != nil {
 			return nil, err
@@ -440,7 +440,7 @@ func (e *engine) bumpSeq(ctx context.Context, id int64) (dw.Seq, error) {
 	if err != nil {
 		return 0, fmt.Errorf("postgres: bump seq: %w", err)
 	}
-	return dw.Seq(seq), nil
+	return dw.Seq(narrowU64(seq)), nil
 }
 
 // createNode inserts a brand-new node in PhaseBlocked/StatusNew — every node
@@ -465,7 +465,7 @@ INSERT INTO dagw.nodes (
 RETURNING `+nodeColumns,
 		e.scope, string(spec.ID), spec.Kind, int16(dw.StatusNew), int16(dw.ReasonNone), int16(dw.PhaseBlocked),
 		spec.Priority, int16(spec.Trigger),
-		int32(spec.Retry.MaxAttempts), int64(spec.Retry.BaseDelay), int64(spec.Retry.MaxDelay),
+		narrowI32(spec.Retry.MaxAttempts), int64(spec.Retry.BaseDelay), int64(spec.Retry.MaxDelay),
 		payload, labels,
 	)
 	n, err := scanNode(row)

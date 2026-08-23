@@ -304,6 +304,26 @@ func (e *engine) completeSkip(ctx context.Context, n *nodeRow, message string) (
 	return e.terminate(ctx, n.ID, dw.StatusError, dw.ReasonSkipped, message)
 }
 
+// loadLeasedNode locks the node a lease claims to hold and applies the
+// fencing check: a worker that was merely paused rather than dead arrives
+// here after its lease was reclaimed and reissued, so its epoch no longer
+// matches and its write is refused instead of overwriting whatever the
+// current holder has since recorded.
+func loadLeasedNode(ctx context.Context, eng *engine, lease dw.Lease) (nodeRow, error) {
+	n, err := eng.loadForUpdateByExternal(ctx, string(lease.NodeID))
+	if err != nil {
+		if isNoRows(err) {
+			return nodeRow{}, dw.ErrNotFound
+		}
+		return nodeRow{}, fmt.Errorf("postgres: load leased node: %w", err)
+	}
+	if n.Phase != dw.PhaseClaimed || n.Epoch != lease.Epoch {
+		return nodeRow{}, fmt.Errorf("%w: node %q is at epoch %d, lease presented %d",
+			dw.ErrLeaseMismatch, lease.NodeID, n.Epoch, lease.Epoch)
+	}
+	return n, nil
+}
+
 // Complete implements [dagworker.Store].
 func (s *Store) Complete(ctx context.Context, req dw.CompleteRequest) (dw.CompleteResult, error) {
 	if !req.Lease.Valid() {
@@ -330,47 +350,12 @@ func (s *Store) Complete(ctx context.Context, req dw.CompleteRequest) (dw.Comple
 
 	eng := newEngine(tx, scopeName, cfg, s.jitter)
 
-	n, err := eng.loadForUpdateByExternal(ctx, string(req.Lease.NodeID))
+	n, err := loadLeasedNode(ctx, eng, req.Lease)
 	if err != nil {
-		if isNoRows(err) {
-			return dw.CompleteResult{}, dw.ErrNotFound
-		}
-		return dw.CompleteResult{}, fmt.Errorf("postgres: Complete: load: %w", err)
+		return dw.CompleteResult{}, err
 	}
 
-	// The fencing check. A worker that was merely paused rather than dead
-	// arrives here after its lease was reclaimed and reissued; its epoch no
-	// longer matches and its write is refused instead of overwriting
-	// whatever the current holder has since recorded.
-	if n.Phase != dw.PhaseClaimed || n.Epoch != req.Lease.Epoch {
-		return dw.CompleteResult{}, fmt.Errorf("%w: node %q is at epoch %d, lease presented %d",
-			dw.ErrLeaseMismatch, req.Lease.NodeID, n.Epoch, req.Lease.Epoch)
-	}
-
-	var out dw.CompleteResult
-	switch {
-	case req.Success:
-		if len(req.Result) > cfg.PayloadCap {
-			return dw.CompleteResult{}, &dw.PayloadTooLargeError{Size: len(req.Result), Cap: cfg.PayloadCap}
-		}
-		out.Effects, err = eng.completeSuccess(ctx, &n, req.Result)
-	case req.Reason == dw.ReasonSkipped:
-		// Skipping is a decision, not a fault: the worker looked and
-		// concluded there was nothing to do. Retrying would just reach the
-		// same conclusion, so it is terminal on the first report — the only
-		// way ReasonSkipped enters a graph.
-		out.Effects, err = eng.completeSkip(ctx, &n, req.Message)
-	default:
-		reason := req.Reason
-		if reason == dw.ReasonNone {
-			reason = dw.ReasonWorkerError
-		}
-		out.Effects, err = eng.failAttempt(ctx, &n, reason, req.Message)
-		if err == nil && n.Phase == dw.PhaseScheduled {
-			out.Retrying = true
-			out.NextAttemptAt = derefTime(n.ReadyAt)
-		}
-	}
+	out, err := applyOutcome(ctx, eng, &n, req, cfg)
 	if err != nil {
 		return dw.CompleteResult{}, err
 	}
@@ -380,6 +365,50 @@ func (s *Store) Complete(ctx context.Context, req dw.CompleteRequest) (dw.Comple
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return dw.CompleteResult{}, fmt.Errorf("postgres: Complete: commit: %w", err)
+	}
+	return out, nil
+}
+
+// applyOutcome records what the worker reported: success, a skip, or a failed
+// attempt that the retry policy may or may not turn into another one.
+//
+// It is separate from Complete so that the fencing check and the transaction
+// management stay legible next to each other, and so the three outcomes sit
+// side by side where the difference between them is easy to read.
+func applyOutcome(
+	ctx context.Context, eng *engine, n *nodeRow, req dw.CompleteRequest, cfg dw.ScopeConfig,
+) (dw.CompleteResult, error) {
+	var out dw.CompleteResult
+	var err error
+
+	switch {
+	case req.Success:
+		if len(req.Result) > cfg.PayloadCap {
+			return dw.CompleteResult{}, &dw.PayloadTooLargeError{Size: len(req.Result), Cap: cfg.PayloadCap}
+		}
+		out.Effects, err = eng.completeSuccess(ctx, n, req.Result)
+
+	case req.Reason == dw.ReasonSkipped:
+		// Skipping is a decision, not a fault: the worker looked and concluded
+		// there was nothing to do. Retrying would reach the same conclusion, so
+		// it is terminal on the first report -- the only way ReasonSkipped
+		// enters a graph.
+		out.Effects, err = eng.completeSkip(ctx, n, req.Message)
+
+	default:
+		reason := req.Reason
+		if reason == dw.ReasonNone {
+			reason = dw.ReasonWorkerError
+		}
+		out.Effects, err = eng.failAttempt(ctx, n, reason, req.Message)
+		if err == nil && n.Phase == dw.PhaseScheduled {
+			out.Retrying = true
+			out.NextAttemptAt = derefTime(n.ReadyAt)
+		}
+	}
+
+	if err != nil {
+		return dw.CompleteResult{}, err
 	}
 	return out, nil
 }
@@ -417,7 +446,7 @@ UPDATE dagw.nodes
 SET deadline = clock_timestamp() + make_interval(secs => $4)
 WHERE scope = $1 AND node_id = $2 AND phase = $5 AND epoch = $3
 RETURNING deadline`,
-		scopeName, string(req.Lease.NodeID), int64(req.Lease.Epoch), leaseFor.Seconds(), int16(dw.PhaseClaimed),
+		scopeName, string(req.Lease.NodeID), widenI64(req.Lease.Epoch), leaseFor.Seconds(), int16(dw.PhaseClaimed),
 	).Scan(&deadline)
 	if err != nil {
 		if !isNoRows(err) {

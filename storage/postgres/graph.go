@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
+
 	dw "github.com/specialistvlad/dagworker"
 )
 
@@ -207,68 +209,118 @@ func (s *Store) AddNodes(ctx context.Context, scope dw.Scope, specs []dw.NodeSpe
 	return effects, nil
 }
 
+// beginGraphTx opens a transaction over an existing scope with its graph lock
+// already held, and returns the engine bound to it.
+//
+// The lock is taken before any node is read. Mutations that can reorder
+// topological ranks must not interleave, and holding one scope-wide lock is
+// both simpler and cheaper than proving that some per-node acquisition order is
+// deadlock-free -- which is the bug class that recurs in every scheduler that
+// tries the clever version.
+//
+//nolint:ireturn // pgx.Tx is the only shape Pool.Begin returns.
+func beginGraphTx(ctx context.Context, s *Store, scope dw.Scope, op string) (pgx.Tx, *engine, error) {
+	if err := s.ensureMigrated(ctx); err != nil {
+		return nil, nil, err
+	}
+	tx, err := beginTx(ctx, s)
+	if err != nil {
+		return nil, nil, fmt.Errorf("postgres: %s: begin: %w", op, err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	if _, ok, err := loadScope(ctx, tx, string(scope)); err != nil {
+		return nil, nil, err
+	} else if !ok {
+		return nil, nil, dw.ErrNotFound
+	}
+	if err := lockScopeGraph(ctx, tx, string(scope)); err != nil {
+		return nil, nil, fmt.Errorf("postgres: %s: lock: %w", op, err)
+	}
+	committed = true
+	return tx, newEngine(tx, string(scope), dw.ScopeConfig{}, s.jitter), nil
+}
+
+// finishGraphTx flushes notifications and commits: the identical tail of every
+// graph mutation.
+func finishGraphTx(ctx context.Context, tx pgx.Tx, eng *engine, op string, effects []dw.Effect) ([]dw.Effect, error) {
+	if err := eng.notifyIfDirty(ctx); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("postgres: %s: commit: %w", op, err)
+	}
+	return effects, nil
+}
+
+// nodeLoader reads and locks each node at most once per transaction, so a batch
+// naming the same node twice sees its own earlier write rather than a stale
+// copy, and cannot contend with itself for the same row lock.
+type nodeLoader struct {
+	eng   *engine
+	op    string
+	nodes map[dw.NodeID]nodeRow
+}
+
+func newNodeLoader(eng *engine, op string, hint int) *nodeLoader {
+	return &nodeLoader{eng: eng, op: op, nodes: make(map[dw.NodeID]nodeRow, hint)}
+}
+
+// endpoint loads one end of an edge, reporting a missing row as ErrNotFound
+// that names which end was missing -- "edge source" and "edge target" are very
+// different mistakes to have made.
+func (l *nodeLoader) endpoint(ctx context.Context, id dw.NodeID, which string) (nodeRow, error) {
+	if n, ok := l.nodes[id]; ok {
+		return n, nil
+	}
+	n, err := l.eng.loadForUpdateByExternal(ctx, string(id))
+	if err != nil {
+		if isNoRows(err) {
+			return nodeRow{}, fmt.Errorf("%w: edge %s %q", dw.ErrNotFound, which, id)
+		}
+		return nodeRow{}, fmt.Errorf("postgres: %s: load %q: %w", l.op, id, err)
+	}
+	l.nodes[id] = n
+	return n, nil
+}
+
+func (l *nodeLoader) put(id dw.NodeID, n nodeRow) { l.nodes[id] = n }
+
 // AddEdges implements [dagworker.Store].
 func (s *Store) AddEdges(ctx context.Context, scope dw.Scope, edges []dw.Edge) ([]dw.Effect, error) {
 	if len(edges) == 0 {
 		return nil, nil
 	}
-	if err := s.ensureMigrated(ctx); err != nil {
-		return nil, err
-	}
-
-	tx, err := beginTx(ctx, s)
+	tx, eng, err := beginGraphTx(ctx, s, scope, "AddEdges")
 	if err != nil {
-		return nil, fmt.Errorf("postgres: AddEdges: begin: %w", err)
+		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if _, ok, err := loadScope(ctx, tx, string(scope)); err != nil {
-		return nil, err
-	} else if !ok {
-		return nil, dw.ErrNotFound
-	}
-	if err := lockScopeGraph(ctx, tx, string(scope)); err != nil {
-		return nil, fmt.Errorf("postgres: AddEdges: lock: %w", err)
-	}
-
-	eng := newEngine(tx, string(scope), dw.ScopeConfig{}, s.jitter)
-
-	nodes := make(map[dw.NodeID]nodeRow, len(edges)*2)
-	load := func(id dw.NodeID) (nodeRow, error) {
-		if n, ok := nodes[id]; ok {
-			return n, nil
-		}
-		n, err := eng.loadForUpdateByExternal(ctx, string(id))
-		if err != nil {
-			return nodeRow{}, err
-		}
-		nodes[id] = n
-		return n, nil
-	}
-
+	loader := newNodeLoader(eng, "AddEdges", len(edges)*2)
 	touched := newOrderedSet[int64]()
 	for _, e := range edges {
-		from, err := load(e.From)
-		if err != nil {
-			if isNoRows(err) {
-				return nil, fmt.Errorf("%w: edge source %q", dw.ErrNotFound, e.From)
-			}
-			return nil, fmt.Errorf("postgres: AddEdges: load %q: %w", e.From, err)
-		}
-		to, err := load(e.To)
-		if err != nil {
-			if isNoRows(err) {
-				return nil, fmt.Errorf("%w: edge target %q", dw.ErrNotFound, e.To)
-			}
-			return nil, fmt.Errorf("postgres: AddEdges: load %q: %w", e.To, err)
-		}
 		if e.From == e.To {
 			return nil, fmt.Errorf("%w: %q depends on itself", dw.ErrCycle, e.From)
+		}
+		from, err := loader.endpoint(ctx, e.From, "source")
+		if err != nil {
+			return nil, err
+		}
+		to, err := loader.endpoint(ctx, e.To, "target")
+		if err != nil {
+			return nil, err
 		}
 		if err := eng.linkDependency(ctx, &from, &to); err != nil {
 			return nil, err
 		}
-		nodes[e.From], nodes[e.To] = from, to
+		loader.put(e.From, from)
+		loader.put(e.To, to)
 		touched.add(to.ID)
 	}
 
@@ -276,14 +328,7 @@ func (s *Store) AddEdges(ctx context.Context, scope dw.Scope, edges []dw.Edge) (
 	if err != nil {
 		return nil, err
 	}
-
-	if err := eng.notifyIfDirty(ctx); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("postgres: AddEdges: commit: %w", err)
-	}
-	return effects, nil
+	return finishGraphTx(ctx, tx, eng, "AddEdges", effects)
 }
 
 // RemoveEdges implements [dagworker.Store].
@@ -291,63 +336,29 @@ func (s *Store) RemoveEdges(ctx context.Context, scope dw.Scope, edges []dw.Edge
 	if len(edges) == 0 {
 		return nil, nil
 	}
-	if err := s.ensureMigrated(ctx); err != nil {
-		return nil, err
-	}
-
-	tx, err := beginTx(ctx, s)
+	tx, eng, err := beginGraphTx(ctx, s, scope, "RemoveEdges")
 	if err != nil {
-		return nil, fmt.Errorf("postgres: RemoveEdges: begin: %w", err)
+		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if _, ok, err := loadScope(ctx, tx, string(scope)); err != nil {
-		return nil, err
-	} else if !ok {
-		return nil, dw.ErrNotFound
-	}
-	if err := lockScopeGraph(ctx, tx, string(scope)); err != nil {
-		return nil, fmt.Errorf("postgres: RemoveEdges: lock: %w", err)
-	}
-
-	eng := newEngine(tx, string(scope), dw.ScopeConfig{}, s.jitter)
-
-	idOf := make(map[dw.NodeID]int64, len(edges)*2)
-	lookup := func(id dw.NodeID) (int64, error) {
-		if v, ok := idOf[id]; ok {
-			return v, nil
-		}
-		var v int64
-		err := tx.QueryRow(ctx, `SELECT id FROM dagw.nodes WHERE scope = $1 AND node_id = $2`, string(scope), string(id)).Scan(&v)
-		if err != nil {
-			return 0, err
-		}
-		idOf[id] = v
-		return v, nil
-	}
-
+	loader := newNodeLoader(eng, "RemoveEdges", len(edges)*2)
 	touched := newOrderedSet[int64]()
 	for _, e := range edges {
-		fromID, err := lookup(e.From)
+		from, err := loader.endpoint(ctx, e.From, "source")
 		if err != nil {
-			if isNoRows(err) {
-				return nil, fmt.Errorf("%w: edge source %q", dw.ErrNotFound, e.From)
-			}
-			return nil, fmt.Errorf("postgres: RemoveEdges: %w", err)
+			return nil, err
 		}
-		toID, err := lookup(e.To)
+		to, err := loader.endpoint(ctx, e.To, "target")
 		if err != nil {
-			if isNoRows(err) {
-				return nil, fmt.Errorf("%w: edge target %q", dw.ErrNotFound, e.To)
-			}
-			return nil, fmt.Errorf("postgres: RemoveEdges: %w", err)
+			return nil, err
 		}
-		changed, err := eng.unlinkDependency(ctx, fromID, toID)
+		changed, err := eng.unlinkDependency(ctx, from.ID, to.ID)
 		if err != nil {
 			return nil, err
 		}
 		if changed {
-			touched.add(toID)
+			touched.add(to.ID)
 		}
 	}
 
@@ -355,14 +366,7 @@ func (s *Store) RemoveEdges(ctx context.Context, scope dw.Scope, edges []dw.Edge
 	if err != nil {
 		return nil, err
 	}
-
-	if err := eng.notifyIfDirty(ctx); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("postgres: RemoveEdges: commit: %w", err)
-	}
-	return effects, nil
+	return finishGraphTx(ctx, tx, eng, "RemoveEdges", effects)
 }
 
 // applyCascade carries out policy's consequence for id's successors ahead of
@@ -398,26 +402,11 @@ func applyCascade(ctx context.Context, eng *engine, id dw.NodeID, policy dw.Casc
 
 // RemoveNode implements [dagworker.Store].
 func (s *Store) RemoveNode(ctx context.Context, scope dw.Scope, id dw.NodeID, policy dw.CascadePolicy) ([]dw.Effect, error) {
-	if err := s.ensureMigrated(ctx); err != nil {
-		return nil, err
-	}
-
-	tx, err := beginTx(ctx, s)
+	tx, eng, err := beginGraphTx(ctx, s, scope, "RemoveNode")
 	if err != nil {
-		return nil, fmt.Errorf("postgres: RemoveNode: begin: %w", err)
+		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-
-	if _, ok, err := loadScope(ctx, tx, string(scope)); err != nil {
-		return nil, err
-	} else if !ok {
-		return nil, dw.ErrNotFound
-	}
-	if err := lockScopeGraph(ctx, tx, string(scope)); err != nil {
-		return nil, fmt.Errorf("postgres: RemoveNode: lock: %w", err)
-	}
-
-	eng := newEngine(tx, string(scope), dw.ScopeConfig{}, s.jitter)
 
 	n, err := eng.loadForUpdateByExternal(ctx, string(id))
 	if err != nil {
@@ -450,14 +439,8 @@ func (s *Store) RemoveNode(ctx context.Context, scope dw.Scope, id dw.NodeID, po
 		return nil, fmt.Errorf("postgres: RemoveNode: detach predecessors: %w", err)
 	}
 
-	if err := eng.leaveBucket(ctx, n.Phase, n.Status); err != nil {
+	if err := deleteNodeRow(ctx, tx, eng, scope, n); err != nil {
 		return nil, err
-	}
-	if _, err := tx.Exec(ctx, `UPDATE dagw.scopes SET stat_total = stat_total - 1 WHERE scope = $1`, string(scope)); err != nil {
-		return nil, fmt.Errorf("postgres: RemoveNode: stat_total: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM dagw.nodes WHERE id = $1`, n.ID); err != nil {
-		return nil, fmt.Errorf("postgres: RemoveNode: delete: %w", err)
 	}
 
 	if policy == dw.CascadeDetach {
@@ -468,13 +451,7 @@ func (s *Store) RemoveNode(ctx context.Context, scope dw.Scope, id dw.NodeID, po
 		effects = append(effects, more...)
 	}
 
-	if err := eng.notifyIfDirty(ctx); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("postgres: RemoveNode: commit: %w", err)
-	}
-	return effects, nil
+	return finishGraphTx(ctx, tx, eng, "RemoveNode", effects)
 }
 
 // Cancel implements [dagworker.Store].
@@ -482,26 +459,11 @@ func (s *Store) Cancel(ctx context.Context, scope dw.Scope, ids []dw.NodeID) ([]
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	if err := s.ensureMigrated(ctx); err != nil {
-		return nil, err
-	}
-
-	tx, err := beginTx(ctx, s)
+	tx, eng, err := beginGraphTx(ctx, s, scope, "Cancel")
 	if err != nil {
-		return nil, fmt.Errorf("postgres: Cancel: begin: %w", err)
+		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-
-	if _, ok, err := loadScope(ctx, tx, string(scope)); err != nil {
-		return nil, err
-	} else if !ok {
-		return nil, dw.ErrNotFound
-	}
-	if err := lockScopeGraph(ctx, tx, string(scope)); err != nil {
-		return nil, fmt.Errorf("postgres: Cancel: lock: %w", err)
-	}
-
-	eng := newEngine(tx, string(scope), dw.ScopeConfig{}, s.jitter)
 
 	var effects []dw.Effect
 	for _, id := range ids {
@@ -515,7 +477,7 @@ func (s *Store) Cancel(ctx context.Context, scope dw.Scope, ids []dw.NodeID) ([]
 			}
 			return nil, fmt.Errorf("postgres: Cancel: %w", err)
 		}
-		if dw.Phase(phase) == dw.PhaseDone {
+		if dw.Phase(narrowU8(phase)) == dw.PhaseDone {
 			continue // cancelling something already finished is a no-op, not an error
 		}
 		more, err := eng.terminate(ctx, internalID, dw.StatusError, dw.ReasonCancelled, terminalMessage(dw.ReasonCancelled))
@@ -525,13 +487,7 @@ func (s *Store) Cancel(ctx context.Context, scope dw.Scope, ids []dw.NodeID) ([]
 		effects = append(effects, more...)
 	}
 
-	if err := eng.notifyIfDirty(ctx); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("postgres: Cancel: commit: %w", err)
-	}
-	return effects, nil
+	return finishGraphTx(ctx, tx, eng, "Cancel", effects)
 }
 
 // CancelScope implements [dagworker.Store].
@@ -584,4 +540,27 @@ func (s *Store) CancelScope(ctx context.Context, scope dw.Scope) ([]dw.Effect, e
 		return nil, fmt.Errorf("postgres: CancelScope: commit: %w", err)
 	}
 	return effects, nil
+}
+
+// deleteNodeRow removes a node's own row and corrects the scope's counters.
+//
+// Shared by RemoveNode and CollectTerminal so the two cannot disagree about
+// what deleting a node does to the statistics. A divergence there does not
+// surface as a failed delete -- it surfaces much later as an IsComplete that
+// never becomes true, with nothing left in the graph to explain why.
+//
+// It does not touch edges: the caller detaches those first, because what should
+// happen to a successor depends on why the node is going away.
+func deleteNodeRow(ctx context.Context, tx pgx.Tx, eng *engine, scope dw.Scope, n nodeRow) error {
+	if err := eng.leaveBucket(ctx, n.Phase, n.Status); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE dagw.scopes SET stat_total = stat_total - 1 WHERE scope = $1`, string(scope)); err != nil {
+		return fmt.Errorf("postgres: delete node: stat_total: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM dagw.nodes WHERE id = $1`, n.ID); err != nil {
+		return fmt.Errorf("postgres: delete node: %w", err)
+	}
+	return nil
 }

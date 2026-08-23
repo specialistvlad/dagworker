@@ -1,6 +1,7 @@
 package grpcadapter
 
 import (
+	"math"
 	"time"
 
 	dw "github.com/specialistvlad/dagworker"
@@ -8,6 +9,22 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// clampInt32ToInt16 saturates rather than wraps: a caller-supplied priority
+// outside int16's range is clamped to the boundary instead of silently
+// aliasing to an unrelated value on the narrowing cast — the same
+// saturate-don't-wrap discipline storage/memory/lease.go's clampAttempt
+// applies to the epoch/attempt narrowing in the core.
+func clampInt32ToInt16(v int32) int16 {
+	switch {
+	case v > math.MaxInt16:
+		return math.MaxInt16
+	case v < math.MinInt16:
+		return math.MinInt16
+	default:
+		return int16(v)
+	}
+}
 
 // This file holds the wire<->domain conversions for every message that
 // mirrors a core type (see node.proto's per-message doc comments for which
@@ -24,13 +41,6 @@ func timeToProto(t time.Time) *timestamppb.Timestamp {
 		return nil
 	}
 	return timestamppb.New(t)
-}
-
-func timeFromProto(ts *timestamppb.Timestamp) time.Time {
-	if ts == nil {
-		return time.Time{}
-	}
-	return ts.AsTime()
 }
 
 func durationFromProto(d *durationpb.Duration) time.Duration {
@@ -222,7 +232,7 @@ func newNodeToSpec(n *pb.NewNode) dw.NodeSpec {
 		Kind:     n.GetKind(),
 		Payload:  n.GetPayload(),
 		Labels:   n.GetLabels(),
-		Priority: int16(n.GetPriority()),
+		Priority: clampInt32ToInt16(n.GetPriority()),
 		Trigger:  triggerFromProto(n.GetTrigger()),
 		Retry:    retryPolicyFromProto(n.GetRetry()),
 		Deps:     deps,
@@ -233,25 +243,10 @@ func edgeFromProto(e *pb.Edge) dw.Edge {
 	return dw.Edge{From: dw.NodeID(e.GetFromNodeId()), To: dw.NodeID(e.GetToNodeId())}
 }
 
-func scopeConfigToProto(c dw.ScopeConfig) *pb.ScopeConfig {
-	return &pb.ScopeConfig{
-		DefaultLeaseTimeout: durationToProto(c.DefaultLeaseTimeout),
-		MinLeaseTimeout:     durationToProto(c.MinLeaseTimeout),
-		MaxLeaseTimeout:     durationToProto(c.MaxLeaseTimeout),
-		MaxAttempts:         c.MaxAttempts,
-		RetryBaseDelay:      durationToProto(c.RetryBaseDelay),
-		RetryMaxDelay:       durationToProto(c.RetryMaxDelay),
-		TerminalRetention:   durationToProto(c.TerminalRetention),
-		MaxSubscriberLag:    durationToProto(c.MaxSubscriberLag),
-		MaxInFlight:         c.MaxInFlight,
-		PayloadCap:          int32(c.PayloadCap),
-		MaxBatchSize:        int32(c.MaxBatchSize),
-		SweepBatchSize:      int32(c.SweepBatchSize),
-		SweepInterval:       durationToProto(c.SweepInterval),
-		PartitionCount:      c.PartitionCount,
-	}
-}
-
+// scopeConfigFromProto is the only direction this adapter needs: Configure is
+// the sole ControlService RPC that touches ScopeConfig (there is no getter in
+// this deliverable's RPC surface — see the module README), so a dw->proto
+// conversion would have no caller.
 func scopeConfigFromProto(c *pb.ScopeConfig) dw.ScopeConfig {
 	if c == nil {
 		return dw.ScopeConfig{}
@@ -327,9 +322,9 @@ func leaseToProto(l dw.Lease) (*pb.Lease, error) {
 		return nil, err
 	}
 	return &pb.Lease{
-		TaskToken:       tok,
-		FencingToken:    l.Epoch,
-		Node:            nodeToProto(l.Node),
-		LeaseExpiresAt:  timeToProto(l.Deadline),
+		TaskToken:      tok,
+		FencingToken:   l.Epoch,
+		Node:           nodeToProto(l.Node),
+		LeaseExpiresAt: timeToProto(l.Deadline),
 	}, nil
 }

@@ -118,7 +118,9 @@ func New(pool *pgxpool.Pool, opts ...Option) *Store {
 			if n <= 0 {
 				return 0
 			}
-			return rand.Int64N(n)
+			// Scheduling spread, not a secret: a cryptographic source here
+			// would buy nothing and cost entropy on every failure.
+			return rand.Int64N(n) //nolint:gosec // scheduling jitter, not a secret
 		},
 		closed: make(chan struct{}),
 	}
