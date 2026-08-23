@@ -181,12 +181,16 @@ func (e *engine) flushCounters(ctx context.Context) error {
 // the pipelined paths in pipeline.go, so the two can never drift into writing
 // different columns.
 var (
+	// epoch starts at the scope's floor rather than zero, so a recycled node
+	// identifier never re-issues an epoch its previous generation already used.
 	insertNodeSQL = `
 INSERT INTO dagw.nodes (
 	scope, node_id, kind, status, reason, phase, priority, trigger_rule,
 	retry_max_attempts, retry_base_delay_ns, retry_max_delay_ns, payload, labels,
-	created_at, updated_at
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, clock_timestamp(), clock_timestamp())
+	epoch, created_at, updated_at
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
+	COALESCE((SELECT epoch_floor FROM dagw.scopes WHERE scope = $1), 0),
+	clock_timestamp(), clock_timestamp())
 RETURNING ` + nodeColumns
 
 	insertEventSQL = `

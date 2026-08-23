@@ -588,7 +588,21 @@ end
 
 -- ---------------------------------------------------------------- node lifecycle
 
+-- retireEpoch raises the scope's epoch floor past this node's epoch, so an
+-- identifier that is later recycled never re-issues an epoch the previous
+-- generation already used. Without it a worker still holding a lease from
+-- before the deletion could present a matching epoch against a node it never
+-- claimed, which is exactly what the fencing token exists to prevent.
+local function retireEpoch(p, id)
+  local e = tonumber(redis.call('HGET', kNode(p, id), 'epoch')) or 0
+  local floor = tonumber(redis.call('HGET', kStats(p), 'EpochFloor')) or 0
+  if e > floor then
+    redis.call('HSET', kStats(p), 'EpochFloor', e)
+  end
+end
+
 local function deleteNodeKeys(p, id)
+  retireEpoch(p, id)
   redis.call('DEL', kNode(p, id))
   redis.call('DEL', kBlob(p, id))
   redis.call('DEL', kSucc(p, id))
@@ -602,7 +616,8 @@ local function createNode(p, id, kind, priority, trigger, rma, rbd, rmd, payload
     'id', id, 'kind', kind, 'status', STATUS_NEW, 'phase', PHASE_BLOCKED,
     'reason', REASON_NONE, 'message', '', 'priority', priority, 'trigger', trigger,
     'retryMaxAttempts', rma, 'retryBaseMs', rbd, 'retryMaxMs', rmd,
-    'attempt', 0, 'epoch', 0, 'seq', 0, 'createdAt', nowMsVal, 'updatedAt', nowMsVal,
+    'attempt', 0, 'epoch', orDefault(tonumber(redis.call('HGET', kStats(p), 'EpochFloor')), 0),
+    'seq', 0, 'createdAt', nowMsVal, 'updatedAt', nowMsVal,
     'ord', ordv, 'deadline', 0, 'readyAt', 0, 'fifo', 0,
     'depsUnsatisfied', 0, 'depsSucceeded', 0, 'depsSkipped', 0, 'depsFailed', 0)
   redis.call('HSET', kBlob(p, id), 'payload', payload, 'result', '', 'labels', labels)

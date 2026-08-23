@@ -75,6 +75,8 @@ func (s *scope) create(spec dw.NodeSpec, now int64) int32 {
 	r.status = dw.StatusNew
 	r.phase = dw.PhaseBlocked
 	r.alive = true
+	// Never restart the fencing epoch: see scope.epochFloor.
+	r.epoch = s.epochFloor
 	r.createdAt = now
 	r.updatedAt = now
 	if len(spec.Payload) > 0 {

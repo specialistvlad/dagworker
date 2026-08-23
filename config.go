@@ -40,6 +40,11 @@ const (
 	// Lua script without either becoming a latency outlier.
 	DefaultMaxBatchSize = 1000
 
+	// DefaultMaxClaimBatch bounds one claim. Large enough that batching is
+	// still worth doing on a networked backend, small enough that granting a
+	// batch cannot monopolise a single-threaded one.
+	DefaultMaxClaimBatch = 1000
+
 	// DefaultSweepBatchSize bounds how long a single sweep can stall a
 	// single-threaded backend or hold locks in a transactional one.
 	DefaultSweepBatchSize = 100
@@ -94,6 +99,16 @@ type ScopeConfig struct {
 	// MaxBatchSize caps the nodes in one [Manager.AddNodes] call.
 	MaxBatchSize int
 
+	// MaxClaimBatch caps how many nodes a single claim may take.
+	//
+	// This is a safety limit, not a tuning knob. On a backend that grants a
+	// batch inside one atomic operation -- a Lua script on Redis, one
+	// transaction on PostgreSQL -- an unbounded batch is an unbounded stall,
+	// and the network adapters pass a caller-supplied count straight through.
+	// A cap turns "a client asked for ten million" from an outage into a
+	// smaller batch than it hoped for.
+	MaxClaimBatch int
+
 	// SweepBatchSize caps the leases reclaimed in one sweep operation.
 	SweepBatchSize int
 
@@ -140,6 +155,9 @@ func (c ScopeConfig) Resolved() ScopeConfig {
 	if out.MaxBatchSize <= 0 {
 		out.MaxBatchSize = DefaultMaxBatchSize
 	}
+	if out.MaxClaimBatch <= 0 {
+		out.MaxClaimBatch = DefaultMaxClaimBatch
+	}
 	if out.SweepBatchSize <= 0 {
 		out.SweepBatchSize = DefaultSweepBatchSize
 	}
@@ -175,6 +193,14 @@ func (c ScopeConfig) validate() error {
 		return invalidArg("scope config", "max subscriber lag must not be negative")
 	}
 	return nil
+}
+
+// ClampClaimBatch brings a requested claim size inside the scope's cap. A
+// caller asking for more gets the cap rather than an error: taking fewer nodes
+// than requested is already an ordinary outcome, so there is nothing for the
+// caller to handle differently.
+func (c ScopeConfig) ClampClaimBatch(n int) int {
+	return min(max(n, 1), c.Resolved().MaxClaimBatch)
 }
 
 // ClampLease brings a requested lease duration inside the scope's bounds,

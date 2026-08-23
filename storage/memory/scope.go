@@ -89,6 +89,14 @@ type scope struct {
 	nextOrd  int64
 	nextFifo uint64
 
+	// epochFloor is the value a newly created node's fencing epoch starts
+	// from. It is raised past a node's epoch whenever that node is deleted,
+	// so an identifier that is recycled never re-issues an epoch the previous
+	// generation already used -- otherwise a worker still holding a lease from
+	// before the deletion could present an epoch that happens to match, and
+	// have its write accepted against a node it never claimed.
+	epochFloor uint64
+
 	ready     map[string]*pq.Heap // one per node kind
 	leases    *pq.Heap            // ordered by deadline
 	scheduled *pq.Heap            // ordered by readyAt
@@ -172,6 +180,10 @@ func (s *scope) alloc() int32 {
 }
 
 func (s *scope) release(h int32) {
+	// Retire this generation's epoch before the slot is reused.
+	if e := s.recs[h].epoch; e > s.epochFloor {
+		s.epochFloor = e
+	}
 	s.recs[h] = nodeRec{}
 	s.succ[h] = s.succ[h][:0]
 	s.pred[h] = s.pred[h][:0]

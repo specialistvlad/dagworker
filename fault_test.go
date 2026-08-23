@@ -28,6 +28,8 @@ type faultStore struct {
 	failClaim   atomic.Bool
 	failDoor    atomic.Bool
 	sweeps      atomic.Int64
+	claims      atomic.Int64
+	maxSeen     atomic.Int64
 }
 
 func (f *faultStore) Scopes(ctx context.Context) ([]dw.Scope, error) {
@@ -60,6 +62,13 @@ func (f *faultStore) CollectTerminal(ctx context.Context, scope dw.Scope, cutoff
 }
 
 func (f *faultStore) Claim(ctx context.Context, req dw.ClaimRequest) (dw.ClaimResult, error) {
+	f.claims.Add(1)
+	for {
+		seen := f.maxSeen.Load()
+		if int64(req.Max) <= seen || f.maxSeen.CompareAndSwap(seen, int64(req.Max)) {
+			break
+		}
+	}
 	if f.failClaim.Load() {
 		return dw.ClaimResult{}, errInjected
 	}
@@ -187,7 +196,20 @@ func TestRetentionSurvivesAFailingBackend(t *testing.T) {
 // underneath must still find the work.
 func TestClaimFallsBackWhenTheDoorbellFails(t *testing.T) {
 	t.Parallel()
-	fs, m, _ := newFaulty(t)
+	// A real clock for the Manager here, deliberately: the thing under test is
+	// its polling fallback, and a frozen clock would stop the very timer the
+	// test exists to prove fires.
+	clk := dagstoretest.NewFakeClock()
+	inner := memory.New(memory.WithClock(clk), memory.WithJitter(func(int64) int64 { return 0 }))
+	fs := &faultStore{Store: inner}
+	m, err := dw.New(fs, dw.WithPollInterval(30*time.Millisecond), dw.WithoutBackgroundSweeper())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = m.Close(context.Background())
+		_ = inner.Close(context.Background())
+	})
 	fs.failDoor.Store(true)
 	ctx := t.Context()
 
@@ -241,5 +263,71 @@ func TestSweepSurfacesStoreErrors(t *testing.T) {
 	fs.failScopes.Store(true)
 	if _, err := m.Scopes(t.Context()); !errors.Is(err, errInjected) {
 		t.Fatalf("Scopes gave %v", err)
+	}
+}
+
+// A doorbell that fails immediately and forever must not turn a blocking claim
+// into a spin. Before this was fixed the loop ran at about 1.9 million store
+// calls a second, which converts a degraded notification path into an outage of
+// the thing it was supposed to make faster.
+func TestClaimDoesNotBusyLoopOnBrokenDoorbell(t *testing.T) {
+	t.Parallel()
+	clk := dagstoretest.NewFakeClock()
+	inner := memory.New(memory.WithClock(clk))
+	fs := &faultStore{Store: inner}
+	m, err := dw.New(fs, dw.WithPollInterval(50*time.Millisecond), dw.WithoutBackgroundSweeper())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = m.Close(context.Background())
+		_ = inner.Close(context.Background())
+	})
+	fs.failDoor.Store(true)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	_, _ = m.Claim(ctx, "quiet")
+
+	// The poll interval is jittered into [25ms, 50ms), so 300ms permits at most
+	// a dozen or so attempts. A hundred is far above any legitimate count and
+	// far below a spin.
+	if n := fs.claims.Load(); n > 100 {
+		t.Fatalf("a failing doorbell produced %d claim attempts in 300ms — that is a busy loop", n)
+	}
+}
+
+// A claim batch must be capped before it reaches the store. On a backend that
+// grants a batch inside one atomic operation, an unbounded batch is an
+// unbounded stall — and the network adapters pass a caller-supplied count
+// straight through.
+func TestClaimBatchIsCapped(t *testing.T) {
+	t.Parallel()
+	fs, m, _ := newFaulty(t)
+	ctx := t.Context()
+
+	if err := m.Configure(ctx, "s", dw.ScopeConfig{MaxClaimBatch: 25}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	if err := m.AddNode(ctx, "s", "a", nil); err != nil {
+		t.Fatalf("AddNode: %v", err)
+	}
+	if _, err := m.ClaimBatch(ctx, "s", 10_000_000); err != nil {
+		t.Fatalf("ClaimBatch: %v", err)
+	}
+	if seen := fs.maxSeen.Load(); seen > 25 {
+		t.Fatalf("the store was asked for %d nodes despite a cap of 25", seen)
+	}
+
+	// And with no explicit cap, the library default still applies.
+	if err := m.Configure(ctx, "unbounded", dw.ScopeConfig{}); err != nil {
+		t.Fatalf("Configure: %v", err)
+	}
+	fs.maxSeen.Store(0)
+	if _, err := m.ClaimBatch(ctx, "unbounded", 10_000_000); err != nil {
+		t.Fatalf("ClaimBatch: %v", err)
+	}
+	if seen := fs.maxSeen.Load(); seen > int64(dw.DefaultMaxClaimBatch) {
+		t.Fatalf("the store was asked for %d nodes with no cap configured", seen)
 	}
 }

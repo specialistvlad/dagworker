@@ -643,6 +643,12 @@ func (s *Store) CancelScope(ctx context.Context, scope dw.Scope) ([]dw.Effect, e
 func deleteNodeRow(ctx context.Context, tx pgx.Tx, eng *engine, n nodeRow) error {
 	eng.leaveBucket(n.Phase, n.Status)
 	eng.addTotal(-1)
+	// Retire this generation's epoch before the identifier can be reused.
+	if _, err := tx.Exec(ctx,
+		`UPDATE dagw.scopes SET epoch_floor = GREATEST(epoch_floor, $2) WHERE scope = $1`,
+		eng.scope, widenI64(n.Epoch)); err != nil {
+		return fmt.Errorf("postgres: delete node: epoch floor: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM dagw.nodes WHERE id = $1`, n.ID); err != nil {
 		return fmt.Errorf("postgres: delete node: %w", err)
 	}

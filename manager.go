@@ -422,10 +422,27 @@ func (m *Manager) maintain(ctx context.Context) {
 			if m.isClosed() {
 				return
 			}
-			m.sweepScope(ctx, scope)
-			m.collectScope(ctx, scope)
+			// Each scope gets its own deadline. Without one, a single backend
+			// call that hangs stalls reclaim and retention for every other
+			// scope in the process, and does it silently: the loop is simply
+			// never seen again.
+			m.maintainScope(ctx, scope, interval)
 		}
 	}
+}
+
+// maintenanceTimeout bounds one scope's maintenance pass. It is derived from
+// the sweep interval so that a slow backend degrades to "skipped this round"
+// rather than "the loop stopped".
+func maintenanceTimeout(interval time.Duration) time.Duration {
+	return min(max(interval*4, 5*time.Second), 2*time.Minute)
+}
+
+func (m *Manager) maintainScope(ctx context.Context, scope Scope, interval time.Duration) {
+	sctx, cancel := context.WithTimeout(ctx, maintenanceTimeout(interval))
+	defer cancel()
+	m.sweepScope(sctx, scope)
+	m.collectScope(sctx, scope)
 }
 
 func (m *Manager) sweepScope(ctx context.Context, scope Scope) {

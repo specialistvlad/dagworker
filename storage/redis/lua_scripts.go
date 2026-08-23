@@ -296,17 +296,21 @@ while granted < maxN do
   if bestId == nil then break end
   redis.call('ZREM', kReady(p, bestKind), bestId)
 
-  local n = redis.call('HMGET', kNode(p, bestId), 'phase', 'status', 'epoch')
+  local n = redis.call('HMGET', kNode(p, bestId), 'phase', 'status', 'epoch', 'attempt')
   local oldPhase, oldStatus = tonumber(n[1]), tonumber(n[2])
-  local epoch = tonumber(n[3]) + 1
+  -- epoch and attempt are separate counters. The epoch fences writes and must
+  -- never go backwards for a recycled identifier; the attempt counts tries and
+  -- must start again at zero for what is, to the caller, a new node.
+  local epoch = (tonumber(n[3]) or 0) + 1
+  local attempt = (tonumber(n[4]) or 0) + 1
   local deadline = nowMsVal + leaseMs
   adjustBucket(p, oldPhase, oldStatus, -1)
   redis.call('HSET', kNode(p, bestId), 'phase', PHASE_CLAIMED, 'status', STATUS_INPROGRESS,
-    'epoch', epoch, 'attempt', epoch, 'updatedAt', nowMsVal, 'deadline', deadline)
+    'epoch', epoch, 'attempt', attempt, 'updatedAt', nowMsVal, 'deadline', deadline)
   adjustBucket(p, PHASE_CLAIMED, STATUS_INPROGRESS, 1)
   redis.call('ZADD', kLeases(p), deadline, bestId)
 
-  recordEvent(p, bestId, EVENT_TRANSITION, oldStatus, STATUS_INPROGRESS, REASON_NONE, '', epoch, bestKind, nowMsVal)
+  recordEvent(p, bestId, EVENT_TRANSITION, oldStatus, STATUS_INPROGRESS, REASON_NONE, '', attempt, bestKind, nowMsVal)
   local nodeFlat = redis.call('HGETALL', kNode(p, bestId))
   local blobFlat = redis.call('HGETALL', kBlob(p, bestId))
   table.insert(leases, { bestId, epoch, deadline, nodeFlat, blobFlat })

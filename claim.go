@@ -90,6 +90,14 @@ func (m *Manager) ClaimBatch(ctx context.Context, scope Scope, n int, opts ...Cl
 	if err != nil {
 		return nil, err
 	}
+	// Clamp before the store sees it. A backend that grants a batch atomically
+	// cannot defend itself mid-operation, and the network adapters hand this
+	// number straight through from a caller.
+	if cfg, cerr := m.store.ScopeConfig(ctx, scope); cerr == nil {
+		req.Max = cfg.ClampClaimBatch(req.Max)
+	} else {
+		req.Max = ScopeConfig{}.ClampClaimBatch(req.Max)
+	}
 	res, err := m.store.Claim(ctx, req)
 	m.publish(scope, res.Effects)
 	if err != nil {
@@ -167,10 +175,18 @@ func (m *Manager) waitForWork(ctx context.Context, scope Scope, kinds []string) 
 			return ErrClosed
 		default:
 			// A doorbell that fails is a degraded doorbell, not a broken
-			// claim. Log it and let the caller poll.
+			// claim — but it must not become a busy loop. WaitForWork can
+			// return an error immediately and forever (a Redis pool with no
+			// free connection, a Postgres LISTEN that cannot be established),
+			// and returning here would send the caller straight back into
+			// another claim with no wait at all: measured at 1.9 million
+			// claims a second against a broken doorbell, which turns a
+			// degraded notification path into a self-inflicted outage.
+			//
+			// So fall through to the timed wait below, which is the fallback
+			// the doorbell was an optimisation over in the first place.
 			m.cfg.logger.WarnContext(ctx, "dagworker: doorbell failed, falling back to polling",
 				"scope", scope, "error", err)
-			return ctx.Err()
 		}
 	}
 

@@ -334,6 +334,40 @@ func leaseTests() []conformanceTest {
 			s.statusIs("a", dw.StatusSuccess)
 		}},
 
+		{"T-FENCE-SURVIVES-RECREATE", func(s *suite) {
+			// A node identifier can be reused: delete one and add another with
+			// the same id. If the fencing epoch restarts, a worker still
+			// holding a lease from the deleted generation can present an epoch
+			// that happens to match the new one, and its write is accepted
+			// against a node it never claimed.
+			//
+			// The epoch must therefore never go backwards for an identifier
+			// within a scope, however many times that identifier is recycled.
+			s.add(spec("recycled"))
+			stale := s.claim()
+
+			if _, err := s.st.Cancel(s.ctx, s.scope, []dw.NodeID{"recycled"}); err != nil {
+				s.t.Fatalf("Cancel: %v", err)
+			}
+			if _, err := s.st.RemoveNode(s.ctx, s.scope, "recycled", dw.CascadeReject); err != nil {
+				s.t.Fatalf("RemoveNode: %v", err)
+			}
+			s.add(spec("recycled"))
+
+			fresh := s.claim()
+			if fresh.Epoch <= stale.Epoch {
+				s.t.Fatalf("the recycled identifier was re-issued at epoch %d, not above the "+
+					"deleted generation's %d — a stale lease can match it", fresh.Epoch, stale.Epoch)
+			}
+			if _, err := s.st.Complete(s.ctx, dw.CompleteRequest{Lease: stale, Success: true}); err == nil {
+				s.t.Fatal("a lease from a deleted generation was accepted against its replacement")
+			}
+			// And the current holder still works.
+			if _, err := s.st.Complete(s.ctx, dw.CompleteRequest{Lease: fresh, Success: true}); err != nil {
+				s.t.Fatalf("the current holder could not complete: %v", err)
+			}
+		}},
+
 		{"T-FENCE-DOUBLE-ACK", func(s *suite) {
 			s.add(spec("a"))
 			l := s.claim()

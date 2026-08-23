@@ -90,6 +90,7 @@ func tracedStore(t *testing.T) (*postgresstore.Store, *tripCounter) {
 	return st, counter
 }
 
+//nolint:paralleltest // counts round trips on a shared connection; a parallel sibling would be counted too
 func TestRoundTripBudget_AddNodes(t *testing.T) {
 	st, counter := tracedStore(t)
 	ctx := t.Context()
@@ -132,6 +133,7 @@ func TestRoundTripBudget_AddNodes(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // counts round trips on a shared connection
 func TestRoundTripBudget_ClaimComplete(t *testing.T) {
 	st, counter := tracedStore(t)
 	ctx := t.Context()
@@ -183,6 +185,8 @@ func TestRoundTripBudget_ClaimComplete(t *testing.T) {
 // claim, and if its query stops using the partial index the cost grows with the
 // scope: this asserts the cost does not move between a small graph and one
 // fifty times larger.
+//
+//nolint:paralleltest // counts round trips on a shared connection
 func TestClaimCostDoesNotGrowWithScope(t *testing.T) {
 	st, counter := tracedStore(t)
 	ctx := t.Context()

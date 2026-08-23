@@ -60,7 +60,7 @@ WITH claimed AS (
 	LIMIT 1
 )
 UPDATE dagw.nodes n
-SET phase = %d, status = %d, epoch = n.epoch + 1, attempt = n.epoch + 1,
+SET phase = %d, status = %d, epoch = n.epoch + 1, attempt = n.attempt + 1,
     worker = $3, deadline = clock_timestamp() + make_interval(secs => $4), seq = n.seq + 1
 FROM claimed c
 WHERE n.id = c.id

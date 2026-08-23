@@ -11,15 +11,19 @@ import (
 	"github.com/specialistvlad/dagworker/internal/pq"
 )
 
-// clampAttempt narrows the lease epoch to the attempt counter's width. The two
-// are the same number by design, and a node reaching four billion attempts is
-// not a scenario worth representing -- but silently wrapping to zero would
-// reset the retry budget, so it saturates instead.
-func clampAttempt(epoch uint64) uint32 {
-	if epoch > math.MaxUint32 {
-		return math.MaxUint32
+// bumpAttempt counts one more attempt, saturating rather than wrapping.
+//
+// The attempt counter and the fencing epoch were originally the same number.
+// They are not: an epoch must never go backwards for a recycled identifier,
+// while an attempt count must start again at zero for what is, to the caller,
+// a new node. Fusing them meant that fixing one broke the other -- a recycled
+// node would have inherited a huge attempt count and been terminal on its
+// first failure.
+func bumpAttempt(n uint32) uint32 {
+	if n == math.MaxUint32 {
+		return n
 	}
-	return uint32(epoch)
+	return n + 1
 }
 
 // effectiveRetry folds a node's own retry policy over the scope's, field by
@@ -174,7 +178,7 @@ func (st *Store) Claim(_ context.Context, req dw.ClaimRequest) (dw.ClaimResult, 
 		from := r.status
 		s.leaveBucket(h)
 		r.epoch++
-		r.attempt = clampAttempt(r.epoch)
+		r.attempt = bumpAttempt(r.attempt)
 		r.phase = dw.PhaseClaimed
 		r.status = dw.StatusInProgress
 		r.worker = req.WorkerID
