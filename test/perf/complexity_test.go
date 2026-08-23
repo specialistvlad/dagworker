@@ -145,7 +145,7 @@ func TestComplexity_Claim(t *testing.T) {
 			curve := make([]measurement, 0, len(sweep))
 			for _, n := range sweep {
 				st := backend.New(t)
-				scope := dw.Scope(fmt.Sprintf("claim-%d", n))
+				scope := perf.Scope("claim-%d", n)
 				perf.SeedWide(t, st, scope, n)
 
 				req := dw.ClaimRequest{Scope: scope, Max: 1, Timeout: time.Hour}
@@ -177,7 +177,7 @@ func TestComplexity_GetNode(t *testing.T) {
 			curve := make([]measurement, 0, len(sweep))
 			for _, n := range sweep {
 				st := backend.New(t)
-				scope := dw.Scope(fmt.Sprintf("get-%d", n))
+				scope := perf.Scope("get-%d", n)
 				perf.SeedWide(t, st, scope, n)
 
 				perOp := timePerOp(t, measureIters, func(i int) {
@@ -208,7 +208,7 @@ func TestComplexity_AddNodeCausal(t *testing.T) {
 			curve := make([]measurement, 0, len(sweep))
 			for _, n := range sweep {
 				st := backend.New(t)
-				scope := dw.Scope(fmt.Sprintf("add-%d", n))
+				scope := perf.Scope("add-%d", n)
 				perf.SeedWide(t, st, scope, n)
 
 				next := n
@@ -241,7 +241,7 @@ func TestComplexity_CompleteFanOut(t *testing.T) {
 			curve := make([]measurement, 0, len(sweep))
 			for _, n := range sweep {
 				st := backend.New(t)
-				scope := dw.Scope(fmt.Sprintf("complete-%d", n))
+				scope := perf.Scope("complete-%d", n)
 				perf.SeedWide(t, st, scope, n)
 
 				req := dw.ClaimRequest{Scope: scope, Max: 1, Timeout: time.Hour}
@@ -278,7 +278,7 @@ func TestComplexity_ScopeStats(t *testing.T) {
 			curve := make([]measurement, 0, len(sweep))
 			for _, n := range sweep {
 				st := backend.New(t)
-				scope := dw.Scope(fmt.Sprintf("stats-%d", n))
+				scope := perf.Scope("stats-%d", n)
 				perf.SeedWide(t, st, scope, n)
 
 				perOp := timePerOp(t, measureIters, func(int) {
@@ -387,11 +387,12 @@ func TestMillionNodes(t *testing.T) {
 			st := backend.New(t)
 
 			seedStart := time.Now()
-			perf.SeedWide(t, st, "million", n)
+			scope := perf.Scope("million")
+			perf.SeedWide(t, st, scope, n)
 			t.Logf("seeded %d nodes in %v (%v per node)",
 				n, time.Since(seedStart), time.Since(seedStart)/n)
 
-			stats, err := st.ScopeStats(ctx, "million")
+			stats, err := st.ScopeStats(ctx, scope)
 			if err != nil {
 				t.Fatalf("ScopeStats: %v", err)
 			}
@@ -400,17 +401,17 @@ func TestMillionNodes(t *testing.T) {
 			}
 
 			statsCost := timePerOp(t, 500, func(int) {
-				if _, err := st.ScopeStats(ctx, "million"); err != nil {
+				if _, err := st.ScopeStats(ctx, scope); err != nil {
 					t.Fatalf("ScopeStats: %v", err)
 				}
 			})
 			getCost := timePerOp(t, 500, func(i int) {
-				if _, err := st.GetNode(ctx, "million", perf.NodeID((i*7919)%n)); err != nil {
+				if _, err := st.GetNode(ctx, scope, perf.NodeID((i*7919)%n)); err != nil {
 					t.Fatalf("GetNode: %v", err)
 				}
 			})
 
-			req := dw.ClaimRequest{Scope: "million", Max: 1, Timeout: time.Hour}
+			req := dw.ClaimRequest{Scope: scope, Max: 1, Timeout: time.Hour}
 			claimCost := timePerOp(t, 500, func(int) {
 				res, err := st.Claim(ctx, req)
 				if err != nil {

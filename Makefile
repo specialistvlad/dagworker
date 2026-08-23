@@ -75,7 +75,7 @@ logs: ## Tail the test databases' logs
 	$(COMPOSE) logs -f
 
 .PHONY: integration
-integration: up ## Run every suite against real PostgreSQL and Redis
+integration: up reset-db ## Run every suite against real PostgreSQL and Redis
 	@for m in $(MODULES); do \
 		echo "==> integration $$m"; \
 		(cd $$m && DAGWORKER_INTEGRATION=1 go test -count=1 -race -tags=integration -timeout 25m ./...) || exit 1; \
@@ -125,9 +125,10 @@ million: up reset-db ## Measure every backend at 1,000,000 nodes (slow: ~25 min)
 bench: ## Throughput benchmarks (absolute numbers; compare with benchstat)
 	cd test/perf && go test -count=1 -run '^$$' -bench . -benchmem -timeout 30m ./...
 	@echo
-	@echo "note: the benchmarks leave their graphs behind. A million nodes in a"
-	@echo "shared database slows every later test enough to make the"
-	@echo "timing-sensitive ones flaky. Run 'make reset-db' before 'make integration'."
+	@echo "note: the benchmarks leave their graphs behind, and a million nodes in a"
+	@echo "shared database slows every later test. 'make integration' and"
+	@echo "'make complexity' both start with reset-db, so this costs disk, not"
+	@echo "correctness -- 'make reset-db' reclaims it."
 
 .PHONY: tidy
 tidy: ## Tidy every module's dependencies
@@ -154,3 +155,16 @@ check-all: check integration complexity ## Everything except the million-node ru
 
 .PHONY: check-everything
 check-everything: check-all million ## check-all plus the 1M measurement (~30 min)
+
+.PHONY: all
+all: check-all ## Alias for check-all -- everything but the ~25 min million-node run
+	@echo
+	@echo "all: green. 'make check-everything' adds the 1,000,000-node measurement."
+
+# Runs only for a target with no rule of its own, which is otherwise a bare
+# "No rule to make target" with no hint about what the real targets are.
+.DEFAULT:
+	@echo "make: there is no '$@' target." >&2
+	@echo >&2
+	@$(MAKE) --no-print-directory help >&2
+	@exit 1

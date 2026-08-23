@@ -5,14 +5,27 @@ and mostly mechanical.
 
 ## Before you write code
 
+**Never commit to `main`.** Every change goes on a branch prefixed with the
+commit type it carries — `feat/`, `fix/`, `docs/`, `test/`, `perf/`,
+`refactor/`, `ci/`, `chore/` — and reaches `main` through a pull request.
+
 **`make check` must pass.** That is `tidy-check`, `lint`, `race` and `cover`.
 Nothing merges red.
 
 ```
 make up          # start PostgreSQL and Redis on their test ports
-make check-all   # everything, databases included
+make all         # everything, databases included (alias for check-all)
 make down
 ```
+
+`make` with no target lists every target and what it does, and an unknown
+target prints the same list rather than a bare "No rule to make target".
+
+| | what it runs | needs databases | roughly |
+|---|---|---|---|
+| `make check` | tidy, lint, race, coverage | no | 4 min |
+| `make all` | `check` + integration + complexity | yes | 20 min |
+| `make check-everything` | `all` + the 1,000,000-node measurement | yes | 45 min |
 
 If `make check` fails on `main`, that is a bug and a report is welcome.
 

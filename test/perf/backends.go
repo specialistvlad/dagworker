@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -75,6 +76,22 @@ func Env(key, fallback string) string {
 // with the graph size being measured, which would quietly contaminate the very
 // ratio the guards exist to check.
 func NodeID(i int) dw.NodeID { return dw.NodeID(fmt.Sprintf("n%09d", i)) }
+
+// runToken makes every scope name in this package unique to one process, so a
+// suite run twice against the same database does not find its own leftovers.
+//
+// It matters more here than anywhere else in the repository. These tests seed
+// a graph and then drain it, so a scope that already exists is a scope whose
+// nodes are already terminal: AddNodes is idempotent by design and adds
+// nothing, the ready set stays empty, and the measurement fails with "ran out
+// of claimable nodes" -- or, worse on a shape that happens to leave one node
+// ready, succeeds while measuring something else entirely.
+var runToken = strconv.FormatInt(time.Now().UnixNano(), 36)
+
+// Scope names a scope for one measurement, unique to this process.
+func Scope(format string, args ...any) dw.Scope {
+	return dw.Scope(runToken + "-" + fmt.Sprintf(format, args...))
+}
 
 // SeedChain fills a scope with n nodes in one long dependency chain. This is
 // the worst shape for a scheduler: every completion releases exactly one
