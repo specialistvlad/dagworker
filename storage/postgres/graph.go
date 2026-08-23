@@ -439,7 +439,7 @@ func (s *Store) RemoveNode(ctx context.Context, scope dw.Scope, id dw.NodeID, po
 		return nil, fmt.Errorf("postgres: RemoveNode: detach predecessors: %w", err)
 	}
 
-	if err := deleteNodeRow(ctx, tx, eng, scope, n); err != nil {
+	if err := deleteNodeRow(ctx, tx, eng, n); err != nil {
 		return nil, err
 	}
 
@@ -550,8 +550,10 @@ func (s *Store) CancelScope(ctx context.Context, scope dw.Scope) ([]dw.Effect, e
 // never becomes true, with nothing left in the graph to explain why.
 //
 // It does not touch edges: the caller detaches those first, because what should
-// happen to a successor depends on why the node is going away.
-func deleteNodeRow(ctx context.Context, tx pgx.Tx, eng *engine, scope dw.Scope, n nodeRow) error {
+// happen to a successor depends on why the node is going away. The scope comes
+// from the engine rather than a parameter, so the two cannot disagree about
+// whose counters are being adjusted.
+func deleteNodeRow(ctx context.Context, tx pgx.Tx, eng *engine, n nodeRow) error {
 	eng.leaveBucket(n.Phase, n.Status)
 	eng.addTotal(-1)
 	if _, err := tx.Exec(ctx, `DELETE FROM dagw.nodes WHERE id = $1`, n.ID); err != nil {

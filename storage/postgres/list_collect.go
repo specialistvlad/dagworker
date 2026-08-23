@@ -145,7 +145,7 @@ func (s *Store) CollectTerminal(ctx context.Context, scope dw.Scope, cutoff time
 		if _, err := tx.Exec(ctx, `DELETE FROM dagw.edges WHERE scope = $1 AND to_id = $2`, scopeName, c.id); err != nil {
 			return 0, false, fmt.Errorf("postgres: CollectTerminal: detach: %w", err)
 		}
-		if err := deleteNodeRow(ctx, tx, eng, scope, n); err != nil {
+		if err := deleteNodeRow(ctx, tx, eng, n); err != nil {
 			return 0, false, err
 		}
 	}
