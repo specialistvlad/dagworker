@@ -59,9 +59,14 @@ func New(m *dagworker.Manager, opts ...Option) (*Server, error) {
 	s.mux = http.NewServeMux()
 	s.routes()
 
+	// Authorization sits inside recovery and logging — so a rejection is
+	// logged and a panicking Authorizer cannot take the process down — and
+	// outside everything else, so no handler can be reached without passing
+	// it, including handlers added after this line was written.
 	handler := chain(s.mux,
 		recoveryMiddleware(o.logger),
 		loggingMiddleware(o.logger),
+		s.authMiddleware(o.authorizer),
 		bodyLimitMiddleware(o.maxBodyBytes),
 	)
 

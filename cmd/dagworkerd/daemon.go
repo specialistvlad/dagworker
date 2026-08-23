@@ -79,12 +79,37 @@ func newDaemon(ctx context.Context, cfg Config, logger *slog.Logger) (*daemon, e
 func (d *daemon) listen(ctx context.Context, cfg Config) error {
 	var lc net.ListenConfig
 
+	tokens, err := loadAuthTokens(cfg)
+	if err != nil {
+		return err
+	}
+	if err := checkAuthPosture(cfg, tokens); err != nil {
+		return err
+	}
+	if len(tokens) == 0 {
+		// Said once, at startup, where an operator reading the boot log can
+		// see it. The refusal above already covers the dangerous case; this
+		// covers the loopback and --insecure ones, which are legitimate but
+		// should not be silent.
+		d.logger.WarnContext(ctx, "dagworkerd: serving with no authentication",
+			"grpc_addr", cfg.GRPCAddr, "http_addr", cfg.HTTPAddr, "insecure", cfg.Insecure)
+	}
+
 	if cfg.GRPCAddr != "" {
 		lis, err := lc.Listen(ctx, "tcp", cfg.GRPCAddr)
 		if err != nil {
 			return fmt.Errorf("dagworkerd: listening on grpc addr %s: %w", cfg.GRPCAddr, err)
 		}
-		srv, err := grpcadapter.New(d.mgr, grpcadapter.WithLogger(d.logger))
+		grpcOpts := []grpcadapter.Option{grpcadapter.WithLogger(d.logger)}
+		if len(tokens) > 0 {
+			grpcOpts = append(grpcOpts, grpcadapter.WithAuthorizer(grpcadapter.BearerToken(tokens...)))
+		}
+		// grpcadapter.New takes no context: it builds a server, it does not
+		// start one. contextcheck reaches through it to the stream
+		// interceptor's ss.Context(), which is the only context a
+		// StreamServerInterceptor is ever given.
+		//nolint:contextcheck // New has no ctx parameter; there is nothing to propagate
+		srv, err := grpcadapter.New(d.mgr, grpcOpts...)
 		if err != nil {
 			return fmt.Errorf("dagworkerd: constructing grpc adapter: %w", err)
 		}
@@ -95,16 +120,20 @@ func (d *daemon) listen(ctx context.Context, cfg Config) error {
 		if err != nil {
 			return fmt.Errorf("dagworkerd: listening on http addr %s: %w", cfg.HTTPAddr, err)
 		}
-		srv, err := httpadapter.New(d.mgr, httpadapter.WithLogger(d.logger))
+		httpOpts := []httpadapter.Option{httpadapter.WithLogger(d.logger)}
+		if len(tokens) > 0 {
+			httpOpts = append(httpOpts, httpadapter.WithAuthorizer(httpadapter.BearerToken(tokens...)))
+		}
+		srv, err := httpadapter.New(d.mgr, httpOpts...)
 		if err != nil {
 			return fmt.Errorf("dagworkerd: constructing http adapter: %w", err)
 		}
 		d.httpLis, d.httpSrv = lis, srv
 	}
 
-	adminLis, err := lc.Listen(ctx, "tcp", cfg.AdminAddr)
-	if err != nil {
-		return fmt.Errorf("dagworkerd: listening on admin addr %s: %w", cfg.AdminAddr, err)
+	adminLis, listenErr := lc.Listen(ctx, "tcp", cfg.AdminAddr)
+	if listenErr != nil {
+		return fmt.Errorf("dagworkerd: listening on admin addr %s: %w", cfg.AdminAddr, listenErr)
 	}
 	d.adminLis = adminLis
 	mux := newAdminMux(d.mgr, &d.ready, d.startedAt, cfg.AdminPprof)

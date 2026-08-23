@@ -16,6 +16,7 @@
 package client
 
 import (
+	"context"
 	"time"
 
 	"google.golang.org/grpc"
@@ -57,6 +58,44 @@ func (f dialOptionFunc) apply(c *dialConfig) { f(c) }
 func WithDialOptions(opts ...grpc.DialOption) DialOption {
 	return dialOptionFunc(func(c *dialConfig) { c.extraDialOpts = append(c.extraDialOpts, opts...) })
 }
+
+// WithBearerToken attaches "authorization: Bearer <token>" to every RPC on
+// the connection, which is what a server configured with
+// grpcadapter.BearerToken expects.
+//
+// It requires transport security, and grpc-go enforces that: dialing with
+// insecure.NewCredentials() and this option fails at RPC time rather than
+// putting the credential on the wire in plaintext. A deployment that has
+// genuinely made plaintext safe — a unix socket, a loopback listener — can
+// opt out through [WithDialOptions] and its own
+// [google.golang.org/grpc/credentials.PerRPCCredentials], which is
+// deliberately more work than the safe path.
+//
+// An empty token is ignored rather than sent as an empty header, so a missing
+// environment variable produces the server's own Unauthenticated rather than
+// a malformed call.
+func WithBearerToken(token string) DialOption {
+	return dialOptionFunc(func(c *dialConfig) {
+		if token == "" {
+			return
+		}
+		c.extraDialOpts = append(c.extraDialOpts,
+			grpc.WithPerRPCCredentials(bearerCreds(token)))
+	})
+}
+
+// bearerCreds is a [credentials.PerRPCCredentials] carrying a static token.
+type bearerCreds string
+
+// GetRequestMetadata implements [credentials.PerRPCCredentials].
+func (b bearerCreds) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
+	return map[string]string{"authorization": "Bearer " + string(b)}, nil
+}
+
+// RequireTransportSecurity implements [credentials.PerRPCCredentials]. True:
+// see [WithBearerToken] on why the plaintext case is an explicit opt-out
+// rather than a flag.
+func (b bearerCreds) RequireTransportSecurity() bool { return true }
 
 // Dial opens a connection suitable for a long-lived worker.
 //

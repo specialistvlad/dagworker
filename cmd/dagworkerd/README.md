@@ -57,6 +57,8 @@ environment variable or editing a file first.
 | `--postgres-dsn-file` | `DAGWORKERD_POSTGRES_DSN_FILE` | `postgres_dsn_file` | none | Path to a file holding the full PostgreSQL DSN. Required when `--store=postgres`. |
 | `--grpc-addr` | `DAGWORKERD_GRPC_ADDR` | `grpc_addr` | disabled | Listen address for the gRPC adapter, e.g. `:9443`. Empty disables it. |
 | `--http-addr` | `DAGWORKERD_HTTP_ADDR` | `http_addr` | disabled | Listen address for the HTTP/JSON adapter, e.g. `:8080`. Empty disables it. |
+| `--auth-token-file` | `DAGWORKERD_AUTH_TOKEN_FILE` | `auth_token_file` | none | Path to a file of bearer tokens both adapters accept, one per line. Required to serve a non-loopback address. |
+| `--insecure` | `DAGWORKERD_INSECURE` | `insecure` | `false` | Serve a non-loopback address with no authentication. |
 | `--admin-addr` | `DAGWORKERD_ADMIN_ADDR` | `admin_addr` | `127.0.0.1:9090` | Listen address for `/healthz`, `/readyz`, `/metrics`, and pprof. |
 | `--admin-pprof` | `DAGWORKERD_ADMIN_PPROF` | `admin_pprof` | `false` | Expose `/debug/pprof/*` on the admin listener. |
 | `--log-level` | `DAGWORKERD_LOG_LEVEL` | `log_level` | `info` | `debug`, `info`, `warn`, or `error`. |
@@ -66,6 +68,42 @@ environment variable or editing a file first.
 
 At least one of `--grpc-addr` / `--http-addr` must be set — a daemon with
 neither enabled would serve nothing but its own admin endpoints.
+
+### Authentication
+
+**A reachable address needs a credential, and the daemon will not start
+without one.** If `--grpc-addr` or `--http-addr` names anything the daemon
+cannot prove is loopback — `:8080` and `0.0.0.0:8080` both count — and no
+`--auth-token-file` is configured, startup fails:
+
+```
+dagworkerd: refusing to serve a non-loopback address with no credential
+configured; set --auth-token-file, or bind a loopback address, or pass
+--insecure to say you meant it
+```
+
+The token file holds one token per line; blank lines and `#` comments are
+ignored. More than one line is allowed so a token can be rotated without a
+window in which either is rejected — write the new one alongside the old,
+restart, then drop the old on the next restart. A file with no tokens in it is
+also a startup failure: an authorizer that accepts nothing is indistinguishable
+in the logs from one that works, right up until every worker is locked out.
+
+```bash
+printf 'the-new-token\nthe-old-token\n' > /run/secrets/dagworker-tokens
+chmod 600 /run/secrets/dagworker-tokens
+dagworkerd --http-addr=:8080 --auth-token-file=/run/secrets/dagworker-tokens
+```
+
+Clients send it as an ordinary bearer credential — `client.WithBearerToken` in
+both the Go HTTP and gRPC clients, `Authorization: Bearer <token>` in anything
+else.
+
+A shared token establishes *that a caller is one of ours*; it is not an
+authorization model, and every holder is the same principal. It is also
+readable by anything on the network path, so it belongs behind TLS. A
+deployment with real identities should embed the adapters in its own process
+and pass `WithAuthorizer` — see [SECURITY.md](../../SECURITY.md).
 
 ### Secrets are file paths, never values
 
@@ -246,6 +284,11 @@ reports something identifiable with no separate release-time ldflags step.
   and this daemon is not permitted to modify another module to add one; the
   metrics it does expose are what is genuinely observable from outside both
   adapters.
+- **Authentication is a shared bearer token, not identities.** Every holder of
+  a token in `--auth-token-file` is the same principal with access to every
+  scope. Per-scope or per-operation rules, revocation, and an audit trail
+  against a real identity need the adapters' `WithAuthorizer` hook from a
+  process you write; this daemon does not expose a way to configure one.
 - **No TLS support yet** on the gRPC or HTTP listeners. In most deployments
   of this shape, TLS termination belongs to a service mesh or an L7 load
   balancer sitting in front of the daemon (see the multi-replica discussion

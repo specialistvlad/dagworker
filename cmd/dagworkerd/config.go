@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -54,6 +55,20 @@ type Config struct {
 	// HTTPAddr is the listen address for the HTTP/JSON adapter. Empty
 	// disables it.
 	HTTPAddr string
+
+	// AuthTokenFile is the path to a file holding the bearer tokens both
+	// network adapters accept: one per line, blank lines and "#" comments
+	// ignored. Several lines are allowed so a token can be rotated without a
+	// window in which one of the two is rejected. Empty means no
+	// authentication, which is only permitted on a loopback listener or with
+	// Insecure set.
+	AuthTokenFile string
+
+	// Insecure records that the operator has deliberately chosen to serve a
+	// reachable address with no credential. It exists so that decision is
+	// something someone typed, rather than something the default did quietly
+	// on their behalf.
+	Insecure bool
 
 	// AdminAddr is the listen address for /healthz, /readyz, /metrics and
 	// pprof — always separate from GRPCAddr/HTTPAddr, per the adapter
@@ -103,6 +118,8 @@ type overrides struct {
 	PostgresDSNFile   *string
 	GRPCAddr          *string
 	HTTPAddr          *string
+	AuthTokenFile     *string
+	Insecure          *bool
 	AdminAddr         *string
 	AdminPprof        *bool
 	LogLevel          *string
@@ -130,6 +147,12 @@ func (o overrides) apply(cfg *Config) {
 	}
 	if o.HTTPAddr != nil {
 		cfg.HTTPAddr = *o.HTTPAddr
+	}
+	if o.AuthTokenFile != nil {
+		cfg.AuthTokenFile = *o.AuthTokenFile
+	}
+	if o.Insecure != nil {
+		cfg.Insecure = *o.Insecure
 	}
 	if o.AdminAddr != nil {
 		cfg.AdminAddr = *o.AdminAddr
@@ -159,6 +182,8 @@ type fileOverrides struct {
 	PostgresDSNFile   *string `yaml:"postgres_dsn_file"`
 	GRPCAddr          *string `yaml:"grpc_addr"`
 	HTTPAddr          *string `yaml:"http_addr"`
+	AuthTokenFile     *string `yaml:"auth_token_file"`
+	Insecure          *bool   `yaml:"insecure"`
 	AdminAddr         *string `yaml:"admin_addr"`
 	AdminPprof        *bool   `yaml:"admin_pprof"`
 	LogLevel          *string `yaml:"log_level"`
@@ -173,6 +198,7 @@ func (f fileOverrides) toOverrides() (overrides, error) {
 	o := overrides{
 		Store: f.Store, RedisAddr: f.RedisAddr, RedisPasswordFile: f.RedisPasswordFile,
 		PostgresDSNFile: f.PostgresDSNFile, GRPCAddr: f.GRPCAddr, HTTPAddr: f.HTTPAddr,
+		AuthTokenFile: f.AuthTokenFile, Insecure: f.Insecure,
 		AdminAddr: f.AdminAddr, AdminPprof: f.AdminPprof, LogLevel: f.LogLevel, LogFormat: f.LogFormat,
 	}
 	if f.ShutdownTimeout != nil {
@@ -214,11 +240,16 @@ const (
 	envPostgresDSNFile   = "DAGWORKERD_POSTGRES_DSN_FILE"
 	envGRPCAddr          = "DAGWORKERD_GRPC_ADDR"
 	envHTTPAddr          = "DAGWORKERD_HTTP_ADDR"
-	envAdminAddr         = "DAGWORKERD_ADMIN_ADDR"
-	envAdminPprof        = "DAGWORKERD_ADMIN_PPROF"
-	envLogLevel          = "DAGWORKERD_LOG_LEVEL"
-	envLogFormat         = "DAGWORKERD_LOG_FORMAT"
-	envShutdownTimeout   = "DAGWORKERD_SHUTDOWN_TIMEOUT"
+	// #nosec G101 -- this is the name of an environment variable naming a
+	// file path, not a credential; the tokens themselves are only ever read
+	// from that file (see Config's doc comment on why).
+	envAuthTokenFile   = "DAGWORKERD_AUTH_TOKEN_FILE"
+	envInsecure        = "DAGWORKERD_INSECURE"
+	envAdminAddr       = "DAGWORKERD_ADMIN_ADDR"
+	envAdminPprof      = "DAGWORKERD_ADMIN_PPROF"
+	envLogLevel        = "DAGWORKERD_LOG_LEVEL"
+	envLogFormat       = "DAGWORKERD_LOG_FORMAT"
+	envShutdownTimeout = "DAGWORKERD_SHUTDOWN_TIMEOUT"
 )
 
 // lookupEnv mirrors [os.LookupEnv]'s (value, present) shape. Tests supply a
@@ -250,6 +281,13 @@ func loadEnvOverrides(getenv lookupEnv) (overrides, error) {
 	}
 	if v, ok := getenv(envHTTPAddr); ok {
 		o.HTTPAddr = &v
+	}
+	if v, ok := getenv(envAuthTokenFile); ok {
+		o.AuthTokenFile = &v
+	}
+	if v, ok := getenv(envInsecure); ok {
+		b := v == "1" || strings.EqualFold(v, "true")
+		o.Insecure = &b
 	}
 	if v, ok := getenv(envAdminAddr); ok {
 		o.AdminAddr = &v
@@ -293,6 +331,8 @@ func loadEnvBoolDuration(getenv lookupEnv, o *overrides) error {
 type flagValues struct {
 	store, redisAddr, redisPasswordFile, postgresDSNFile string
 	grpcAddr, httpAddr, adminAddr                        string
+	authTokenFile                                        string
+	insecure                                             bool
 	adminPprof                                           bool
 	logLevel, logFormat                                  string
 	shutdownTimeout                                      time.Duration
@@ -319,6 +359,8 @@ func newFlagSet(name string, output io.Writer) (*flag.FlagSet, *flagValues) {
 		"path to a file holding the postgres DSN, required when --store=postgres (env "+envPostgresDSNFile+")")
 	fs.StringVar(&v.grpcAddr, "grpc-addr", "", "gRPC listen address, e.g. :9443; empty disables it (env "+envGRPCAddr+")")
 	fs.StringVar(&v.httpAddr, "http-addr", "", "HTTP/JSON listen address, e.g. :8080; empty disables it (env "+envHTTPAddr+")")
+	fs.StringVar(&v.authTokenFile, "auth-token-file", "", "path to a file of bearer tokens the adapters accept, one per line (env "+envAuthTokenFile+")")
+	fs.BoolVar(&v.insecure, "insecure", false, "serve a non-loopback address with no authentication (env "+envInsecure+")")
 	fs.StringVar(&v.adminAddr, "admin-addr", "", "admin listen address for healthz/readyz/metrics/pprof (env "+envAdminAddr+")")
 	fs.BoolVar(&v.adminPprof, "admin-pprof", false, "expose /debug/pprof/* on the admin listener (env "+envAdminPprof+")")
 	fs.StringVar(&v.logLevel, "log-level", "", "debug, info, warn, or error (env "+envLogLevel+")")
@@ -347,6 +389,10 @@ func buildFlagOverrides(fs *flag.FlagSet, v *flagValues) overrides {
 			o.GRPCAddr = &v.grpcAddr
 		case "http-addr":
 			o.HTTPAddr = &v.httpAddr
+		case "auth-token-file":
+			o.AuthTokenFile = &v.authTokenFile
+		case "insecure":
+			o.Insecure = &v.insecure
 		case "admin-addr":
 			o.AdminAddr = &v.adminAddr
 		case "admin-pprof":

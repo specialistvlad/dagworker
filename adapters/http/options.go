@@ -57,6 +57,7 @@ const (
 // API surface.
 type options struct {
 	logger            *slog.Logger
+	authorizer        Authorizer
 	maxWait           time.Duration
 	waitBudget        time.Duration
 	heartbeat         time.Duration
@@ -184,6 +185,18 @@ func withJitter(fn func(time.Duration) time.Duration) Option { //nolint:ireturn 
 	return optionFunc(func(o *options) {
 		if fn != nil {
 			o.jitter = fn
+		}
+	})
+}
+
+// WithAuthorizer installs an [Authorizer] that every request must pass before
+// it is routed. Nil is ignored, which leaves the server unauthenticated —
+// see [Authorizer] for when that is defensible and [BearerToken] for the
+// smallest thing that is not.
+func WithAuthorizer(a Authorizer) Option { //nolint:ireturn // ADR-0027 functional-option pattern (see .golangci.yml's own dagworker.Option/memory.Option allowance); this Option is the identical opaque-interface shape for this module
+	return optionFunc(func(o *options) {
+		if a != nil {
+			o.authorizer = a
 		}
 	})
 }

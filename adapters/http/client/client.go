@@ -19,9 +19,10 @@ import (
 // response round trip with no shared mutable state beyond the underlying
 // [*net/http.Client], which already promises the same.
 type Client struct {
-	baseURL      string
-	http         *http.Client
-	renewTimeout time.Duration
+	baseURL       string
+	http          *http.Client
+	renewTimeout  time.Duration
+	authorization string
 }
 
 // Option configures a [Client].
@@ -38,6 +39,24 @@ func WithHTTPClient(hc *http.Client) Option { //nolint:ireturn // ADR-0027 funct
 	return optionFunc(func(c *Client) {
 		if hc != nil {
 			c.http = hc
+		}
+	})
+}
+
+// WithBearerToken makes every request carry
+// "Authorization: Bearer <token>", which is what a server configured with
+// httpadapter.BearerToken expects.
+//
+// A bearer token is readable by anything on the path, so a baseURL of
+// "http://..." that is not loopback hands the credential to the network. Use
+// https, or a unix socket via a custom Transport ([WithHTTPClient]). An empty
+// token is ignored rather than sent as an empty header, so a missing
+// environment variable produces the server's own 401 rather than a malformed
+// request.
+func WithBearerToken(token string) Option { //nolint:ireturn // ADR-0027 functional-option pattern (see .golangci.yml's own dagworker.Option/memory.Option allowance); this Option is the identical opaque-interface shape for this module
+	return optionFunc(func(c *Client) {
+		if token != "" {
+			c.authorization = "Bearer " + token
 		}
 	})
 }
@@ -116,6 +135,9 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) (in
 	}
 	if rdr != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.authorization != "" {
+		req.Header.Set("Authorization", c.authorization)
 	}
 
 	resp, err := c.http.Do(req)

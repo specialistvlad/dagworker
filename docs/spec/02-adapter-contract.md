@@ -58,6 +58,17 @@ to — a rolling restart would otherwise revoke every lease in the fleet.
 distinguish "your lease was superseded" from "the database is down" without
 parsing prose.
 
+**Authorization is decided before routing.** An adapter **MUST** expose a
+`WithAuthorizer` option and **MUST** apply it ahead of every handler, so that a
+method or route added later is covered without anyone remembering to add a
+check to it. It **MUST** deny on any error the authorizer returns, including
+ones outside the taxonomy — an authorizer that fails for an unanticipated
+reason fails closed. It **MUST NOT** return the authorizer's own error text to
+the caller, which would make every custom authorizer an oracle for whatever it
+consults. An adapter built with no authorizer serves anonymously; that is
+defensible only for a listener no untrusted peer can reach, and `cmd/dagworkerd`
+refuses to start in any other case.
+
 ## 3. Error mapping
 
 Both adapters map the core taxonomy identically. This table is the contract:
@@ -98,3 +109,24 @@ design already needs for correctness.
 gRPC carries `bytes`. HTTP/JSON carries base64 with an explicit
 `payload_encoding` field, so a future out-of-band blob reference is an added
 encoding rather than a breaking change.
+
+## 6. Authentication
+
+| | gRPC | HTTP/JSON |
+|---|---|---|
+| hook | `grpcadapter.WithAuthorizer(Authorizer)` | `httpadapter.WithAuthorizer(Authorizer)` |
+| signature | `Authorize(ctx, fullMethod) error` | `Authorize(*http.Request) error` |
+| where it runs | chained unary + stream interceptor, inside the error/recovery interceptor | middleware, inside recovery and logging |
+| no credential | `codes.Unauthenticated` | `401` + `WWW-Authenticate: Bearer` |
+| bad credential | `codes.PermissionDenied` | `403`, deliberately with no challenge |
+| any other error | `codes.PermissionDenied` | `403` |
+| shared-secret helper | `grpcadapter.BearerToken(...)` | `httpadapter.BearerToken(...)` |
+| client side | `client.WithBearerToken` (requires transport security) | `client.WithBearerToken` |
+
+`BearerToken` compares in constant time over a SHA-256 digest and rejects
+every request when it is given no tokens: a credential set that degrades to
+"allow everything" is the one outcome it must never have.
+
+Neither adapter terminates TLS. Both serve whatever `net.Listener` they are
+handed, so TLS, a unix socket, or a mesh sidecar are all deployment choices
+rather than adapter features.

@@ -27,7 +27,8 @@ const (
 // which is what lets this struct grow a field later without becoming part of
 // the API's shape (ADR-0027's pattern, applied to this adapter).
 type serverConfig struct {
-	logger *slog.Logger
+	authorizer Authorizer
+	logger     *slog.Logger
 
 	maxConcurrentStreams  uint32
 	maxConnectionAge      time.Duration
@@ -129,4 +130,16 @@ func WithDefaultPollTimeout(d time.Duration) Option {
 // can override a default but never accidentally get overridden by one.
 func WithGRPCServerOptions(opts ...grpc.ServerOption) Option {
 	return optionFunc(func(c *serverConfig) { c.extraServerOpts = append(c.extraServerOpts, opts...) })
+}
+
+// WithAuthorizer installs an [Authorizer] that every call must pass before it
+// reaches a handler. Nil is ignored, which leaves the server unauthenticated —
+// see [Authorizer] for when that is defensible and [BearerToken] for the
+// smallest thing that is not.
+func WithAuthorizer(a Authorizer) Option { //nolint:ireturn // ADR-0027 functional-option pattern (see .golangci.yml's own dagworker.Option/memory.Option allowance); this Option is the identical opaque-interface shape for this module
+	return optionFunc(func(c *serverConfig) {
+		if a != nil {
+			c.authorizer = a
+		}
+	})
 }

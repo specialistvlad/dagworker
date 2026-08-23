@@ -80,6 +80,16 @@ func New(m *dw.Manager, opts ...Option) (*Server, error) {
 		grpc.ChainUnaryInterceptor(errorUnaryInterceptor(cfg.logger)),
 		grpc.ChainStreamInterceptor(errorStreamInterceptor(cfg.logger)),
 	)
+	// Authorization goes inside the error interceptor, so a panicking
+	// Authorizer costs one RPC rather than the process, and outside every
+	// handler, so no method can be reached without passing it — including
+	// methods added to the proto after this line was written.
+	if cfg.authorizer != nil {
+		serverOpts = append(serverOpts,
+			grpc.ChainUnaryInterceptor(authUnaryInterceptor(cfg.authorizer)),
+			grpc.ChainStreamInterceptor(authStreamInterceptor(cfg.authorizer)),
+		)
+	}
 	serverOpts = append(serverOpts, cfg.extraServerOpts...)
 
 	gs := grpc.NewServer(serverOpts...)

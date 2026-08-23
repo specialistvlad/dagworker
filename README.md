@@ -171,8 +171,17 @@ somewhere else, two optional adapters and a daemon put the same protocol on a
 socket — and the core module still has no dependency on either.
 
 ```
-dagworkerd --store=postgres --postgres-dsn=... --grpc-addr=:9090 --http-addr=:8080
+dagworkerd --store=postgres --postgres-dsn-file=/run/secrets/dsn \
+           --grpc-addr=:9090 --http-addr=:8080 \
+           --auth-token-file=/run/secrets/tokens
 ```
+
+The token file is not decoration: the daemon **refuses to start** if it is
+asked to serve a non-loopback address with no credential configured. Both
+adapters take a `WithAuthorizer` hook that runs before any handler, so a
+deployment with real identities plugs in mTLS or its own token service instead;
+`BearerToken` is just the smallest thing that is not an open port. See
+[SECURITY.md](SECURITY.md).
 
 | | gRPC | HTTP/JSON |
 |---|---|---|

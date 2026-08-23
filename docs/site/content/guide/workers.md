@@ -84,7 +84,6 @@ never be conflated into one signal:
 ```go
 func runWithHeartbeat(ctx context.Context, m *dagworker.Manager, lease dagworker.Lease, every time.Duration, handle func(context.Context, dagworker.Node) ([]byte, error)) {
 	stop := make(chan struct{})
-	current := lease
 	go func() {
 		t := time.NewTicker(every)
 		defer t.Stop()
@@ -93,11 +92,9 @@ func runWithHeartbeat(ctx context.Context, m *dagworker.Manager, lease dagworker
 			case <-stop:
 				return
 			case <-t.C:
-				extended, err := m.Extend(ctx, current, 0) // 0 reuses the scope default
-				if err != nil {
+				if _, err := m.Extend(ctx, lease, 0); err != nil { // 0 reuses the scope default
 					return // lease is gone; the handler's own Ack/Nack will be refused
 				}
-				current = extended
 			}
 		}
 	}()
@@ -105,21 +102,27 @@ func runWithHeartbeat(ctx context.Context, m *dagworker.Manager, lease dagworker
 
 	result, err := handle(ctx, lease.Node)
 	if err != nil {
-		_, _ = m.Nack(ctx, current, err)
+		_, _ = m.Nack(ctx, lease, err)
 		return
 	}
-	_ = m.Ack(ctx, current, result)
+	_ = m.Ack(ctx, lease, result)
 }
 ```
 
-Pick `every` comfortably shorter than the lease timeout — a third of it is a
-reasonable starting point — so one slow or dropped heartbeat still leaves
-margin before the deadline. If `Extend` ever fails, don't panic and don't
-retry aggressively: it means the lease is already gone, and the handler's
-eventual `Ack`/`Nack` will be refused by the same fencing check, which is
-the correct outcome. This is exactly the pattern the project's own
-end-to-end worker pool uses internally, along with catching a handler panic
-and reporting it as a failed attempt rather than taking the whole pool down.
+Notice that `Ack`/`Nack` at the end present the *original* `lease`, not
+whatever `Extend` returned — that's not an oversight. `Extend` moves the
+deadline but never touches the epoch (the field the fencing check actually
+compares), so there is nothing to thread back into the final report call;
+the original lease value already carries the epoch that matters for as long
+as the lease stays valid. Pick `every` comfortably shorter than the lease
+timeout — a third of it is a reasonable starting point — so one slow or
+dropped heartbeat still leaves margin before the deadline. If `Extend` ever
+fails, don't panic and don't retry aggressively: it means the lease is
+already gone, and the handler's eventual `Ack`/`Nack` will be refused by the
+same fencing check, which is the correct outcome. This is the same shape
+the project's own end-to-end worker pool uses internally, which also
+catches a handler panic and reports it as a failed attempt rather than
+taking the whole pool down.
 
 ## Workers that aren't in this process
 
