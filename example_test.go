@@ -27,10 +27,12 @@ func Example() {
 		{ID: "test", Deps: []dagworker.NodeID{"build"}},
 		{ID: "publish", Deps: []dagworker.NodeID{"test"}},
 	}); err != nil {
-		log.Fatal(err)
+		fmt.Println("add:", err)
+		return
 	}
 	if err := m.Seal(ctx, "release"); err != nil {
-		log.Fatal(err)
+		fmt.Println("seal:", err)
+		return
 	}
 
 	for {
@@ -39,17 +41,20 @@ func Example() {
 			break
 		}
 		if err != nil {
-			log.Fatal(err)
+			fmt.Println("claim:", err)
+			return
 		}
 		fmt.Println("running", lease.NodeID)
 		if err := m.Ack(ctx, lease, nil); err != nil {
-			log.Fatal(err)
+			fmt.Println("ack:", err)
+			return
 		}
 	}
 
 	done, err := m.IsComplete(ctx, "release")
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println("complete check:", err)
+		return
 	}
 	fmt.Println("complete:", done)
 
@@ -218,7 +223,8 @@ func ExampleManager_Subscribe() {
 		Kinds: []dagworker.EventKind{dagworker.EventTransition},
 	})
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println("subscribe:", err)
+		return
 	}
 	defer func() { _ = sub.Close() }()
 
@@ -282,7 +288,8 @@ func ExampleTyped() {
 
 	lease, err := frames.TryClaim(ctx)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println("claim:", err)
+		return
 	}
 	fmt.Printf("rendering frame %d of %q\n", lease.Payload.Frame, lease.Payload.Scene)
 	_ = frames.Ack(ctx, lease, map[string]string{"output": "frame-1.png"})
