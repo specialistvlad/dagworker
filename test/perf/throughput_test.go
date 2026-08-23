@@ -35,7 +35,7 @@ func TestThroughput(t *testing.T) {
 		t.Run(backend.Name, func(t *testing.T) {
 			ctx := t.Context()
 			st := backend.New(t)
-			scope := dw.Scope("throughput")
+			scope := perf.Scope("throughput")
 
 			start := time.Now()
 			perf.SeedWide(t, st, scope, n)
