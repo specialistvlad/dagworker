@@ -22,14 +22,18 @@ let the user open it.
 
 ## Two gates, split by cost
 
-```
-make check        tidy, lint, race, coverage.  No databases.       ~8s warm
-make performance  real databases, e2e, the measurements.
-```
+There are exactly two, and the split is by cost, not by kind.
 
-**`make check` has a ten-second budget and it is a constraint, not a hope.** A
-gate a developer will not wait for is a gate they route around. Anything added
-to it that pushes past ten seconds belongs in `make performance` instead.
+| | what it runs | databases | budget | measured |
+|---|---|---|---|---|
+| `make check` | tidy, lint, race, coverage | **no** | **10s** | 6.7s |
+| `make benchmark` | integration, e2e, complexity, throughput | yes | **5 min** | 3m31s |
+
+**Both budgets are constraints, not hopes.** A gate a developer will not wait
+for is a gate they route around, and this repository's was fourteen minutes.
+Anything added to `check` that pushes it past ten seconds belongs in
+`benchmark`; anything that pushes `benchmark` past five minutes needs the cost
+taken out of it somewhere else first.
 
 What that buys is a rule with teeth: the fast gate never starts a container,
 never opens a socket to a database, and never measures anything. Run it with
@@ -79,12 +83,23 @@ claims are asserted as round-trip counts through a `pgx` tracer, or as *ratios*
 across a thousandfold size increase — never as absolute durations, which are a
 promise about hardware.
 
+The same discipline applies to making the suites faster. Two things that look
+obvious are measurably wrong here, and both are commented where they live:
+
+- **Parallelism is not free and is sometimes negative.** A parallel module
+  sweep measured *slower* than a serial one on a cold build cache — 27.9s
+  against 20.3s — because `go build` already saturates every core and eight
+  concurrent copies just thrash. It pays only once the cache is warm.
+- **`golangci-lint` must run serially.** It locks its own analysis cache and
+  refuses to run beside another copy of itself. A parallel sweep is a race that
+  usually wins and sometimes reports a lint pass it never performed.
+
 ## The test databases are shared
 
 `make up` starts PostgreSQL and Redis on fixed ports (15432, 16379). Every
 worktree and every terminal talks to those same two containers, and
 `make integration` and `make complexity` both begin by truncating them. Run
-`make performance` one at a time; `make check` needs no databases at all and is
+`make benchmark` one at a time; `make check` needs no databases at all and is
 safe to run concurrently, from as many worktrees as you like.
 
 Tests must not depend on database state. Every scope name carries a

@@ -6,6 +6,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -133,164 +134,192 @@ func bound(b perf.Backend) float64 {
 	return maxRatio
 }
 
-// Claiming a node must cost the same whether the ready set holds a thousand
-// nodes or a million: it is a pop from an ordered structure, not a search.
-func TestComplexity_Claim(t *testing.T) {
+// TestComplexity is the whole ratio sweep: five operations, each of which must
+// cost the same at a hundred thousand nodes as at a thousand.
+//
+// The five used to be five separate tests, and each one seeded its own graph at
+// every size -- 5 x (1,000 + 10,000 + 100,000) = 555,000 nodes per backend,
+// which on PostgreSQL at a measured 454us per node is four minutes of setup
+// before anything is measured. They all seeded the identical shape, so they now
+// share it: two fixtures per size instead of five, and the same sizes, the same
+// iteration counts and the same bound as before. Nothing about the measurement
+// got weaker; there is just far less building of graphs to throw away.
+//
+// Two fixtures rather than one because claiming CONSUMES the ready set. The
+// three read-only operations share the first; the claim measurements get the
+// second to themselves, and take it in one pass -- timing the claim and the
+// completion separately out of a single loop yields both curves for the price
+// of one graph, where before they were two tests each draining their own.
+func TestComplexity(t *testing.T) {
 	t.Parallel()
 	for _, backend := range perf.Backends() {
 		t.Run(backend.Name, func(t *testing.T) {
 			t.Parallel()
-			ctx := t.Context()
 			sweep := sizes(t, backend)
-			curve := make([]measurement, 0, len(sweep))
-			for _, n := range sweep {
-				st := backend.New(t)
-				scope := perf.Scope("claim-%d", n)
-				perf.SeedWide(t, st, scope, n)
 
-				req := dw.ClaimRequest{Scope: scope, Max: 1, Timeout: time.Hour}
-				perOp := timePerOp(t, consumingIters(n), func(int) {
-					res, err := st.Claim(ctx, req)
-					if err != nil {
-						t.Fatalf("Claim: %v", err)
-					}
-					if len(res.Leases) == 0 {
-						t.Fatal("ran out of claimable nodes mid-measurement: " +
-							"the sweep would have been timing an empty ready set")
-					}
-				})
-				curve = append(curve, measurement{n, perOp})
+			// The sizes are measured concurrently, and that is not incidental.
+			// Seeding a networked backend is round-trip bound, so overlapping
+			// the sizes is most of what keeps this suite tolerable: measured
+			// serially it took 399s, and concurrently
+			// it takes a fraction of that against the same databases.
+			//
+			// The wrapper subtest is what makes it safe to read `collected`
+			// afterwards: t.Run does not return until every parallel child
+			// beneath it has finished, so the assertions below see a complete
+			// map without any synchronisation of their own.
+			var mu sync.Mutex
+			collected := make(map[int]map[string]time.Duration, len(sweep))
+			record := func(n int, costs map[string]time.Duration) {
+				mu.Lock()
+				defer mu.Unlock()
+				if collected[n] == nil {
+					collected[n] = make(map[string]time.Duration, len(guards))
+				}
+				for name, cost := range costs {
+					collected[n][name] = cost
+				}
 			}
-			assertFlat(t, "Claim", curve, bound(backend))
+			t.Run("sweep", func(t *testing.T) {
+				for _, n := range sweep {
+					t.Run(fmt.Sprintf("read/n=%d", n), func(t *testing.T) {
+						t.Parallel()
+						record(n, measureReads(t, backend, n))
+					})
+					t.Run(fmt.Sprintf("claim/n=%d", n), func(t *testing.T) {
+						t.Parallel()
+						record(n, measureClaims(t, backend, n))
+					})
+				}
+			})
+
+			curves := make(map[string][]measurement, len(guards))
+			for _, n := range sweep {
+				for _, name := range guards {
+					curves[name] = append(curves[name], measurement{n, collected[n][name]})
+				}
+			}
+			for _, name := range guards {
+				assertFlat(t, name, curves[name], bound(backend))
+			}
 		})
 	}
 }
 
-// Reading one node must not depend on how many others there are.
-func TestComplexity_GetNode(t *testing.T) {
-	t.Parallel()
-	for _, backend := range perf.Backends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			t.Parallel()
-			ctx := t.Context()
-			sweep := sizes(t, backend)
-			curve := make([]measurement, 0, len(sweep))
-			for _, n := range sweep {
-				st := backend.New(t)
-				scope := perf.Scope("get-%d", n)
-				perf.SeedWide(t, st, scope, n)
+// guards names every operation the sweep asserts on, in a fixed order so the
+// report reads the same way every run.
+var guards = []string{"ScopeStats", "GetNode", "AddNode(causal)", "Claim", "Claim+Complete"}
 
-				perOp := timePerOp(t, measureIters, func(i int) {
-					// Stride through the whole keyspace rather than hammering
-					// one node, so the measurement includes cache misses a
-					// real workload would pay.
-					if _, err := st.GetNode(ctx, scope, perf.NodeID((i*7919)%n)); err != nil {
-						t.Fatalf("GetNode: %v", err)
-					}
-				})
-				curve = append(curve, measurement{n, perOp})
-			}
-			assertFlat(t, "GetNode", curve, bound(backend))
-		})
+// measureReads builds the read fixture for one graph size and measures every
+// operation that does not consume the ready set. The insert is here too: it
+// only grows the graph, so it cannot disturb what the two reads already
+// measured.
+func measureReads(t *testing.T, backend perf.Backend, n int) map[string]time.Duration {
+	t.Helper()
+	ctx := t.Context()
+	out := make(map[string]time.Duration, 3)
+
+	st := backend.New(t)
+	scope := perf.Scope("read-%d", n)
+	perf.SeedWide(t, st, scope, n)
+
+	// Scope statistics are counters maintained by the transitions that change
+	// them. If this one ever grows with n, something started scanning.
+	out["ScopeStats"] = timePerOp(t, measureIters, func(int) {
+		if _, err := st.ScopeStats(ctx, scope); err != nil {
+			t.Fatalf("ScopeStats: %v", err)
+		}
+	})
+
+	// Reading one node must not depend on how many others there are.
+	out["GetNode"] = timePerOp(t, measureIters, func(i int) {
+		// Stride through the whole keyspace rather than hammering one node, so
+		// the measurement includes cache misses a real workload would pay.
+		if _, err := st.GetNode(ctx, scope, perf.NodeID((i*7919)%n)); err != nil {
+			t.Fatalf("GetNode: %v", err)
+		}
+	})
+
+	// Inserting a node with one dependency on an existing node is the common
+	// case, and the one that must stay O(1): the topological rank invariant
+	// already holds, so no search runs.
+	next := n
+	out["AddNode(causal)"] = timePerOp(t, min(measureIters, 2_000), func(int) {
+		id := perf.NodeID(next)
+		dep := perf.NodeID(next % n)
+		next++
+		if _, err := st.AddNodes(ctx, scope, []dw.NodeSpec{{
+			ID: id, Deps: []dw.NodeID{dep},
+		}}); err != nil {
+			t.Fatalf("AddNodes: %v", err)
+		}
+	})
+
+	return out
+}
+
+// measureClaims builds the claim fixture and measures the path that consumes
+// it. Claiming and completing are timed out of a single pass because both need
+// the same graph and each claim can only be made once.
+func measureClaims(t *testing.T, backend perf.Backend, n int) map[string]time.Duration {
+	t.Helper()
+	st := backend.New(t)
+	scope := perf.Scope("claim-%d", n)
+	perf.SeedWide(t, st, scope, n)
+	claim, complete := timeClaimAndComplete(t, st, scope, consumingIters(n))
+	return map[string]time.Duration{
+		"Claim":          claim,
+		"Claim+Complete": claim + complete,
 	}
 }
 
-// Inserting a node with one dependency on an existing node is the common case,
-// and it is the one that must stay O(1): the topological rank invariant already
-// holds, so no search runs.
-func TestComplexity_AddNodeCausal(t *testing.T) {
-	t.Parallel()
-	for _, backend := range perf.Backends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			t.Parallel()
-			ctx := t.Context()
-			sweep := sizes(t, backend)
-			curve := make([]measurement, 0, len(sweep))
-			for _, n := range sweep {
-				st := backend.New(t)
-				scope := perf.Scope("add-%d", n)
-				perf.SeedWide(t, st, scope, n)
+// timeClaimAndComplete drains part of a graph, timing the claim and the
+// completion separately, and returns the median per-operation cost of each.
+//
+// Claiming must be a pop from an ordered structure rather than a search, and
+// completing must cost what the node's out-degree costs -- constant here --
+// rather than what the graph costs. Both are measured from one pass because
+// both need the same graph and each claim can only be made once.
+func timeClaimAndComplete(tb testing.TB, st dw.Store, scope dw.Scope, iters int) (claim, complete time.Duration) {
+	tb.Helper()
+	ctx := context.Background()
+	req := dw.ClaimRequest{Scope: scope, Max: 1, Timeout: time.Hour}
 
-				next := n
-				perOp := timePerOp(t, min(measureIters, 2_000), func(int) {
-					id := perf.NodeID(next)
-					dep := perf.NodeID(next % n)
-					next++
-					if _, err := st.AddNodes(ctx, scope, []dw.NodeSpec{{
-						ID: id, Deps: []dw.NodeID{dep},
-					}}); err != nil {
-						t.Fatalf("AddNodes: %v", err)
-					}
-				})
-				curve = append(curve, measurement{n, perOp})
-			}
-			assertFlat(t, "AddNode(causal)", curve, bound(backend))
-		})
+	step := func() (time.Duration, time.Duration) {
+		startClaim := time.Now()
+		res, err := st.Claim(ctx, req)
+		claimed := time.Since(startClaim)
+		if err != nil {
+			tb.Fatalf("Claim: %v", err)
+		}
+		if len(res.Leases) == 0 {
+			tb.Fatal("ran out of claimable nodes mid-measurement: " +
+				"the sweep would have been timing an empty ready set")
+		}
+		startComplete := time.Now()
+		if _, err := st.Complete(ctx, dw.CompleteRequest{Lease: res.Leases[0], Success: true}); err != nil {
+			tb.Fatalf("Complete: %v", err)
+		}
+		return claimed, time.Since(startComplete)
 	}
-}
 
-// Completing a node fans out to its successors, so its cost must track
-// out-degree -- which is constant here -- and not the size of the graph.
-func TestComplexity_CompleteFanOut(t *testing.T) {
-	t.Parallel()
-	for _, backend := range perf.Backends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			t.Parallel()
-			ctx := t.Context()
-			sweep := sizes(t, backend)
-			curve := make([]measurement, 0, len(sweep))
-			for _, n := range sweep {
-				st := backend.New(t)
-				scope := perf.Scope("complete-%d", n)
-				perf.SeedWide(t, st, scope, n)
-
-				req := dw.ClaimRequest{Scope: scope, Max: 1, Timeout: time.Hour}
-				perOp := timePerOp(t, consumingIters(n), func(int) {
-					res, err := st.Claim(ctx, req)
-					if err != nil {
-						t.Fatalf("Claim: %v", err)
-					}
-					if len(res.Leases) == 0 {
-						t.Fatal("ran out of claimable nodes mid-measurement")
-					}
-					if _, err := st.Complete(ctx, dw.CompleteRequest{
-						Lease: res.Leases[0], Success: true,
-					}); err != nil {
-						t.Fatalf("Complete: %v", err)
-					}
-				})
-				curve = append(curve, measurement{n, perOp})
-			}
-			assertFlat(t, "Claim+Complete", curve, bound(backend))
-		})
+	for range warmupIterations {
+		step()
 	}
-}
-
-// Scope statistics are counters maintained by the transitions that change them.
-// If this one ever grows with n, something started scanning.
-func TestComplexity_ScopeStats(t *testing.T) {
-	t.Parallel()
-	for _, backend := range perf.Backends() {
-		t.Run(backend.Name, func(t *testing.T) {
-			t.Parallel()
-			ctx := t.Context()
-			sweep := sizes(t, backend)
-			curve := make([]measurement, 0, len(sweep))
-			for _, n := range sweep {
-				st := backend.New(t)
-				scope := perf.Scope("stats-%d", n)
-				perf.SeedWide(t, st, scope, n)
-
-				perOp := timePerOp(t, measureIters, func(int) {
-					if _, err := st.ScopeStats(ctx, scope); err != nil {
-						t.Fatalf("ScopeStats: %v", err)
-					}
-				})
-				curve = append(curve, measurement{n, perOp})
-			}
-			assertFlat(t, "ScopeStats", curve, bound(backend))
-		})
+	claims := make([]time.Duration, 0, measureReps)
+	completes := make([]time.Duration, 0, measureReps)
+	for range measureReps {
+		var c, d time.Duration
+		for range iters {
+			a, b := step()
+			c += a
+			d += b
+		}
+		claims = append(claims, c/time.Duration(iters))
+		completes = append(completes, d/time.Duration(iters))
 	}
+	slices.Sort(claims)
+	slices.Sort(completes)
+	return claims[len(claims)/2], completes[len(completes)/2]
 }
 
 // Draining a chain of a million nodes end to end is the shape that would expose

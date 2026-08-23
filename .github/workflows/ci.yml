@@ -179,7 +179,7 @@ jobs:
           # dependencies -- so setup-go's default lookup finds nothing and warns
           # on every job. The seven that exist are one level down.
           cache-dependency-path: "**/go.sum"
-      - run: make benchmark | tee bench.txt
+      - run: make throughput | tee bench.txt
       - uses: actions/upload-artifact@v7
         with:
           name: benchmarks
