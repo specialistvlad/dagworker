@@ -54,18 +54,26 @@ func (s *Subscription) Close() error {
 }
 
 // finish closes the subscription exactly once, recording why.
+//
+// The close happens while holding the same mutex every send holds, which is
+// what makes it safe. Closing a channel another goroutine is sending on is not
+// merely racy, it panics; and since every send here is non-blocking, holding
+// the lock across it costs nothing and cannot deadlock.
 func (s *Subscription) finish(err error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closeLocked(err)
+}
+
+// closeLocked must be called with s.mu held.
+func (s *Subscription) closeLocked(err error) {
 	if s.done {
-		s.mu.Unlock()
 		return
 	}
 	s.done = true
 	if s.err == nil {
 		s.err = err
 	}
-	s.mu.Unlock()
-
 	close(s.closeCh)
 	close(s.ch)
 }
@@ -79,6 +87,10 @@ func (s *Subscription) isDone() bool {
 // offer delivers one event without ever blocking the caller. The caller is
 // whoever just completed a node, and making a scheduler wait on an observer is
 // how one slow consumer stalls everyone.
+//
+// The whole body runs under s.mu, shared with finish, so a send can never race
+// the close. That is safe precisely because every send is non-blocking: the
+// lock is held for a channel operation that either succeeds at once or gives up.
 func (s *Subscription) offer(ev Event) {
 	s.mu.Lock()
 	if s.done {
@@ -88,11 +100,9 @@ func (s *Subscription) offer(ev Event) {
 	if s.gap {
 		ev.Gap = true
 	}
-	s.mu.Unlock()
 
 	select {
 	case s.ch <- ev:
-		s.mu.Lock()
 		s.gap = false
 		s.mu.Unlock()
 		return
@@ -100,31 +110,31 @@ func (s *Subscription) offer(ev Event) {
 	}
 
 	if s.pol == OverflowCloseSlow {
+		s.closeLocked(ErrSubscriberLagged)
+		s.mu.Unlock()
+		// Deregister outside the lock: dropSub takes the Manager's lock, and
+		// taking it while holding a subscription's would invert the ordering
+		// publish already relies on.
 		s.m.dropSub(s.id)
-		s.finish(ErrSubscriberLagged)
 		return
 	}
 
 	// Drop the oldest and take its place. Both steps are non-blocking, so a
-	// consumer that drains concurrently can make one of them a no-op; that
-	// costs an event, which is exactly what this policy promises.
+	// consumer draining concurrently can make one of them a no-op; that costs
+	// an event, which is exactly what this policy promises.
 	select {
 	case <-s.ch:
 	default:
 	}
-	s.mu.Lock()
 	s.dropped++
 	s.gap = true
 	ev.Gap = true
-	s.mu.Unlock()
-
 	select {
 	case s.ch <- ev:
-		s.mu.Lock()
 		s.gap = false
-		s.mu.Unlock()
 	default:
 	}
+	s.mu.Unlock()
 }
 
 // Subscribe returns a stream of events.
