@@ -138,30 +138,23 @@ contention.
 **Per-backend doorbell mechanics** (all sit behind the identical `doorbell.Register`/`Signal`
 internal interface above — only how `Signal` gets invoked across process boundaries differs):
 
-- **In-memory.** The doorbell is the construct shown above, called directly, under the same shard
-  lock that performed the `Complete`/`Sweep` write. Latency from commit to wakeup is sub-microsecond;
-  the poll fallback exists only as a correctness safety net against a bug, and never fires in
-  practice.
-- **Redis.** A per-`(scope, kind)` pub/sub channel (`PUBLISH scope:{s}:ready:{kind} <n>`) fired by
+- **In-memory.** The doorbell is the construct shown above, called directly under the same shard
+  lock as the `Complete`/`Sweep` write. Wakeup latency is sub-microsecond; the poll fallback is a
+  pure correctness safety net here and never fires in practice.
+- **Redis.** A per-`(scope, kind)` pub/sub channel (`PUBLISH scope:{s}:ready:{kind} <n>`), fired by
   the same Lua Function that performs the fenced `Complete`/`Sweep` write (05 §10, 10 §5.4), fanned
-  into the in-process `doorbell.Signal` by one `SUBSCRIBE`-holding goroutine per `Manager` (owned
-  and shut down per ADR-0027 §9.1–9.2 — this is a `Manager`-lifetime goroutine, not a per-`Claim`
-  one). Pub/sub is fire-and-forget and loses everything sent while disconnected (05 §10), which is
-  exactly why the jittered poll fallback is load-bearing here, not cosmetic: every blocked `Claim`
-  still independently attempts `Claim`/`Sweep`'s non-blocking read at least once per `pollCap`
-  regardless of whether pub/sub delivered anything.
+  into `doorbell.Signal` by one `SUBSCRIBE`-holding goroutine per `Manager` (a `Manager`-lifetime
+  goroutine per ADR-0027 §9, not a per-`Claim` one). Pub/sub loses everything sent while
+  disconnected (05 §10), which is exactly why the poll fallback is load-bearing, not cosmetic, here.
 - **PostgreSQL.** `LISTEN scope_{s}_ready_{kind}`, `NOTIFY`'d by the same trigger that performs the
-  durable event write (04 §3), fanned into `doorbell.Signal` by one `pgx`-pool listener goroutine
-  per `Manager`. `NOTIFY` "does not survive disconnect, and is not itself durable" (04 §3) — a
-  dropped connection between the listener and Postgres silently loses every notification queued
-  during the gap, with no error surfaced to the waiting `Claim` calls at all. Two mitigations, both
-  required: (a) the listener goroutine treats "connection lost" as "assume every notification since
-  the last successful receive was possibly missed," and on reconnect calls `Signal(scope, kind,
-  math.MaxInt)`-equivalent (wake every currently registered waiter for every scope/kind it was
-  listening to) rather than resuming silently; (b) the jittered poll fallback is the actual
-  liveness guarantee for the window between disconnect and reconnect-detection — `pollCap` is the
-  hard upper bound on how long a Postgres-backed `Claim` can be stuck behind a lost `NOTIFY`,
-  independent of how long reconnection takes.
+  durable event write (04 §3), fanned into `doorbell.Signal` by one `pgx`-pool listener goroutine per
+  `Manager`. `NOTIFY` "does not survive disconnect, and is not itself durable" (04 §3): a dropped
+  listener connection silently loses every notification queued during the gap, with no error
+  surfaced to waiting `Claim` calls. Two required mitigations: (a) on reconnect, the listener treats
+  the gap as "possibly missed" and wakes every currently registered waiter for the scopes/kinds it
+  was listening to, rather than resuming silently; (b) the jittered poll is the real liveness bound
+  regardless — `pollCap` is the hard ceiling on how long a Postgres-backed `Claim` can be stuck
+  behind a lost `NOTIFY`, independent of how long reconnection itself takes.
 
 ## Consequences
 
@@ -184,20 +177,16 @@ internal interface above — only how `Signal` gets invoked across process bound
 
 - A large population of blocked callers against a genuinely idle scope still generates a steady
   background poll load — at `pollCap = 3s` and 10,000 idle blocked workers, that is on the order of
-  ~3,300 non-blocking `Claim` attempts per second hitting the storage backend even when the doorbell
-  is working perfectly, purely from Full Jitter's spread. This is a deliberate, tunable cost
-  (`WithPollInterval`), not an oversight, but it must be sized by the operator for their idle-worker
-  count, and the default is chosen conservatively (short `pollCap`) rather than optimized for that
-  scenario.
+  ~3,300 non-blocking `Claim` attempts per second even when the doorbell works perfectly, purely
+  from Full Jitter's spread. This is a deliberate, tunable cost (`WithPollInterval`), sized by the
+  operator for their idle-worker count, not an oversight.
 - Three backends means three distinct fan-in mechanisms (direct call, pub/sub-fed goroutine,
   `LISTEN`-fed goroutine) sharing one internal `doorbell` contract — more moving parts under the
   conformance suite (ADR-0018) than a single, backend-agnostic polling-only design would have had.
-- The Postgres reconnect-triggers-wake-everyone mitigation trades a small burst of extra,
-  ultimately-redundant `Claim` attempts (bounded by however many waiters were registered against
-  that connection's scopes) for closing the silent-gap window faster than `pollCap` alone would —
-  this is accepted because the alternative (relying on `pollCap` alone after every reconnect) makes
-  every Postgres connection blip cost up to a full `pollCap` of extra latency for every blocked
-  caller, which compounds badly if reconnects are frequent.
+- The Postgres reconnect-wakes-everyone mitigation trades a small burst of redundant `Claim`
+  attempts for closing the silent-gap window faster than `pollCap` alone would; the alternative
+  (relying on `pollCap` alone after every reconnect) costs a full extra `pollCap` of latency per
+  blocked caller on every connection blip, which compounds badly if reconnects are frequent.
 
 ### Neutral
 

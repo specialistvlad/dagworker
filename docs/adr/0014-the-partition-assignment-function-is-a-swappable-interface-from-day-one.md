@@ -58,8 +58,8 @@ type Assigner interface {
 
 `Owner`'s answer is **advisory routing, never a correctness boundary** — a wrong or stale answer
 during a membership transition costs at most one wasted claim attempt against a partition another
-instance already owns; the underlying claim is still gated by the mandatory fencing epoch (ADR-06
-in the numbered set), which is the only thing status-write correctness ever depends on (07 §7.3).
+instance already owns; the underlying claim is still gated by the mandatory fencing epoch
+(ADR-0006), which is the only thing status-write correctness ever depends on (07 §7.3).
 This is why the interface can be swapped without a version bump to the public API.
 
 `P`, the virtual partition count, is fixed **per scope at scope-creation time** (07 §7.1 Layer 2)

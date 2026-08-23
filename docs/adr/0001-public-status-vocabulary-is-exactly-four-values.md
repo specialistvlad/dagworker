@@ -150,7 +150,8 @@ activity-timeout kinds). Rejected as *public* surface: Temporal's split is real 
 internally, but exposing two independent enums to every subscriber doubles the switch surface for
 no benefit dag-worker-go's simpler node model needs — the timeout-kind distinction Temporal makes
 (schedule-to-start, start-to-close, etc.) collapses to a single `ReasonTimeout` here because
-dag-worker-go ships one flat per-node lease timeout (ADR-0010), not Temporal's four-timeout model.
+dag-worker-go ships one flat per-node lease timeout set at claim time (ADR-0007), not Temporal's
+four-timeout model.
 
 ## References
 

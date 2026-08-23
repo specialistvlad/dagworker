@@ -55,7 +55,7 @@ involved in dispatch.** Every instance, for every `(scope, kind)` it services, c
 // mandatory core (AMD-1) — every backend must implement it natively.
 // It grants ownership, bumps the fencing epoch, and sets the lease
 // deadline in one atomic write; it never requires a second call to become
-// safe against a paused-not-dead caller (ADR-06/07 in the numbered set).
+// safe against a paused-not-dead caller (ADR-0006/ADR-0007).
 func (s Store) Claim(ctx context.Context, scope string, req ClaimRequest) (Claimed, error)
 
 // Complete performs the fenced Ack/Nack write AND returns every direct
@@ -147,3 +147,6 @@ future virtual-partition scheme replace this without changing anything a caller 
 - [AWS SQS — visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html)
 - [Apache Airflow — scheduler HA docs](https://airflow.apache.org/docs/apache-airflow/stable/administration-and-deployment/scheduler.html)
 - docs/research/07-work-distribution-across-instances.md §1, §5.4, §6, §7
+- ADR-0033 (the blocking `Claim` wakeup protocol, fully specified — this ADR states only the
+  three-stage shape); ADR-0038 (the fenced `Claim`/`Complete`/`Extend`/`Sweep` primitive
+  signatures this ADR's claim path is defined in terms of, amending ADR-0016)

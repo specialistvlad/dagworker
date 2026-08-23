@@ -31,7 +31,7 @@ forever — the fallback's job is "do not surprise anyone badly," not "be optima
 
 Several of these fields interact with decisions made elsewhere in this ADR set and must not
 contradict them: `PartitionCount` is the value ADR-0014's `Assigner` reads for `P`; `DefaultLeaseTimeout`
-and the retry shape connect to the fencing/backoff design (ADR-06/ADR-12 in the numbered set);
+and the retry shape connect to the fencing/backoff design (ADR-0006/ADR-0012);
 `PayloadCap` narrows (never widens) the library-wide cap ADR-0026 already establishes.
 
 ## Decision
@@ -54,7 +54,7 @@ type ScopeConfig struct {
 }
 
 type RetryPolicy struct {
-    Base        time.Duration // Full Jitter base, ADR-12 (numbered set)
+    Base        time.Duration // Full Jitter base, ADR-0012
     Cap         time.Duration // Full Jitter cap
     MaxAttempts uint32
 }
@@ -98,7 +98,7 @@ call — see "in-flight semantics" below for why.
   Already-granted leases keep the deadline they were issued under — a config change never
   retroactively shortens or lengthens a lease a worker is actively holding, which would violate
   the same "never yank a deadline out from under a fenced holder" discipline the clock-authority
-  decision (ADR-08, numbered set) already establishes.
+  decision (ADR-0008) already establishes.
 - **`MaxInFlight` lowered below the current in-flight count:** existing in-flight claims are never
   force-revoked — there is no safe way to un-claim an active lease without breaking the fencing
   contract. Instead, admission simply refuses new claims (`TryClaim` returns `ErrScopeQuotaExceeded`;
@@ -132,7 +132,7 @@ call — see "in-flight semantics" below for why.
 | `PartitionCount` | `0` → treated as `1` | Reduces exactly to ADR-0013's pure pull-competition — the simplest correct behavior, and the cheapest possible per-scope bookkeeping overhead, which matters most for the many-small-scopes shape where this field's cost is paid once per scope, potentially millions of times. A pipeline-shaped scope that needs concurrency headroom within one scope sets `PartitionCount` to the `32-64` range explicitly at creation time, per dossier 07's own sizing recommendation — that shape's need is exactly the case this field exists to serve on request, not by default. |
 | `PayloadCap` | `262144` bytes (256 KiB) | Matches the library-wide cap ADR-0026 already establishes and the traditionally-cited SQS message-size figure (12 §5.3) — a well-tested "small enough to force large blobs out-of-band, large enough for the overwhelming majority of real work-item payloads" number, independent of either workload shape. |
 | `SubscriberLagCeiling` | `72h` | Long enough that an operator offline over a long weekend is not punished by having their subscription forcibly resynced; short enough that a genuinely abandoned subscriber does not pin storage indefinitely (12 §6.3) — reasoned independently of `RetentionTTL`, since it protects against a different failure (a wedged subscriber), not against unbounded data growth. |
-| `RetryPolicy` | `{Base: 1s, Cap: 30s, MaxAttempts: 3}` | Full Jitter shape per the library-wide backoff decision (ADR-12, numbered set); `MaxAttempts` is kept deliberately small so a systemically broken worker or misconfiguration does not quietly consume ready-set capacity retrying forever under either workload shape — a scope that needs deep resilience against transient failures raises this explicitly. |
+| `RetryPolicy` | `{Base: 1s, Cap: 30s, MaxAttempts: 3}` | Full Jitter shape per the library-wide backoff decision (ADR-0012); `MaxAttempts` is kept deliberately small so a systemically broken worker or misconfiguration does not quietly consume ready-set capacity retrying forever under either workload shape — a scope that needs deep resilience against transient failures raises this explicitly. |
 
 ## Consequences
 

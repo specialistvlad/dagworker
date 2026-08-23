@@ -31,12 +31,10 @@ module with heavy-dependency subtrees — `examples/`, `gcp/observability/` — 
 own modules; and `testcontainers-go`'s module-per-integration pattern (`modules/postgres`,
 `modules/redis`, each independently tagged). The lesson, consistent across all four: split
 *exactly* where an optional feature drags in a dependency tree the median user does not want, and
-nowhere else.
-
-**AMD-5 changes the backend list from the original synthesis.** Memcached is dropped entirely —
-there is no `storage/memcached` module. ADR-0017 (memcached rejected as a `Store` backend) still
-documents the technical reasoning; this ADR's module list simply has one fewer entry than the
-synthesis's original §8 repo layout.
+nowhere else. **AMD-5 changes the backend list from the original synthesis**: memcached is
+dropped entirely, so there is no `storage/memcached` module — ADR-0017 documents the technical
+rejection; this ADR's module list simply has one fewer entry than the synthesis's original §8
+repo layout.
 
 A question the source research explicitly leaves open (15, "Open questions": "should
 `storage/redis`, `storage/postgres`... share one `storage/testsuite` module... or should each
@@ -91,23 +89,20 @@ core wins that test decisively:
 1. Every backend module (`storage/redis`, `storage/postgres`) already `require`s core in order to
    implement `dagstore.Store` in the first place. Placing `dagstoretest` as a core subpackage adds
    **zero** new module edges — a backend's test files import `dagworker/dagstore/dagstoretest`
-   off the exact same `require` line that already pulls in `dagworker/dagstore` for the interface
-   types.
+   off the exact same `require` line that already pulls in `dagworker/dagstore` for the types.
 2. A conformance suite is inherently version-locked 1:1 to the `Store` interface it exercises —
    `RunConformance` written against `Store` v0.6 cannot meaningfully test an implementation of
-   `Store` v0.5. Extracting it into its own module (an eighth `go.mod`) would recreate, for a
-   single-package artifact, exactly the forced-lockstep coupling this ADR rejects wholesale for
-   backends and adapters (§ Alternatives, OpenTelemetry-Go) — except with no compensating benefit,
-   since nothing outside the test suite ever needs to depend on it independently of core.
+   `Store` v0.5. An eighth `go.mod` would recreate, for a single-package artifact, exactly the
+   forced-lockstep coupling this ADR rejects wholesale for backends and adapters (§ Alternatives,
+   OpenTelemetry-Go) — with no compensating benefit, since nothing outside the suite itself ever
+   needs to depend on it independently of core.
 3. It resolves the open question dossier 15 itself raises (share one `storage/testsuite` module
    vs. risk drift between per-backend copies) by eliminating both horns: there is exactly one
    copy, inside core, and every backend's test build links the same one by construction — drift
    is structurally impossible, and no eighth `go.mod` is needed to prevent it.
-4. It costs nothing in production weight: `dagstoretest` is imported only from `_test.go` files.
-   Go's package-level import resolution means a production consumer who imports only
-   `dagworker`/`dagworker/dagstore` never compiles `dagstoretest` or resolves any dependency it
-   alone requires (e.g. `pgregory.net/rapid` for property-style contract checks, ADR-0040) —
-   those stay confined to test binaries that actually import the package.
+4. It costs nothing in production weight: `dagstoretest` is imported only from `_test.go` files, so
+   a production consumer who imports only `dagworker`/`dagworker/dagstore` never compiles it or
+   resolves any dependency it alone requires (e.g. `pgregory.net/rapid`, ADR-0040).
 
 **Tag format.** Each nested module's git tag is prefixed with its subdirectory path, per Go's own
 nested-module convention:
@@ -183,21 +178,20 @@ a lint rule.
   router — the entire reason for splitting, satisfied structurally.
 - Independent release cadence per backend/adapter means a Redis-specific bug fix ships without
   forcing a version bump — or a CI run — of Postgres, gRPC, or core.
-- The conformance-suite placement decision removes an entire class of "did the three backends'
-  contract tests drift apart" risk by construction, at zero added module count.
-- `cmd/dagworkerd` remains the single, clearly-documented "imports everything" exception, so
-  reviewers know exactly where an all-of-the-above dependency graph is expected to appear.
+- The conformance-suite placement removes an entire class of "did the backends' contract tests
+  drift apart" risk by construction, at zero added module count.
+- `cmd/dagworkerd` remains the single, documented "imports everything" exception, so reviewers
+  know exactly where an all-of-the-above dependency graph is expected to appear.
 
 ### Negative
 - `go get github.com/specialistvlad/dagworker` fetches core *only* — a first-time user expecting
-  "the library" as one `go get` is surprised; the README must show three copy-pasteable `go get`
-  lines up front (core, the storage backend in use, the adapter in use) to head this off.
+  "the library" as one `go get` is surprised; the README shows three copy-pasteable `go get` lines
+  up front (core, the storage backend in use, the adapter in use) to head this off.
 - `go get -u`/`go mod tidy` must be run per module directory, not once at the repo root; a
-  contributor who forgets this gets a stale `go.sum` in exactly one nested module with no root-
-  level signal.
-- Seven `go.mod` files is seven CI matrix legs, seven `CHANGELOG.md` files (per-module, Part 3 of
-  dossier 15), and seven surfaces to keep individually `go vet`-clean — real, ongoing maintenance
-  overhead versus a single-module repo.
+  contributor who forgets this gets a stale `go.sum` in exactly one nested module with no
+  root-level signal.
+- Seven `go.mod` files is seven CI matrix legs and seven `CHANGELOG.md` files (per-module, Part 3
+  of dossier 15) — real, ongoing maintenance overhead versus a single-module repo.
 
 ### Neutral
 - `examples/` follows `grpc-go`'s own pattern (a separate module purely to keep demo dependencies
@@ -210,30 +204,28 @@ a lint rule.
 
 **Single module, single `go.mod`, accept the dependency weight.** Rejected on `gocloud.dev`'s own
 directly-inspected `go.mod`: importing one storage sub-package still resolves the entire module
-graph, including SDKs for cloud providers the importer never touches. This is precisely the
-outcome a "vendor-neutral generic API" cannot avoid in a single-module design once any one backend
-has a non-trivial SDK — Redis's client and `pgx` both qualify.
+graph, including SDKs for cloud providers the importer never touches — precisely the outcome a
+"vendor-neutral generic API" cannot avoid in a single-module design once any one backend has a
+non-trivial SDK, and Redis's client and `pgx` both qualify.
 
-**Single module, build tags gate the backend code.** Rejected for the same root cause as above:
-Go build constraints are documented as a *file-selection* mechanism, not a dependency-graph
-mechanism — `go.sum` still lists every tagged-out backend's dependencies, and CI must build the
-full tag-combination matrix to catch breakage a compiler flag silently introduced.
+**Single module, build tags gate the backend code.** Rejected for the same root cause: build
+constraints are a *file-selection* mechanism, not a dependency-graph mechanism — `go.sum` still
+lists every tagged-out backend's dependencies, and CI must build the full tag-combination matrix
+to catch breakage a compiler flag silently introduced.
 
-**OpenTelemetry-Go's lockstep versioning** (every stable module bumps together, blocked on a
-matching contrib release). Rejected: lockstep exists there because contrib packages call
-*unstable internal* APIs across a repo boundary, so a core-internal change can silently break
-every contrib package — forcing simultaneous release is a blunt fix for a coupling problem this
-project does not have, since backends and adapters here only ever call the public, versioned
-`Store`/`Transport` contracts (ADR-0016).
+**OpenTelemetry-Go's lockstep versioning.** Rejected: lockstep exists there because contrib
+packages call *unstable internal* APIs across a repo boundary, so a core-internal change can
+silently break every contrib package — forcing simultaneous release is a blunt fix for a coupling
+problem this project does not have, since backends and adapters here only ever call the public,
+versioned `Store`/`Transport` contracts (ADR-0016).
 
 **A shared `storage/testsuite` module**, the option dossier 15 itself raises without resolving.
 Rejected per the Decision above: it adds an eighth `go.mod` whose version must track core's
-`Store` interface 1:1 anyway, buying nothing a core-resident package doesn't already buy for
-free.
+`Store` interface 1:1 anyway, buying nothing a core-resident package doesn't already buy for free.
 
 **Committed `replace ../.. ` directives** (the `grpc-go`/`testcontainers-go` pattern). Rejected as
-a legacy pattern predating `go.work` (2022, Go 1.18); a greenfield 2026 repository has no reason
-to carry the "accidentally-committed local-path replace breaks `go get` for everyone" risk that
+a legacy pattern predating `go.work` (2022, Go 1.18); a greenfield 2026 repository has no reason to
+carry the "accidentally-committed local-path replace breaks `go get` for everyone" risk that
 `go.work` exists specifically to remove.
 
 ## References

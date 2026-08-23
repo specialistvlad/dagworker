@@ -39,7 +39,7 @@ public API shape depends on, not an oversight:
 - **`exhaustruct`** forces every struct literal to set every field. This is actively wrong for a
   functional-options-adjacent config shape: `ClaimOptions{LeaseTimeout: 30 * time.Second}` relying
   on the zero value for every other field is the intended, idiomatic call site (ADR-0027 `config`
-  struct, ADR-0036 `ScopeConfig`) — `exhaustruct` would force every call site in the codebase to
+  struct, ADR-0034 `ScopeConfig`) — `exhaustruct` would force every call site in the codebase to
   spell out fields whose entire purpose is having a sane default.
 
 A second cluster of exclusions (`gochecknoglobals`, `gochecknoinits`, `lll`, `wsl`/`wsl_v5`,
