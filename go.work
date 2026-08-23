@@ -12,4 +12,7 @@ use (
 	./storage/postgres
 	./storage/redis
 	./test/perf
+	./adapters/grpc
+	./adapters/http
+	./cmd/dagworkerd
 )

@@ -180,6 +180,10 @@ func (s *Store) WaitForWork(ctx context.Context, scope dw.Scope, kinds []string)
 	if s.isClosed() {
 		return dw.ErrClosed
 	}
+	// Waiting on a scope nobody has written to yet is ordinary — a worker
+	// often starts before its producer — so this registers it exactly as the
+	// in-memory reference's scopeFor(create=true) would.
+	s.registerScope(ctx, scope)
 	ready, err := s.anyReady(ctx, scope, kinds)
 	if err != nil {
 		return err
