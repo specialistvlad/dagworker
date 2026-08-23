@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"strings"
 
+	pb "github.com/specialistvlad/dagworker/adapters/grpc/gen/dagworker/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -33,6 +34,33 @@ import (
 // holding open.
 type Authorizer interface {
 	Authorize(ctx context.Context, fullMethod string) error
+}
+
+// ScopeAuthorizer is the optional second half of [Authorizer], discovered by
+// type assertion the way the storage port discovers [dagworker.Lister] and its
+// siblings. An Authorizer that also implements it is asked, for every call,
+// which scope that call targets and whether this caller may reach it.
+//
+// It exists because a scope is an isolation boundary for data and cost, and
+// without this it could not be one for access. `fullMethod` is
+// "/dagworker.v1.WorkerService/ClaimNode" and nothing more, so an Authorizer
+// alone can say "this caller may claim" but never "this caller may claim from
+// tenant-a and nowhere else" -- a policy the HTTP adapter can express today by
+// reading the scope out of the request path. Per-scope policy was therefore
+// writable on one adapter and impossible on the other.
+//
+// The scope is extracted before the handler runs: from the request's own scope
+// field where it has one, and from the task token for the four worker calls
+// that identify a node by lease rather than by name. A request whose scope
+// cannot be determined is REJECTED, not waved through -- see scopeOfRequest.
+//
+// For the streaming Watch, every WatchCreateRequest is checked as it arrives,
+// not merely the first. One stream multiplexes many watches and each names its
+// own scope, so checking the first would authorize the rest by accident.
+//
+// Implementations must be safe for concurrent use and must not block.
+type ScopeAuthorizer interface {
+	AuthorizeScope(ctx context.Context, fullMethod, scope string) error
 }
 
 // AuthorizerFunc adapts a plain function to [Authorizer].
@@ -109,16 +137,54 @@ func bearerCredential(ctx context.Context) (string, bool) {
 
 // authUnaryInterceptor rejects a call the authorizer does not allow.
 func authUnaryInterceptor(a Authorizer) grpc.UnaryServerInterceptor {
+	scoped, _ := a.(ScopeAuthorizer)
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if err := a.Authorize(ctx, info.FullMethod); err != nil {
 			return nil, authStatus(err)
+		}
+		if scoped != nil {
+			scope, err := scopeOfRequest(req)
+			if err != nil {
+				return nil, err
+			}
+			if err := scoped.AuthorizeScope(ctx, info.FullMethod, scope); err != nil {
+				return nil, authStatus(err)
+			}
 		}
 		return handler(ctx, req)
 	}
 }
 
+// scopeOfRequest names the scope a unary request targets.
+//
+// Every unary request in this API identifies one, in one of two shapes: a
+// `scope` field, or a task token, which is a marshalled TaskToken carrying the
+// scope of the lease it names. Both are handled here rather than by a table of
+// method names, so a new RPC of either shape is covered the day it is added.
+//
+// A request of NEITHER shape is refused. That is the whole point: an RPC added
+// later that names its scope some third way must fail loudly rather than skip
+// the check, because a scope authorizer that silently does not run on one
+// method is worse than no scope authorizer at all.
+func scopeOfRequest(req any) (string, error) {
+	switch r := req.(type) {
+	case interface{ GetScope() string }:
+		return r.GetScope(), nil
+	case interface{ GetTaskToken() []byte }:
+		lease, err := decodeTaskToken(r.GetTaskToken())
+		if err != nil {
+			return "", err
+		}
+		return string(lease.Scope), nil
+	default:
+		return "", status.Errorf(codes.Internal,
+			"scope authorization is configured but the scope of a %T cannot be determined", req)
+	}
+}
+
 // authStreamInterceptor is authUnaryInterceptor's counterpart for Watch.
 func authStreamInterceptor(a Authorizer) grpc.StreamServerInterceptor {
+	scoped, _ := a.(ScopeAuthorizer)
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		// ss.Context() is the stream's own context, which is the only one a
 		// StreamServerInterceptor is given; there is no ctx parameter to
@@ -127,8 +193,58 @@ func authStreamInterceptor(a Authorizer) grpc.StreamServerInterceptor {
 		if err := a.Authorize(ss.Context(), info.FullMethod); err != nil {
 			return authStatus(err)
 		}
+		if scoped != nil {
+			ss = &scopeCheckedStream{ServerStream: ss, method: info.FullMethod, authorizer: scoped}
+		}
 		return handler(srv, ss)
 	}
+}
+
+// scopeCheckedStream authorizes the scope named by each inbound message.
+//
+// It checks every message rather than only the first because Watch multiplexes:
+// one stream carries many WatchCreateRequests and each names its own scope, so
+// authorizing the first would authorize the rest by accident. A message that
+// names no scope -- a WatchCancelRequest, which refers to a watch id that was
+// already authorized when it was created -- passes through unchecked.
+type scopeCheckedStream struct {
+	grpc.ServerStream
+	method     string
+	authorizer ScopeAuthorizer
+}
+
+func (s *scopeCheckedStream) RecvMsg(m any) error {
+	if err := s.ServerStream.RecvMsg(m); err != nil {
+		return err
+	}
+	scope, named := scopeOfStreamMessage(m)
+	if !named {
+		return nil
+	}
+	if err := s.authorizer.AuthorizeScope(s.Context(), s.method, scope); err != nil {
+		return authStatus(err)
+	}
+	return nil
+}
+
+// scopeOfStreamMessage reports the scope an inbound stream message targets, and
+// whether it named one at all.
+//
+// Unlike the unary path this cannot fail closed on an unrecognised shape: a
+// stream carries control messages that legitimately name no scope, and refusing
+// those would break Watch's own cancel. Adding a streaming RPC therefore means
+// extending this function, which is why the adapter contract says so.
+func scopeOfStreamMessage(m any) (string, bool) {
+	if r, ok := m.(interface{ GetCreate() *pb.WatchCreateRequest }); ok {
+		if c := r.GetCreate(); c != nil {
+			return c.GetScope(), true
+		}
+		return "", false
+	}
+	if r, ok := m.(interface{ GetScope() string }); ok {
+		return r.GetScope(), true
+	}
+	return "", false
 }
 
 // authStatus normalises whatever an Authorizer returned into a rejection.

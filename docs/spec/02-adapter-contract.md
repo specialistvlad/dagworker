@@ -58,10 +58,16 @@ to — a rolling restart would otherwise revoke every lease in the fleet.
 distinguish "your lease was superseded" from "the database is down" without
 parsing prose.
 
-**Authorization is decided before routing.** An adapter **MUST** expose a
+**Authorization is decided before the handler.** An adapter **MUST** expose a
 `WithAuthorizer` option and **MUST** apply it ahead of every handler, so that a
 method or route added later is covered without anyone remembering to add a
-check to it. It **MUST** deny on any error the authorizer returns, including
+check to it.
+
+The *method* check happens before routing. The optional *scope* check
+(`ScopeAuthorizer`, §6) cannot: naming a scope requires the request decoded far
+enough to read one. It still happens before the handler, which is the property
+that matters — "before routing" was the stronger claim and it was not true of
+scope-level policy. It **MUST** deny on any error the authorizer returns, including
 ones outside the taxonomy — an authorizer that fails for an unanticipated
 reason fails closed. It **MUST NOT** return the authorizer's own error text to
 the caller, which would make every custom authorizer an oracle for whatever it
@@ -130,3 +136,28 @@ every request when it is given no tokens: a credential set that degrades to
 Neither adapter terminates TLS. Both serve whatever `net.Listener` they are
 handed, so TLS, a unix socket, or a mesh sidecar are all deployment choices
 rather than adapter features.
+
+### 6.1 Per-scope policy
+
+A scope is an isolation boundary for data and cost. Making it one for *access*
+is optional and per adapter:
+
+| | how a policy names the scope |
+|---|---|
+| HTTP | `Authorize` receives the whole `*http.Request`; `RequestScope(r)` reads it from the path |
+| gRPC | implement `ScopeAuthorizer` alongside `Authorizer`; the adapter derives the scope and passes it in |
+
+The gRPC adapter derives the scope from the request rather than from a table of
+method names: a `scope` field where the request has one, and the task token for
+the four worker calls that identify a node by lease. **A unary request of
+neither shape is refused**, so an RPC added later that names its scope some
+third way fails loudly instead of skipping the check.
+
+For the streaming `Watch`, **every** `WatchCreateRequest` is checked, not only
+the first — one stream multiplexes many watches and each names its own scope.
+A message naming no scope passes through. Adding a streaming RPC therefore
+means extending the adapter's `scopeOfStreamMessage`; there is no way to fail
+closed there without breaking the control messages a stream legitimately
+carries.
+
+See ADR-0046.

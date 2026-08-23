@@ -83,3 +83,33 @@ address.
 
 A wildcard bind (`:8080`, `0.0.0.0:8080`) counts as reachable, as does any
 address the daemon cannot prove is loopback.
+
+## A scope is not a security boundary
+
+**A scope isolates data and cost. It does not, by itself, isolate access.** That
+is unsurprising when the library is embedded — the host program decides who may
+call `Claim` before it calls it (ADR-0023 §3) — and a surprise to anyone
+exposing a shared `dagworkerd` to semi-trusted workers, because there the daemon
+*is* that host layer.
+
+With `BearerToken`, every holder of a token is one principal with access to
+every scope; its own doc comment says so. To make a scope an access boundary,
+supply a policy:
+
+- **HTTP** — `Authorize` receives the whole request, and `RequestScope(r)`
+  reads the scope from the path.
+- **gRPC** — implement `ScopeAuthorizer` alongside `Authorizer`. The adapter
+  derives the scope from the request (or from the task token, for the calls that
+  carry one) and passes it in. Every `Watch` create is checked, not just the
+  first.
+
+Two things that remain true even with a scope policy in place:
+
+- **`GET /v1/scopes` returns every scope name in the store** to any
+  authenticated caller. Scope names can be meaningful — a tenant, a customer, a
+  build — so treat them as disclosed. An authorizer can deny the endpoint
+  outright; filtering it per principal is a different question (ADR-0046) and is
+  not implemented. gRPC has no equivalent RPC, so this asymmetry is HTTP-only.
+- **Kinds are not an access boundary either**, and deliberately so: a kind
+  routes work to a pool and is chosen by the caller, so authorizing on it would
+  authorize on a scheduling hint.
