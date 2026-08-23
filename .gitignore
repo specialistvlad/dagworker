@@ -1,0 +1,29 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Coverage / profiling
+/coverage/
+*.cov
+*.covdata
+covdata/
+*.prof
+*.pprof
+*.trace
+
+# Go workspace (local dev only; never committed)
+go.work
+go.work.sum
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local env
+.env
+.env.local
