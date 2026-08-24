@@ -79,13 +79,26 @@ async function copyDerived(srcPath, slug) {
   return title
 }
 
-/** copyAuthored ingests a file that already carries Starlight-shaped front matter. */
+/**
+ * copyAuthored ingests a file that already carries Starlight-shaped front
+ * matter, adding the editUrl if the author did not write one.
+ *
+ * The editUrl is not optional decoration: without it Starlight derives the
+ * link from this generated copy's path and every "Edit page" button on the
+ * home page and the guide points at src/content/docs/..., which exists only
+ * inside a build and 404s on GitHub.
+ */
 async function copyAuthored(srcPath, slug) {
   const src = await readFile(join(repoRoot, srcPath), 'utf8')
   if (!hasFrontMatter(src)) throw new Error(`${srcPath}: expected front matter`)
+  const end = src.indexOf('\n---\n', 4)
+  if (end === -1) throw new Error(`${srcPath}: front matter is not terminated`)
+  const head = src.slice(4, end)
+  const body = src.slice(end + 5)
+  const fm = /^editUrl:/m.test(head) ? head : `${head}\neditUrl: ${yaml(EDIT_BASE + srcPath)}`
   const target = join(outDir, `${slug}.md`)
   await mkdir(dirname(target), { recursive: true })
-  await writeFile(target, src)
+  await writeFile(target, `---\n${fm}\n---\n${body}`)
 }
 
 const listMarkdown = async (dir) =>
@@ -126,8 +139,24 @@ async function refuseStaleGeneratorOutput() {
   process.exit(1)
 }
 
+// Astro's content layer caches each document's *rendered* HTML in
+// node_modules/.astro/data-store.json, keyed by the source file's digest. This
+// script rewrites src/content/docs byte-for-byte identically on every run, so
+// the digests never change -- and a change to a remark plugin, which is not
+// part of any digest, does not invalidate a single entry. The build then
+// succeeds, quickly, rendering every page exactly as the old plugin did.
+//
+// That is not a hypothetical: the fix for the broken absolute links looked
+// like it had no effect at all, twice, because of this. A full re-render of
+// the 79 pages costs about a second, which is less than the cost of one person
+// disbelieving a correct change.
+async function dropRenderCache() {
+  await rm(join(siteDir, 'node_modules/.astro/data-store.json'), { force: true })
+}
+
 async function main() {
   await refuseStaleGeneratorOutput()
+  await dropRenderCache()
   await rm(outDir, { recursive: true, force: true })
   await mkdir(outDir, { recursive: true })
 
