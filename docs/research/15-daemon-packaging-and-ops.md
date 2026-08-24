@@ -1134,7 +1134,7 @@ so you only pull in what you use:
     go get github.com/specialistvlad/dagworker/storage/redis
 
 Need non-Go workers (Python, Node, Rust, Java)? Run the optional `dagworkerd` daemon, which
-hosts a gRPC and an HTTP/JSON adapter over the same core engine — see [cmd/dagworkerd](link).
+hosts a gRPC and an HTTP/JSON adapter over the same core engine — see [cmd/dagworkerd](cmd/dagworkerd/).
 **The core library above has zero dependency on gRPC or net/http; you only pay for the
 daemon if you run it.**
 

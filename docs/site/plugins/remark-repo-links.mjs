@@ -10,14 +10,43 @@
 // Anything that is not a page this site publishes resolves to the file on
 // GitHub, so a link in a rendered repository file never 404s.
 
+import { statSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 const GITHUB = 'https://github.com/specialistvlad/dagworker'
 const BASE = '/dagworker'
 
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+
 const href = (slug) => (slug === '' ? `${BASE}/` : `${BASE}/${slug}/`)
+
+/**
+ * githubKind picks between GitHub's two path forms for a repository path.
+ *
+ * The checkout is right here during a build, so ask it: an extension is a poor
+ * proxy for "is a file" and gets LICENSE, Makefile and Dockerfile wrong every
+ * time. The extension heuristic remains as the answer for a path that is not
+ * in the checkout at all — a link that check-links.mjs will reject anyway.
+ */
+function githubKind(path) {
+  try {
+    return statSync(join(repoRoot, path.replace(/\/$/, ''))).isDirectory() ? 'tree' : 'blob'
+  } catch {
+    return path.endsWith('/') || !/\.[^/.]+$/.test(path) ? 'tree' : 'blob'
+  }
+}
 
 export function resolveRepoLink(raw) {
   if (!raw) return raw
   if (/^(#|https?:\/\/|mailto:)/.test(raw)) return raw
+
+  // A root-relative link is already a URL this site serves — the guide pages
+  // link to their siblings as /dagworker/guide/... — so it is not a repository
+  // path and must not be resolved as one. Treating it as one is how every
+  // absolute link on the site came to point at
+  // github.com/…/tree/main//dagworker/guide/workers/, which is nothing.
+  if (raw.startsWith('/')) return raw
 
   const hash = raw.indexOf('#')
   let clean = hash === -1 ? raw : raw.slice(0, hash)
@@ -40,8 +69,7 @@ export function resolveRepoLink(raw) {
   if (clean === 'CHANGELOG.md') return href('changelog') + frag
   if (clean === 'README.md') return href('') + frag
 
-  const kind = clean.endsWith('/') || !/\.[^/.]+$/.test(clean) ? 'tree' : 'blob'
-  return `${GITHUB}/${kind}/main/${clean}${frag}`
+  return `${GITHUB}/${githubKind(clean)}/main/${clean}${frag}`
 }
 
 /** remarkRepoLinks visits every link and definition node and resolves its target. */
