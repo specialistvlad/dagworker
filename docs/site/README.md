@@ -21,6 +21,30 @@ preview` serves what was built.
 Both `dev` and `build` run the ingest step first, so the rendered site can
 never be built from a stale copy of the repository's Markdown.
 
+## Every link is checked, and a broken one fails the build
+
+`npm run build` ends with `scripts/check-links.mjs`, which reads the built
+`dist/` — the links a reader would actually click — and resolves every one of
+them:
+
+- a link into this site must land on a page the build produced, and its
+  `#fragment` must match an id on that page;
+- a link into the repository on GitHub must name a path that exists in this
+  checkout, as the kind the URL claims — `blob` for a file, `tree` for a
+  directory.
+
+Off-site links are not fetched. A link checker that makes network calls is one
+that fails when somebody else's server is slow, and this one runs inside the
+build. Run it alone with `npm run check:links` against an existing `dist/`.
+
+It exists because every absolute link on the site — 109 of them: every
+cross-reference in the guide, and every entry on the ADR and dossier index
+pages — pointed at `github.com/…/tree/main//dagworker/guide/workers/`, which is
+nothing. The rewrite rule read a root-relative URL as a repository path. The
+defect predates the Astro migration: the Go generator's `resolveRepoLink` had
+the same gap and the port carried it across faithfully, which is what a
+faithful port does. Nothing was checking, so nothing said so.
+
 ## How the content gets here
 
 The ADRs, dossiers and spec are **not** moved into this directory, and they
@@ -41,7 +65,10 @@ Two remark plugins handle what a copy cannot:
   (`docs/adr/0044-….md`) to the URLs this site serves, and sends anything the
   site does not publish to the file on GitHub. It is a port of the Go
   generator's `resolveRepoLink`, moved to the syntax tree so that a
-  link-shaped string inside a code fence is left alone.
+  link-shaped string inside a code fence is left alone. A root-relative link
+  is left exactly as written: the guide pages address their siblings as
+  `/dagworker/guide/…`, and those are already this site's own URLs, not
+  repository paths.
 - **`plugins/remark-legacy-heading-ids.mjs`** reproduces the previous
   generator's heading-anchor slugs. The two schemes disagree about
   punctuation — `1.1 Static Kahn (1962)` was `1-1-static-kahn-1962` and would
@@ -58,6 +85,20 @@ would succeed and the pages would look right.
 `scripts/ingest.mjs` refuses to run when it finds `public/index.html`, which is
 the unambiguous signature of the old output, so this fails loudly rather than
 quietly. A `public/` holding real assets is left alone.
+
+## Why the build drops Astro's render cache
+
+Astro's content layer caches each document's *rendered* HTML in
+`node_modules/.astro/data-store.json`, keyed by the source file's digest.
+`ingest.mjs` rewrites `src/content/docs` byte-for-byte identically on every
+run, so those digests never change — and a remark plugin is not part of any
+digest. Change a plugin and the next build reuses every cached render: it
+succeeds, it is fast, and it renders the site exactly as the old plugin did.
+
+So the ingest step deletes that file before it writes anything. It costs about
+a second of re-rendering, which is cheaper than an afternoon spent watching a
+correct fix appear to do nothing — the link fix above looked inert twice
+before this was found.
 
 ## Why this is not a Go module
 

@@ -5,7 +5,8 @@
   "scripts": {
     "ingest": "node scripts/ingest.mjs",
     "dev": "npm run ingest && astro dev",
-    "build": "npm run ingest && astro build",
+    "build": "npm run ingest && astro build && npm run check:links",
+    "check:links": "node scripts/check-links.mjs",
     "preview": "astro preview",
     "check": "npm run ingest && astro check"
   },
