@@ -48,6 +48,17 @@ Two remark plugins handle what a copy cannot:
   otherwise become `11-static-kahn-1962` — which would have broken 398 of the
   site's 1,010 anchors and every deep link into them.
 
+## If you have a checkout from before the migration
+
+Delete `docs/site/public/`. The previous generator wrote its finished HTML
+there, and that is now Astro's static-asset directory — anything in it is copied
+over the built site verbatim, so every page would be the old one. The build
+would succeed and the pages would look right.
+
+`scripts/ingest.mjs` refuses to run when it finds `public/index.html`, which is
+the unambiguous signature of the old output, so this fails loudly rather than
+quietly. A `public/` holding real assets is left alone.
+
 ## Why this is not a Go module
 
 It was one, and the generator was 3,011 lines of hand-written Go: a Markdown

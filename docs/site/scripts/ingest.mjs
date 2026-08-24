@@ -18,7 +18,7 @@
 // link-shaped string inside a code fence is left alone. Doing it with a
 // regular expression over the raw text would rewrite the examples.
 
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -100,7 +100,34 @@ async function indexPage(slug, title, description, intro, entries) {
   await emit(slug, { title, description, body: `${intro}\n\n${rows}\n`, source: null })
 }
 
+// The previous generator wrote its finished HTML into docs/site/public/, which
+// is now Astro's static-asset directory: anything there is copied over the
+// built site verbatim. A checkout that still has that output silently shadows
+// every page Astro renders, so a build succeeds, the pages look right, and they
+// are the old ones. It cost a confused half hour once; it should cost nobody a
+// second one.
+//
+// public/index.html is the unambiguous signature -- Astro renders the home page
+// itself and would never have a file there -- so this refuses only on the stale
+// output, and leaves a public/ holding real assets alone.
+async function refuseStaleGeneratorOutput() {
+  const stale = join(repoRoot, 'docs/site/public/index.html')
+  try {
+    await stat(stale)
+  } catch {
+    return
+  }
+  console.error(
+    'ingest: docs/site/public/ still holds output from the previous generator.\n' +
+      '        Astro copies that directory over the built site, so every page would\n' +
+      '        be the old one. Remove it:\n\n' +
+      '            rm -rf docs/site/public\n',
+  )
+  process.exit(1)
+}
+
 async function main() {
+  await refuseStaleGeneratorOutput()
   await rm(outDir, { recursive: true, force: true })
   await mkdir(outDir, { recursive: true })
 
