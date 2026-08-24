@@ -1,6 +1,6 @@
 ---
 title: Choosing a backend
-description: The honest comparison between in-memory, Redis, and PostgreSQL — including what each one actually guarantees, and what memcached was rejected for.
+description: The honest comparison between in-memory, file, Redis, and PostgreSQL — including what each one actually guarantees, and what memcached was rejected for.
 ---
 
 Every backend is driven through the identical `Manager` API — nothing in
@@ -10,18 +10,22 @@ differs is durability, whether several processes can share one graph, and
 the cost of each operation. This page is the honest version of that
 comparison, including the parts a marketing page would leave out.
 
-## The three backends
+## The four backends
 
-| | in-memory | Redis | PostgreSQL |
-|---|---|---|---|
-| survives a process restart | no | ~1s window¹ | yes |
-| shared across processes | no | yes | yes |
-| resumable durable event stream | yes | yes (Streams) | yes (outbox) |
-| wake without polling | yes | yes (pub/sub) | yes (`LISTEN`) |
-| module | *(core)* | `storage/redis` | `storage/postgres` |
+| | in-memory | file | Redis | PostgreSQL |
+|---|---|---|---|---|
+| survives a process restart | no | **yes** | ~1s window¹ | yes |
+| survives an unclean kill | no | **yes** | ~1s window¹ | yes |
+| shared across processes | no | **no** | yes | yes |
+| needs a server | no | **no** | yes | yes |
+| resumable durable event stream | yes | yes | yes (Streams) | yes (outbox) |
+| wake without polling | yes | yes | yes (pub/sub) | yes (`LISTEN`) |
+| module | *(core)* | *(core)* | `storage/redis` | `storage/postgres` |
 
 ¹ Redis replicates asynchronously by default, so a primary failover can lose
-about a second of writes unless you opt into `WAIT`/`WAITAOF` per call.
+about a second of writes unless you opt into `WAIT`/`WAITAOF` per call. That
+window is why Redis does **not** set `CapDurableStorage`, and the same bar is
+what rules out a periodic-snapshot design for the file backend.
 
 **In-memory** is the default and the only backend with zero external
 dependency. It's the right choice when every worker shares one process — a
@@ -80,6 +84,85 @@ names:
 DAGWORKER_SCOPE_SIZING=1 go test -tags=integration -run TestScopeStorageCost -v ./test/perf
 ```
 
+## The file backend: durable without a server
+
+Reach for it when the constraint is "no database, and state has to survive a
+restart" — a single-instance service, an appliance, an on-premises install, or
+anywhere the operational answer to "what do we run?" has to be "nothing".
+
+```go
+st, recovery, err := file.Open(ctx, "/var/lib/dagworker")
+if err != nil {
+    return err
+}
+defer st.Close(ctx)
+
+m, _ := dagworker.New(st)
+```
+
+`recovery` reports what was found on disk: how many log records were replayed,
+whether a snapshot was loaded, and how many bytes of a torn trailing write were
+discarded. A non-zero `DiscardedBytes` is the ordinary shape of a process killed
+mid-append — it is reported rather than swallowed, because a host that sees it
+every start is being told something about its shutdown path.
+
+### How it works, and why it cannot disagree with the in-memory backend
+
+The graph lives in the in-memory backend. Every mutation is appended to a log
+and `fsync`ed before the call returns, so an unclean exit loses nothing. On
+start the newest snapshot is loaded and the log after it is replayed. This is
+Redis's AOF plus RDB, which is the standard answer because it is the right one.
+
+The part worth knowing is what the log records. A plain command log cannot work:
+`Claim` stamps its deadline from the store's own clock, so replaying the command
+produces a *different* deadline than the original run. The usual fix is to log
+outcomes instead.
+
+This one logs the command **and the readings it consumed** — the clock values
+and the jitter values, in the order they were read. Replay feeds them back. The
+result is not approximately the original state, it is exactly it, including the
+lease deadlines, fencing epochs, attempt counts and retry schedules that a naive
+replay gets wrong.
+
+That is possible because the in-memory backend has exactly two sources of
+nondeterminism and both are already injectable. And it means there is **one
+implementation of the semantics**: this backend cannot disagree with the
+in-memory one about what a claim does, because it *is* the in-memory one with a
+log around it.
+
+### Compaction is yours to schedule
+
+A log that is never truncated makes startup grow without bound. `Compact()`
+writes a snapshot and empties the log:
+
+```go
+if err := st.Compact(); err != nil {
+    return err
+}
+```
+
+It is a call rather than a timer because only you know a good moment: it costs
+one full serialisation and blocks mutations while it runs. Not calling it costs
+a longer start.
+
+It is safe at any point. The order is snapshot, `fsync`, rename, `fsync` the
+directory, then truncate — so a crash leaves either the old snapshot with the
+whole log or the new snapshot with the whole log, and both replay to the same
+state. A snapshot that will not decode is not an error either: the log is
+authoritative, so a damaged snapshot costs start-up time and nothing else.
+
+### One process at a time
+
+`CapCrossProcess` is **not** set, and that is the honest answer rather than a
+limitation waiting to be lifted. Two processes over one directory would replay
+each other's history and then diverge in silence. If two processes must share a
+graph, that is what Redis and PostgreSQL are for — and the swap is one line,
+because every backend passes the same suite.
+
+See [ADR-0047](/dagworker/adr/0047-the-filesystem-backend-is-a-logged-in-memory-store/)
+for why a periodic snapshot was rejected, and why this lives in the core module
+rather than behind a second `go get`.
+
 ## Durability, stated plainly
 
 The spec requires every backend to publish exactly what it guarantees, with
@@ -88,6 +171,7 @@ no backend allowed to imply more than it delivers:
 | Backend | Durability |
 |---|---|
 | in-memory | none — process lifetime only. Suitable when all workers share one process. |
+| file | no loss on an unclean exit: every mutation is `fsync`ed before its call returns, at a cost of one `fsync` per mutation. One process at a time. |
 | Redis | async replication by default: a primary failover can lose ~1s of writes. `WAIT`/`WAITAOF` is available as an opt-in per-call cost. |
 | PostgreSQL | full WAL durability for nodes, edges, and events — and for leases, which are columns on the node row rather than a table of their own. |
 
