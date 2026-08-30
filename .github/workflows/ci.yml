@@ -53,7 +53,7 @@ jobs:
       # measured, on run 32659274682 attempt 2, where every other job's cache
       # restored and lint alone did not improve at all.
       - name: Cache golangci-lint analysis
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/golangci-lint
           key: golangci-v2.13.1-${{ runner.os }}-${{ hashFiles('**/go.sum', '.golangci.yml') }}
