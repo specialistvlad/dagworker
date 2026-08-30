@@ -9,7 +9,7 @@ require (
 	github.com/specialistvlad/dagworker/adapters/http v0.0.0-20260823180902-32ecab58c1c0
 	github.com/specialistvlad/dagworker/storage/postgres v0.0.0-20260823180902-32ecab58c1c0
 	github.com/specialistvlad/dagworker/storage/redis v0.0.0-20260823180902-32ecab58c1c0
-	google.golang.org/grpc v1.83.1
+	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 )
