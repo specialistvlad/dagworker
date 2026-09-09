@@ -8,7 +8,7 @@ require (
 	github.com/specialistvlad/dagworker/adapters/http v0.0.0-20260823123717-aa84ffe888a1
 	github.com/specialistvlad/dagworker/storage/postgres v0.0.0-20260823180902-32ecab58c1c0
 	github.com/specialistvlad/dagworker/storage/redis v0.0.0-20260823180902-32ecab58c1c0
-	google.golang.org/grpc v1.83.1
+	google.golang.org/grpc v1.83.2
 )
 
 require (
@@ -19,7 +19,7 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/redis/go-redis/v9 v9.22.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
-	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
