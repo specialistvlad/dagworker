@@ -3,7 +3,7 @@ module github.com/specialistvlad/dagworker/test/perf
 go 1.25.0
 
 require (
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/specialistvlad/dagworker v0.0.1
 	github.com/specialistvlad/dagworker/storage/postgres v0.0.0-20260823180902-32ecab58c1c0
 	github.com/specialistvlad/dagworker/storage/redis v0.0.0-20260823180902-32ecab58c1c0
